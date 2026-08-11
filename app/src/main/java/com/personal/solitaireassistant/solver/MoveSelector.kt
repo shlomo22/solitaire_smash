@@ -104,7 +104,9 @@ object MoveSelector {
                 }
                 // A tableau shuffle that exposes no card is usually busywork.
                 // Defer it behind drawing from stock or any productive move.
-                if (revealed == 0 && foundationDelta == 0) {
+                if (revealed == 0 && foundationDelta == 0 &&
+                    emptyAfter <= emptyBefore
+                ) {
                     score -= 180.0
                     reasons += "defer-no-reveal-stack"
                 }

@@ -99,6 +99,26 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun prefersCreatingEmptyColumnOverDrawingStock() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Queen, Suit.Diamonds)),
+                listOf(c(Rank.King, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 0, startIndex = 0, toColumn = 1),
+            best.move
+        )
+    }
+
+    @Test
     fun avoidsReturningToRecentTableauState() {
         val original = GameState(
             tableau = listOf(

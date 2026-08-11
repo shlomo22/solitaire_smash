@@ -32,6 +32,8 @@ class AnalysisPipeline(
     private var lastLoggedOutcome: String? = null
     private var sessionStarted = false
     private val recentStates = ArrayDeque<GameState>()
+    private var lastFrameFingerprint: Long? = null
+    private var lastDetection: DetectionResult? = null
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -52,7 +54,17 @@ class AnalysisPipeline(
             // Keep prior arrow while analyzing to avoid constant flash.
 
             val started = System.currentTimeMillis()
-            val detection = detector.detect(bitmap)
+            val fingerprint = boardFingerprint(bitmap)
+            val cached = fingerprint == lastFrameFingerprint
+            val detection = if (cached) {
+                lastDetection ?: detector.detect(bitmap)
+            } else {
+                detector.detect(bitmap)
+            }
+            if (!cached || lastDetection == null) {
+                lastFrameFingerprint = fingerprint
+                lastDetection = detection
+            }
             val elapsed = System.currentTimeMillis() - started
             handleDetection(detection, elapsed, bitmap.width, bitmap.height)
         } catch (t: Throwable) {
@@ -73,8 +85,35 @@ class AnalysisPipeline(
         lastLoggedOutcome = null
         sessionStarted = false
         recentStates.clear()
+        lastFrameFingerprint = null
+        lastDetection = null
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
+    }
+
+    private fun boardFingerprint(bitmap: Bitmap): Long {
+        val left = 0
+        val right = bitmap.width
+        val top = (bitmap.height * 0.20f).toInt()
+        val bottom = (bitmap.height * 0.68f).toInt()
+        val stepX = (bitmap.width / 54).coerceAtLeast(1)
+        val stepY = ((bottom - top) / 60).coerceAtLeast(1)
+        var hash = -0x340d631b7bdddcdbL
+        var y = top
+        while (y < bottom) {
+            var x = left
+            while (x < right) {
+                val color = bitmap.getPixel(x, y)
+                val quantized =
+                    (((color shr 19) and 0x1F) shl 10) or
+                        (((color shr 11) and 0x1F) shl 5) or
+                        ((color shr 3) and 0x1F)
+                hash = (hash xor quantized.toLong()) * 0x100000001b3L
+                x += stepX
+            }
+            y += stepY
+        }
+        return hash
     }
 
     private fun handleDetection(
@@ -322,13 +361,17 @@ class AnalysisPipeline(
             )
             val cardHeight = bottom.width * profile.cardAspect
             val faceUpStep = cardHeight * profile.faceUpOverlap
-            val firstMovingTop = bottom.top - (movingCount - 1) * faceUpStep
+            val storedStart = locations.firstOrNull {
+                it.cardIndex == move.startIndex
+            }?.bounds
+            val firstMovingTop = storedStart?.top
+                ?: (bottom.top - (movingCount - 1) * faceUpStep)
             // Anchor in the visible header of the first moving card, rather
             // than the obscured center of its full card body.
             return BoardRegion(
-                left = bottom.left,
+                left = storedStart?.left ?: bottom.left,
                 top = firstMovingTop,
-                right = bottom.right,
+                right = storedStart?.right ?: bottom.right,
                 bottom = firstMovingTop + faceUpStep
             )
         }

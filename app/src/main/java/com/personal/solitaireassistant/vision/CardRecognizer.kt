@@ -125,7 +125,11 @@ class CardRecognizer(
         }
     }
 
-    fun recognize(bitmap: Bitmap, region: BoardRegion): RecognitionHit {
+    fun recognize(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        exactCardBounds: Boolean = false
+    ): RecognitionHit {
         ensureLoaded()
         if (region.width < 6f || region.height < 6f) {
             return RecognitionHit(null, 0f, false, true, "invalid-region")
@@ -161,7 +165,7 @@ class CardRecognizer(
                         return RecognitionHit(null, 0.88f, true, false, "face-down-template")
                     }
                     val suit = inferSuit(stats, crop, inkRed)
-                    val bitmapRankHit = bestBitmapRank(crop)
+                    val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
                     var rankHit: Pair<Rank, Float>? = null
                     var glyph: RankInkHeuristics.Guess? = null
                     val rank = if (bitmapRankHit != null && bitmapRankHit.second >= 0.68f) {
@@ -208,7 +212,7 @@ class CardRecognizer(
         // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
         val crop = crop(bitmap, region)
         try {
-            val bitmapRank = crop?.let { bestBitmapRank(it) }
+            val bitmapRank = crop?.let { bestBitmapRank(it, exactCardBounds) }
             val glyph = crop?.let { RankInkHeuristics.guess(it) }
             val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
                 ?.takeIf { it.second >= 0.45f }
@@ -239,6 +243,86 @@ class CardRecognizer(
             )
         } finally {
             crop?.takeUnless { it.isRecycled }?.recycle()
+        }
+    }
+
+    fun rankShapeGuess(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): RankInkHeuristics.Guess? {
+        val cardCrop = crop(bitmap, region) ?: return null
+        return try {
+            RankInkHeuristics.guess(cardCrop)
+        } finally {
+            cardCrop.recycle()
+        }
+    }
+
+    fun exactRankTemplateScores(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        ranks: Set<Rank>
+    ): Map<Rank, Float> {
+        ensureLoaded()
+        val cardCrop = crop(bitmap, region) ?: return emptyMap()
+        return try {
+            val width = (cardCrop.width * 0.70f).toInt().coerceIn(8, cardCrop.width)
+            val height = (cardCrop.height * 0.54f).toInt().coerceIn(8, cardCrop.height)
+            val roi = Bitmap.createBitmap(cardCrop, 0, 0, width, height)
+            try {
+                val source = inkMask(roi)
+                ranks.mapNotNull { rank ->
+                    bitmapRankTemplates[rank]?.let { templates ->
+                        rank to templates.maxOf { template -> maskScore(source, template) }
+                    }
+                }.toMap()
+            } finally {
+                roi.recycle()
+            }
+        } finally {
+            cardCrop.recycle()
+        }
+    }
+
+    fun suitTemplateScores(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        suits: Set<Suit>
+    ): Map<Suit, Float> {
+        ensureLoaded()
+        val cardCrop = crop(bitmap, region) ?: return emptyMap()
+        return try {
+            val width = (cardCrop.width * 0.38f).toInt().coerceAtLeast(8)
+            val height = (cardCrop.height * 0.31f).toInt().coerceAtLeast(8)
+            val sourceMasks = mutableListOf<LongArray>()
+            for (xFraction in listOf(0.58f, 0.61f, 0.64f)) {
+                val x = (cardCrop.width * xFraction).toInt()
+                    .coerceIn(0, cardCrop.width - 8)
+                val actualWidth = width.coerceAtMost(cardCrop.width - x)
+                for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {
+                    val y = (cardCrop.height * yFraction).toInt()
+                        .coerceIn(0, cardCrop.height - 8)
+                    val actualHeight = height.coerceAtMost(cardCrop.height - y)
+                    val roi = Bitmap.createBitmap(
+                        cardCrop,
+                        x,
+                        y,
+                        actualWidth,
+                        actualHeight
+                    )
+                    sourceMasks += inkMask(roi)
+                    roi.recycle()
+                }
+            }
+            suits.mapNotNull { suit ->
+                bitmapSuitTemplates[suit]?.let { templates ->
+                    suit to templates.maxOf { template ->
+                        sourceMasks.maxOf { source -> maskScore(source, template) }
+                    }
+                }
+            }.toMap()
+        } finally {
+            cardCrop.recycle()
         }
     }
 
@@ -350,7 +434,10 @@ class CardRecognizer(
      * Translation-tolerant binary-mask matching. Unlike OpenCV, this runs in
      * fixture tests too and uses templates cropped from the exact Smash font.
      */
-    private fun bestBitmapRank(crop: Bitmap): Pair<Rank, Float>? {
+    private fun bestBitmapRank(
+        crop: Bitmap,
+        exactCardBounds: Boolean = false
+    ): Pair<Rank, Float>? {
         if (bitmapRankTemplates.isEmpty()) return null
         val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
         val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
@@ -361,17 +448,20 @@ class CardRecognizer(
             sourceMasks += inkMask(roi)
             roi.recycle()
         }
-        // Candidate bounds may start on an overlapping header rather than the
-        // exact card top. Search a small x/y grid for the large center glyph.
-        for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
-            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-            val actualW = w.coerceAtMost(crop.width - x)
-            for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
-                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                val actualH = h.coerceAtMost(crop.height - y)
-                val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
-                sourceMasks += inkMask(roi)
-                roi.recycle()
+        if (!exactCardBounds) {
+            // Candidate bounds may start on an overlapping header rather than
+            // the exact card top. Search for the large center glyph only when
+            // the caller could not supply complete card bounds.
+            for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
+                val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
+                val actualW = w.coerceAtMost(crop.width - x)
+                for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
+                    val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
+                    val actualH = h.coerceAtMost(crop.height - y)
+                    val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
+                    sourceMasks += inkMask(roi)
+                    roi.recycle()
+                }
             }
         }
         var best: Pair<Rank, Float>? = null
@@ -396,26 +486,32 @@ class CardRecognizer(
 
     private fun inkMask(bitmap: Bitmap): LongArray {
         val size = 48
-        val scaled = Bitmap.createScaledBitmap(bitmap, size, size, false)
-        return try {
-            LongArray(size).also { rows ->
-                for (y in 0 until size) {
-                    for (x in 0 until size) {
-                        val c = scaled.getPixel(x, y)
-                        val r = (c shr 16) and 0xFF
-                        val g = (c shr 8) and 0xFF
-                        val b = c and 0xFF
-                        val luma = (r * 30 + g * 59 + b * 11) / 100
-                        val isInk =
-                            SmashColorAnalyzer.isRedInk(r, g, b) ||
-                                SmashColorAnalyzer.isBlackInk(r, g, b) ||
-                                luma < 135
-                        if (isInk) rows[y] = rows[y] or (1L shl x)
-                    }
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        return LongArray(size).also { rows ->
+            for (y in 0 until size) {
+                val sourceY = (((y + 0.5f) * height) / size)
+                    .toInt()
+                    .coerceIn(0, height - 1)
+                val rowOffset = sourceY * width
+                for (x in 0 until size) {
+                    val sourceX = (((x + 0.5f) * width) / size)
+                        .toInt()
+                        .coerceIn(0, width - 1)
+                    val c = pixels[rowOffset + sourceX]
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    val luma = (r * 30 + g * 59 + b * 11) / 100
+                    val isInk =
+                        SmashColorAnalyzer.isRedInk(r, g, b) ||
+                            SmashColorAnalyzer.isBlackInk(r, g, b) ||
+                            luma < 135
+                    if (isInk) rows[y] = rows[y] or (1L shl x)
                 }
             }
-        } finally {
-            if (scaled !== bitmap) scaled.recycle()
         }
     }
 
@@ -587,7 +683,7 @@ class CardRecognizer(
 
     companion object {
         private const val TAG = "CardRecognizer"
-        private const val MAX_BITMAP_TEMPLATES_PER_RANK = 5
-        private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 3
+        private const val MAX_BITMAP_TEMPLATES_PER_RANK = 10
+        private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 5
     }
 }

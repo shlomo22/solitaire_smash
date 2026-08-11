@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.personal.solitaireassistant.game.BoardRegion
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Move
+import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Suit
 import com.personal.solitaireassistant.solver.MoveGenerator
 import com.personal.solitaireassistant.solver.MoveSelector
@@ -493,6 +494,31 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
+    fun fullCardTemplateDistinguishesTenFromNine() {
+        val bitmap = load("screenshots/Screenshot_20260811_144901_Solitaire Smash.jpg")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val bounds = requireNotNull(
+            result.locations[PileRef.Tableau(0)]?.lastOrNull()?.bounds
+        )
+        val recognizer = CardRecognizer(context, minConfidence = 0.55f)
+
+        val scores = recognizer.exactRankTemplateScores(
+            bitmap,
+            bounds,
+            setOf(Rank.Nine, Rank.Ten)
+        )
+        assertTrue(
+            "10 template must beat 9 for the two-character glyph; scores=$scores",
+            (scores[Rank.Ten] ?: 0f) > (scores[Rank.Nine] ?: 0f)
+        )
+
+        recognizer.release()
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
     fun fifteenthLiveBoardMovesJackRunOntoQueen() {
         val bitmap = load("screenshots/device_live_15.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)
@@ -515,10 +541,11 @@ class SmashScreenshotFixtureTest {
     fun sixteenthLiveBoardDoesNotInferKingUnderFaceDownCard() {
         val bitmap = load("screenshots/device_live_16.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)
-        val state = requireNotNull(detector.detect(bitmap).state)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
 
         assertEquals(
-            "only the queen is exposed in tableau 7",
+            "only the queen is exposed in tableau 7; ${result.diagnostics}",
             listOf(Rank.Queen),
             state.tableau[6].filter { it.faceUp }.map { it.rank }
         )
@@ -527,6 +554,303 @@ class SmashScreenshotFixtureTest {
             MoveGenerator.generate(state).filterIsInstance<Move.TableauToTableau>().none {
                 it.fromColumn == 6 && it.toColumn == 1
             }
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyFirstLiveBoardDoesNotInventKingAboveQueen() {
+        val bitmap = load("screenshots/device_live_21.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(
+            listOf(Rank.Queen),
+            state.tableau[6].filter { it.faceUp }.map { it.rank }
+        )
+        assertTrue(
+            MoveGenerator.generate(state).filterIsInstance<Move.TableauToTableau>().none {
+                it.fromColumn == 6 && it.toColumn == 0
+            }
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentySecondLiveBoardKeepsExposedKingAboveQueenRun() {
+        val bitmap = load("screenshots/device_live_22.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+
+        assertEquals(
+            result.diagnostics.joinToString("\n"),
+            Rank.King,
+            state.tableau[0].firstOrNull { it.faceUp }?.rank
+        )
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "moving Q-run onto K reveals nothing and leaves K behind; got ${best.move.label}",
+            best.move !is Move.TableauToTableau ||
+                best.move.fromColumn != 0 ||
+                best.move.toColumn != 1
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyThirdLiveBoardRecognizesClubFive() {
+        val bitmap = load("screenshots/device_live_23.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+        val recognizer = CardRecognizer(context, minConfidence = 0.55f)
+        val bounds = requireNotNull(result.locations[PileRef.Tableau(6)]?.lastOrNull()?.bounds)
+        val scores = recognizer.suitTemplateScores(
+            bitmap,
+            bounds,
+            setOf(Suit.Clubs, Suit.Spades)
+        )
+
+        assertEquals("scores=$scores", Suit.Clubs, state.tableau[6].lastOrNull()?.suit)
+        assertTrue(
+            MoveGenerator.generate(state).none {
+                it == Move.TableauToFoundation(fromColumn = 6, toFoundation = 3)
+            }
+        )
+
+        recognizer.release()
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyFourthLiveBoardRecognizesClubTwo() {
+        val bitmap = load("screenshots/device_live_24.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+        val recognizer = CardRecognizer(context, minConfidence = 0.55f)
+        val bounds = requireNotNull(result.locations[PileRef.Tableau(6)]?.lastOrNull()?.bounds)
+        val scores = recognizer.suitTemplateScores(
+            bitmap,
+            bounds,
+            setOf(Suit.Clubs, Suit.Spades)
+        )
+
+        assertEquals("scores=$scores", Suit.Clubs, state.tableau[6].lastOrNull()?.suit)
+        assertTrue(
+            MoveGenerator.generate(state).none {
+                it == Move.TableauToFoundation(fromColumn = 6, toFoundation = 2)
+            }
+        )
+
+        recognizer.release()
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyFifthLiveBoardRecognizesWasteJack() {
+        val bitmap = load("screenshots/device_live_25.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+        val recognizer = CardRecognizer(context, minConfidence = 0.55f)
+        val wasteBounds = requireNotNull(result.locations[PileRef.Waste]?.lastOrNull()?.bounds)
+        val rankScores = recognizer.exactRankTemplateScores(
+            bitmap,
+            wasteBounds,
+            setOf(Rank.Seven, Rank.Jack)
+        )
+
+        assertEquals(result.diagnostics.joinToString("\n"), Rank.Jack, state.wasteTop()?.rank)
+        assertTrue(
+            "Jack must clearly beat Seven; scores=$rankScores",
+            (rankScores[Rank.Jack] ?: 0f) > (rankScores[Rank.Seven] ?: 0f) + 0.35f
+        )
+        assertTrue(MoveSelector.bestMove(state)?.move !is Move.WasteToFoundation)
+
+        recognizer.release()
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun confirmedWasteSevenDoesNotMatchJack() {
+        val bitmap = load("screenshots/Screenshot_20260811_145050_Solitaire Smash.jpg")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val recognizer = CardRecognizer(context, minConfidence = 0.55f)
+        val wasteBounds = requireNotNull(result.locations[PileRef.Waste]?.lastOrNull()?.bounds)
+        val scores = recognizer.exactRankTemplateScores(
+            bitmap,
+            wasteBounds,
+            setOf(Rank.Seven, Rank.Jack)
+        )
+
+        assertTrue(
+            "Seven must not strongly match Jack; scores=$scores",
+            (scores[Rank.Jack] ?: 0f) < (scores[Rank.Seven] ?: 0f) + 0.35f
+        )
+
+        recognizer.release()
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentySixthLiveBoardRecognizesWasteDiamondFive() {
+        val bitmap = load("screenshots/device_live_26.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+
+        assertEquals(result.diagnostics.joinToString("\n"), Rank.Five, state.wasteTop()?.rank)
+        assertEquals(Suit.Diamonds, state.wasteTop()?.suit)
+        assertTrue(MoveSelector.bestMove(state)?.move !is Move.WasteToFoundation)
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentySeventhLiveBoardRecognizesWasteClubNine() {
+        val bitmap = load("screenshots/device_live_27.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(Rank.Nine, state.wasteTop()?.rank)
+        assertEquals(Suit.Clubs, state.wasteTop()?.suit)
+        assertTrue(MoveSelector.bestMove(state)?.move !is Move.WasteToFoundation)
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyEighthLiveBoardDoesNotInventFiveAboveFour() {
+        val bitmap = load("screenshots/device_live_28.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(
+            listOf(Rank.Four),
+            state.tableau[6].filter { it.faceUp }.map { it.rank }
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun twentyNinthLiveBoardRecognizesWasteHeartEight() {
+        val bitmap = load("screenshots/device_live_29.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(Rank.Eight, state.wasteTop()?.rank)
+        assertEquals(Suit.Hearts, state.wasteTop()?.suit)
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtiethLiveBoardKeepsKingAboveQueenRun() {
+        val bitmap = load("screenshots/device_live_30.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(Rank.King, state.tableau[0].firstOrNull { it.faceUp }?.rank)
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            best.move !is Move.TableauToTableau ||
+                best.move.fromColumn != 0 ||
+                best.move.toColumn != 1
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtyFirstLiveBoardKeepsKingAboveQueenRun() {
+        val bitmap = load("screenshots/device_live_31.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(Rank.King, state.tableau[4].firstOrNull { it.faceUp }?.rank)
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            best.move !is Move.TableauToTableau ||
+                best.move.fromColumn != 4 ||
+                best.move.toColumn != 1
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtySecondLiveBoardRecognizesWasteDiamondFour() {
+        val bitmap = load("screenshots/device_live_32.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val detection = detector.detect(bitmap)
+        val state = requireNotNull(detection.state)
+
+        assertEquals(detection.diagnostics.joinToString("\n"), Rank.Four, state.wasteTop()?.rank)
+        assertEquals(detection.diagnostics.joinToString("\n"), Suit.Diamonds, state.wasteTop()?.suit)
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtyThirdLiveBoardDoesNotInventKingAboveQueen() {
+        val bitmap = load("screenshots/device_live_33.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(
+            listOf(Rank.Queen, Rank.Jack, Rank.Ten),
+            state.tableau[2].filter { it.faceUp }.map { it.rank }
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtyFourthLiveBoardKeepsKingAndQueenAboveLongRun() {
+        val bitmap = load("screenshots/device_live_34.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(
+            listOf(Rank.King, Rank.Queen),
+            state.tableau[6].filter { it.faceUp }.take(2).map { it.rank }
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun thirtyFifthLiveBoardDoesNotInventSixAboveFive() {
+        val bitmap = load("screenshots/device_live_35.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+
+        assertEquals(
+            listOf(Rank.Five),
+            state.tableau[5].filter { it.faceUp }.map { it.rank }
         )
 
         detector.release()
