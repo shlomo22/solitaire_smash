@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1B5E20</color>
+    <color name="overlay_default">#E6FFEB3B</color>
+    <color name="purple_40">#6650A4</color>
+    <color name="purple_80">#D0BCFF</color>
+    <color name="green_40">#2E7D32</color>
+</resources>

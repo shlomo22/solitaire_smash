@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Solitaire Assistant</string>
+    <string name="capture_notification_title">Solitaire capture active</string>
+    <string name="capture_notification_text">Watching screen for Klondike moves</string>
+    <string name="capture_channel_name">Screen capture</string>
+    <string name="capture_channel_description">Foreground service while analyzing Solitaire Smash</string>
+</resources>
