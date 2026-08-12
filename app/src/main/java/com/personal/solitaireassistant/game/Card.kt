@@ -40,7 +40,9 @@ data class Card(
     val suit: Suit,
     val faceUp: Boolean = true,
     /** False when occupancy/color is known but rank/suit matching failed. */
-    val known: Boolean = true
+    val known: Boolean = true,
+    /** False for cards inferred from cascade geometry rather than template match. */
+    val recognized: Boolean = true
 ) {
     val id: String get() = if (known) "${rank.name}_${suit.name}" else "U_${if (suit.isRed) "R" else "B"}"
 

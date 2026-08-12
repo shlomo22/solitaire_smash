@@ -82,6 +82,31 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun prefersDrawOverSlidingFourFromFiveFourOntoAnotherFive() {
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                listOf(c(Rank.Five, Suit.Spades), c(Rank.Four, Suit.Diamonds)),
+                listOf(c(Rank.King, Suit.Spades))
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            "4 onto another 5 is legal but useless; expected draw, got ${best.move.label}",
+            Move.DrawStock,
+            best.move
+        )
+    }
+
+    @Test
     fun prefersDrawOverTableauMoveThatRevealsNothing() {
         val state = GameState(
             tableau = listOf(
@@ -113,6 +138,44 @@ class MoveSelectorTest {
 
         val best = requireNotNull(MoveSelector.bestMove(state))
         assertEquals(Move.DrawStock, best.move)
+    }
+
+    @Test
+    fun prefersRevealOverDrawWhenHiddenCardCanBeExposed() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Ten, Suit.Clubs, false), c(Rank.Nine, Suit.Hearts)),
+                listOf(c(Rank.Ten, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "expected reveal move, got ${best.move}",
+            best.move is Move.TableauToTableau &&
+                (best.move as Move.TableauToTableau).fromColumn == 0
+        )
+    }
+
+    @Test
+    fun skipsRejectedFingerprint() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Nine, Suit.Clubs, false), c(Rank.Eight, Suit.Hearts)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val rejected = setOf(MoveFingerprint.of(state, Move.TableauToTableau(0, 1, 1)))
+        val best = requireNotNull(MoveSelector.bestMove(state, rejectedFingerprints = rejected))
+        assertTrue(best.move !is Move.TableauToTableau || best.move.fromColumn != 0)
     }
 
     @Test

@@ -18,6 +18,7 @@ import com.personal.solitaireassistant.R
 import com.personal.solitaireassistant.SolitaireAssistantApp
 import com.personal.solitaireassistant.overlay.OverlayController
 import com.personal.solitaireassistant.pipeline.AnalysisPipeline
+import com.personal.solitaireassistant.pipeline.LabSnapshot
 import com.personal.solitaireassistant.settings.AssistantSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference
 class CaptureService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var prefsJob: Job? = null
+    private var labSnapshotJob: Job? = null
     private var captureController: ScreenCaptureController? = null
     private var overlayController: OverlayController? = null
     private var pipeline: AnalysisPipeline? = null
@@ -47,12 +49,20 @@ class CaptureService : Service() {
         super.onCreate()
         instance = this
         _status.value = Status.Starting
-        overlayController = OverlayController(this)
+        overlayController = OverlayController(this) {
+            pipeline?.cancelCurrentHint()
+        }
         pipeline = AnalysisPipeline(
             appContext = applicationContext,
             overlayController = overlayController!!,
             statusSink = { msg -> _statusMessage.value = msg }
         )
+        pipeline?.updateSettings(settingsRef.get())
+        labSnapshotJob = scope.launch {
+            pipeline?.labSnapshot?.collect { snapshot ->
+                _labSnapshotRelay.value = snapshot
+            }
+        }
         val prefs = (application as SolitaireAssistantApp).preferences
         prefsJob = scope.launch {
             prefs.settings.collectLatest { assistantSettings ->
@@ -174,7 +184,9 @@ class CaptureService : Service() {
     override fun onDestroy() {
         stopCapture()
         prefsJob?.cancel()
+        labSnapshotJob?.cancel()
         scope.cancel()
+        _labSnapshotRelay.value = null
         overlayController = null
         pipeline = null
         instance = null
@@ -230,7 +242,23 @@ class CaptureService : Service() {
         private val _statusMessage = MutableStateFlow("Idle")
         val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+        private val _labSnapshotRelay = MutableStateFlow<LabSnapshot?>(null)
+
         fun analysisLogPath(): String? = instance?.pipeline?.analysisLogPath
+
+        fun labSnapshot(): StateFlow<LabSnapshot?> = _labSnapshotRelay
+
+        fun setTemplateLabMode(enabled: Boolean) {
+            instance?.pipeline?.setTemplateLabMode(enabled)
+        }
+
+        fun reloadTemplates() {
+            instance?.pipeline?.reloadTemplates()
+        }
+
+        fun cancelCurrentHint() {
+            instance?.pipeline?.cancelCurrentHint()
+        }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
             val intent = Intent(context, CaptureService::class.java).apply {

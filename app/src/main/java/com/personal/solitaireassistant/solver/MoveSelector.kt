@@ -14,19 +14,31 @@ import com.personal.solitaireassistant.game.ScoredMove
 object MoveSelector {
     fun bestMove(
         state: GameState,
-        avoidStates: Collection<GameState> = emptyList()
+        avoidStates: Collection<GameState> = emptyList(),
+        rejectedFingerprints: Set<String> = emptySet()
     ): ScoredMove? {
-        val ranked = scoreAll(state).sortedWith(
-            compareBy<ScoredMove> { it.score }
-                .thenBy { it.move.label }
-                .reversed()
-        )
-        if (avoidStates.isEmpty()) return ranked.firstOrNull()
+        val ranked = scoreAll(state)
+            .filter { MoveFingerprint.of(state, it.move) !in rejectedFingerprints }
+            .sortedWith(
+                compareBy<ScoredMove> { it.score }
+                    .thenBy { it.move.label }
+                    .reversed()
+            )
+        if (ranked.isEmpty()) return null
 
-        return ranked.firstOrNull { candidate ->
-            val next = KlondikeRules.apply(state, candidate.move) ?: return@firstOrNull false
-            next !in avoidStates
-        } ?: ranked.firstOrNull { it.move is Move.DrawStock || it.move is Move.RecycleWaste }
+        val pick = { list: List<ScoredMove> ->
+            if (avoidStates.isEmpty()) {
+                list.firstOrNull()
+            } else {
+                list.firstOrNull { candidate ->
+                    val next = KlondikeRules.apply(state, candidate.move) ?: return@firstOrNull false
+                    next !in avoidStates
+                } ?: list.firstOrNull {
+                    it.move is Move.DrawStock || it.move is Move.RecycleWaste
+                }
+            }
+        }
+        return pick(ranked)
     }
 
     fun scoreAll(state: GameState): List<ScoredMove> {
@@ -46,10 +58,20 @@ object MoveSelector {
         var score = 0.0
         val reasons = mutableListOf<String>()
 
-        val revealed = before.hiddenTableauCount() - after.hiddenTableauCount()
+        val uselessTopShuffle =
+            move is Move.TableauToTableau && isUselessTopShuffle(before, move)
+        val revealed = if (uselessTopShuffle) {
+            0
+        } else {
+            before.hiddenTableauCount() - after.hiddenTableauCount()
+        }
         if (revealed > 0) {
             score += 120.0 * revealed
             reasons += "reveal+$revealed"
+        }
+        if (uselessTopShuffle) {
+            score -= 280.0
+            reasons += "useless-top-shuffle"
         }
 
         val foundationDelta = after.foundationCount() - before.foundationCount()
@@ -95,11 +117,21 @@ object MoveSelector {
             Move.DrawStock -> {
                 score += 5.0
                 reasons += "draw"
-                // Prefer drawing when no productive play exists; already relative.
+                if (hasTableauRevealMove(before)) {
+                    score -= 300.0
+                    reasons += "defer-draw-for-reveal"
+                } else if (hasProductiveTableauMove(before)) {
+                    score -= 120.0
+                    reasons += "defer-draw-for-tableau"
+                }
             }
             Move.RecycleWaste -> {
-                score -= 5.0
+                score -= 15.0
                 reasons += "recycle"
+                if (hasProductiveTableauMove(before) || hasTableauRevealMove(before)) {
+                    score -= 80.0
+                    reasons += "defer-recycle-for-tableau"
+                }
             }
             is Move.TableauToTableau -> {
                 if (createsUsefulEmpty) {
@@ -122,15 +154,17 @@ object MoveSelector {
         score += after.tableau.count { col -> col.lastOrNull()?.faceUp == true } * 0.5
 
         // Tiny look-ahead: reward moves that unlock another reveal/foundation.
-        val followUpBonus = MoveGenerator.generate(after).maxOfOrNull { follow ->
-            val followState = KlondikeRules.apply(after, follow) ?: return@maxOfOrNull 0.0
-            val moreReveal = after.hiddenTableauCount() - followState.hiddenTableauCount()
-            val moreFound = followState.foundationCount() - after.foundationCount()
-            moreReveal * 20.0 + moreFound * 10.0
-        } ?: 0.0
-        if (followUpBonus > 0) {
-            score += followUpBonus
-            reasons += "lookahead+$followUpBonus"
+        if (!uselessTopShuffle) {
+            val followUpBonus = MoveGenerator.generate(after).maxOfOrNull { follow ->
+                val followState = KlondikeRules.apply(after, follow) ?: return@maxOfOrNull 0.0
+                val moreReveal = after.hiddenTableauCount() - followState.hiddenTableauCount()
+                val moreFound = followState.foundationCount() - after.foundationCount()
+                moreReveal * 20.0 + moreFound * 10.0
+            } ?: 0.0
+            if (followUpBonus > 0) {
+                score += followUpBonus
+                reasons += "lookahead+$followUpBonus"
+            }
         }
 
         // Strongly discourage immediate undo cycles of pure tableau swaps.
@@ -172,6 +206,42 @@ object MoveSelector {
                 else -> false
             }
         }
+    }
+
+    private fun hasTableauRevealMove(state: GameState): Boolean =
+        MoveGenerator.generate(state).any { move ->
+            if (move !is Move.TableauToTableau) return@any false
+            val next = KlondikeRules.apply(state, move) ?: return@any false
+            next.hiddenTableauCount() < state.hiddenTableauCount()
+        }
+
+    private fun hasProductiveTableauMove(state: GameState): Boolean =
+        MoveGenerator.generate(state).any { move ->
+            when (move) {
+                is Move.TableauToTableau -> {
+                    val next = KlondikeRules.apply(state, move) ?: return@any false
+                    next.hiddenTableauCount() < state.hiddenTableauCount() ||
+                        next.foundationCount() > state.foundationCount() ||
+                        (next.tableau.count { it.isEmpty() } >
+                            state.tableau.count { it.isEmpty() })
+                }
+                is Move.TableauToFoundation -> true
+                else -> false
+            }
+        }
+
+    /**
+     * Moving the top card off a column whose card below is already face-up never
+     * reveals anything — e.g. sliding 4♦ from 5♣,4♦ onto another 5♣.
+     */
+    private fun isUselessTopShuffle(before: GameState, move: Move.TableauToTableau): Boolean {
+        val column = before.tableau[move.fromColumn]
+        if (column.isEmpty()) return false
+        if (move.startIndex != column.lastIndex) return false
+        if (move.startIndex <= 0) return false
+        if (!column[move.startIndex - 1].faceUp) return false
+        if (before.tableau[move.toColumn].isEmpty()) return false
+        return true
     }
 
     private fun isTrivialReversible(

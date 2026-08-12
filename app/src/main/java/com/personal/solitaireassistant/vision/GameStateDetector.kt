@@ -9,7 +9,6 @@ import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
-import kotlin.math.roundToInt
 
 data class DetectionResult(
     val state: GameState?,
@@ -26,10 +25,15 @@ class GameStateDetector(
     private val locator = BoardLocator()
     private val recognizer = CardRecognizer(context, minConfidence)
 
-    @Suppress("UNUSED_PARAMETER")
     fun updateMinConfidence(value: Float) {
-        // Recognizer is constructed with a threshold; pipeline passes settings for future rebuilds.
+        recognizer.minConfidence = value.coerceIn(0.4f, 0.95f)
     }
+
+    fun reloadTemplates() {
+        recognizer.reloadTemplates()
+    }
+
+    fun recognizerInstance(): CardRecognizer = recognizer
 
     fun detect(bitmap: Bitmap): DetectionResult {
         val board = locator.locate(bitmap)
@@ -66,117 +70,50 @@ class GameStateDetector(
         )
         val legacyWasteRegion = locator.wasteTopRegion(board)
         val legacyWasteHit = recognizer.recognize(bitmap, legacyWasteRegion)
-        val exactRankScores = recognizer.exactRankTemplateScores(
-            bitmap,
-            tightWasteRegion,
-            Rank.entries.toSet()
-        )
         val exactSuitScores = recognizer.suitTemplateScores(
             bitmap,
             tightWasteRegion,
             Suit.entries.toSet()
         )
-        // The legacy crop has the most rank training data, while the complete
-        // tight crop is the only one that reliably contains the suit badge.
-        // Fuse them, correcting the two common clipped-glyph confusions with
-        // the wide/closed center-glyph shape.
-        val legacyCard = legacyWasteHit.card
-        val tightCard = tightWasteHit.card
-        val baseCard = legacyCard ?: tightCard
-        val rankedExactSuits = exactSuitScores.entries.sortedByDescending { it.value }
-        val exactSuitBest = rankedExactSuits.firstOrNull()
-        val exactSuitSecond = rankedExactSuits.getOrNull(1)?.value ?: 0f
-        val authoritativeExactSuit = exactSuitBest
-            ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
-            ?.key
-        val exactTenOverride =
-            legacyCard?.rank == Rank.King &&
-                (exactRankScores[Rank.Ten] ?: 0f) >= 0.90f
-        val exactQueenOverride =
-            legacyCard?.rank == Rank.Ten &&
-                (exactRankScores[Rank.Queen] ?: 0f) >= 0.90f
-        val exactEightSpadeOverride =
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Six &&
-                (exactRankScores[Rank.Eight] ?: 0f) >= 0.90f &&
-                (exactSuitScores[Suit.Spades] ?: 0f) >= 0.90f
-        val exactFourOverride =
-            legacyCard?.rank == Rank.Seven &&
-                (exactRankScores[Rank.Four] ?: 0f) >= 0.85f &&
-                (exactSuitScores[Suit.Diamonds] ?: 0f) >= 0.90f &&
-                (exactSuitScores[Suit.Diamonds] ?: 0f) >
-                (exactSuitScores[Suit.Hearts] ?: 0f) + 0.05f
-        val correctedRank = when {
-            exactTenOverride -> Rank.Ten
-            exactQueenOverride -> Rank.Queen
-            exactEightSpadeOverride -> Rank.Eight
-            exactFourOverride -> Rank.Four
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Jack &&
-                (exactRankScores[Rank.Jack] ?: 0f) >
-                (exactRankScores[Rank.Seven] ?: 0f) + 0.35f -> Rank.Jack
-            legacyCard?.rank == Rank.Nine &&
-                tightCard?.rank == Rank.Ten &&
-                (exactRankScores[Rank.Ten] ?: 0f) >= 0.85f &&
-                (exactRankScores[Rank.Ten] ?: 0f) >
-                (exactRankScores[Rank.Nine] ?: 0f) + 0.10f -> Rank.Ten
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Eight &&
-                (exactRankScores[Rank.Eight] ?: 0f) >= 0.85f &&
-                (exactRankScores[Rank.Eight] ?: 0f) >
-                (exactRankScores[Rank.Seven] ?: 0f) + 0.10f -> Rank.Eight
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Six &&
-                tightCard.suit != legacyCard.suit -> Rank.Six
-            else -> baseCard?.rank
-        }
-        val correctedSuit = if ((exactTenOverride ||
-                exactQueenOverride ||
-                exactEightSpadeOverride) &&
-            authoritativeExactSuit != null
-        ) {
-            authoritativeExactSuit
-        } else if (exactFourOverride) {
-            Suit.Diamonds
-        } else {
-            tightCard?.suit ?: baseCard?.suit
-        }
-        val fusedCard = if (baseCard != null && correctedRank != null) {
-            baseCard.copy(
-                rank = correctedRank,
-                suit = correctedSuit ?: baseCard.suit
-            )
-        } else {
-            null
-        }
-        val wasteHit = if (fusedCard != null) {
-            RecognitionHit(
-                card = fusedCard,
-                confidence = maxOf(legacyWasteHit.confidence, tightWasteHit.confidence),
-                isFaceDown = false,
-                isEmpty = false,
-                diagnostic = "fused-${fusedCard.rank.name}-${fusedCard.suit.name}",
-                inferredRed = fusedCard.suit.isRed
-            )
-        } else {
-            legacyWasteHit
-        }
-        val wasteRegion = if (fusedCard != null) tightWasteRegion else legacyWasteRegion
         val wasteCandidatesDisagree =
             tightWasteHit.card != null &&
                 legacyWasteHit.card != null &&
                 tightWasteHit.card.id != legacyWasteHit.card.id
+        val wasteHit = when {
+            wasteCandidatesDisagree ->
+                resolveWasteDisagreement(
+                    bitmap,
+                    tightWasteHit,
+                    legacyWasteHit,
+                    tightWasteRegion,
+                    legacyWasteRegion,
+                    exactSuitScores
+                )
+            tightWasteHit.card != null -> tightWasteHit
+            else -> legacyWasteHit
+        }
+        val wasteRegion = if (wasteHit.diagnostic.contains("waste-resolved-legacy")) {
+            legacyWasteRegion
+        } else if (tightWasteHit.card != null || wasteHit.card != null) {
+            tightWasteRegion
+        } else {
+            legacyWasteRegion
+        }
         locations[PileRef.Waste] = listOf(
             locator.toCardLocation(PileRef.Waste, 0, wasteRegion)
         )
-        val wasteCards = listOfNotNull(cardFromHit(wasteHit))
+        val wasteCards = listOfNotNull(
+            cardFromHit(wasteHit)?.let { card ->
+                val refined = recognizer.refineAmbiguousRank(bitmap, wasteRegion, card)
+                resolveBlackSuit(bitmap, wasteRegion, refined, exactSuitScores)
+            }
+        )
         diagnostics += "waste=${wasteHit.diagnostic}:${wasteHit.card}"
         diagnostics +=
             "waste-regions=exact:${"%.0f".format(tightWasteRegion.left)}-" +
             "${"%.0f".format(tightWasteRegion.right)}:${tightWasteHit.diagnostic}," +
             "legacy:${"%.0f".format(legacyWasteRegion.left)}-" +
             "${"%.0f".format(legacyWasteRegion.right)}:${legacyWasteHit.diagnostic}"
-        diagnostics += "waste-rank-scores=$exactRankScores"
         diagnostics += "waste-suit-scores=$exactSuitScores"
         if (wasteCandidatesDisagree) {
             diagnostics +=
@@ -189,8 +126,11 @@ class GameStateDetector(
             locations[PileRef.Foundation(index)] = listOf(
                 locator.toCardLocation(PileRef.Foundation(index), 0, region)
             )
-            foundations[index] = listOfNotNull(cardFromHit(hit))
-            diagnostics += "foundation$index=${hit.diagnostic}:${hit.card}"
+            val foundationCard = cardFromHit(hit)?.let { card ->
+                resolveBlackSuit(bitmap, region, card)
+            }
+            foundations[index] = listOfNotNull(foundationCard)
+            diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard ?: hit.card}"
         }
 
         locator.tableauColumnRegions(board).forEachIndexed { col, columnRegion ->
@@ -199,19 +139,19 @@ class GameStateDetector(
             val cardWidth = columnRegion.width
             val cardHeight = cardWidth * board.profile.cardAspect
             val downStep = cardHeight * board.profile.faceDownOverlap
-            val faceRegion = findPlayableFaceRegion(bitmap, columnRegion, cardHeight)
+            val faceRegions = findAllPlayableFaceRegions(bitmap, columnRegion, cardHeight)
 
-            if (faceRegion != null) {
-                // Count only genuinely teal headers above the playable face. This
-                // avoids treating exposed face-up cascades as hidden cards.
+            if (faceRegions.isNotEmpty()) {
+                val topFace = faceRegions.first()
+                // Count only genuinely teal headers above the uppermost face-up card.
                 var y = columnRegion.top
                 var faceDownCount = 0
-                while (y + 4f < faceRegion.top && faceDownCount < 6) {
+                while (y + 4f < topFace.top && faceDownCount < 6) {
                     val strip = BoardRegion(
                         columnRegion.left,
                         y,
                         columnRegion.right,
-                        (y + downStep).coerceAtMost(faceRegion.top)
+                        (y + downStep).coerceAtMost(topFace.top)
                     )
                     val stats = SmashColorAnalyzer.analyze(bitmap, strip)
                     if (SmashColorAnalyzer.looksFaceDown(stats)) {
@@ -232,179 +172,40 @@ class GameStateDetector(
                     y += downStep
                 }
 
-                val hit = recognizer.recognize(bitmap, faceRegion)
-                val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
-                var card = cardFromHit(hit) ?: Card(
-                    Rank.Ace,
-                    when (inkRed) {
-                        true -> Suit.Hearts
-                        false -> Suit.Spades
-                        null -> Suit.Clubs
-                    },
-                    faceUp = true,
-                    known = false
-                )
-                if (inkRed != null && card.suit.isRed != inkRed) {
-                    card = card.copy(suit = if (inkRed) Suit.Hearts else Suit.Spades)
-                }
-                if (card.known && !card.suit.isRed) {
-                    val suitScores = recognizer.suitTemplateScores(
-                        bitmap,
-                        faceRegion,
-                        setOf(Suit.Clubs, Suit.Spades)
-                    )
-                    val clubScore = suitScores[Suit.Clubs] ?: 0f
-                    val spadeScore = suitScores[Suit.Spades] ?: 0f
-                    card = when {
-                        card.rank in setOf(Rank.Two, Rank.Five) &&
-                            clubScore >= 0.65f &&
-                            spadeScore - clubScore <= 0.15f ->
-                            card.copy(suit = Suit.Clubs)
-                        spadeScore >= 0.68f && spadeScore - clubScore >= 0.015f ->
-                            card.copy(suit = Suit.Spades)
-                        card.rank in setOf(Rank.Three, Rank.Four) &&
-                            spadeScore >= 0.80f &&
-                            clubScore - spadeScore <= 0.01f ->
-                            card.copy(suit = Suit.Spades)
-                        else -> card
-                    }
-                }
-
-                // Reconstruct the overlapped face-up run geometrically. Sampling
-                // colored header strips missed leading cards in long cascades;
-                // card spacing is fixed and every legal tableau run descends
-                // while alternating color.
-                val faceUpStep = cardHeight * board.profile.faceUpOverlap
-                var firstFaceTop = columnRegion.top + faceDownCount * downStep
-                // A narrow teal header can be diluted by a white border and miss
-                // the primary face-down test. Do not infer a face-up card there.
-                while (firstFaceTop + downStep * 0.25f < faceRegion.top) {
-                    val boundaryStrip = BoardRegion(
-                        columnRegion.left,
-                        firstFaceTop,
-                        columnRegion.right,
-                        firstFaceTop + downStep * 0.45f
-                    )
-                    val boundaryStats = SmashColorAnalyzer.analyze(bitmap, boundaryStrip)
-                    if (!SmashColorAnalyzer.looksFaceDown(boundaryStats)) {
-                        break
-                    }
-                    val bounds = BoardRegion(
-                        columnRegion.left,
-                        firstFaceTop,
-                        columnRegion.right,
-                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
-                    )
-                    val boundaryHit = recognizer.recognize(bitmap, bounds)
-                    if (boundaryStats.whiteRatio > 0.12f &&
-                        !boundaryHit.isFaceDown &&
-                        !boundaryHit.isEmpty
-                    ) {
-                        break
-                    }
-                    cards += Card(Rank.Ace, Suit.Clubs, faceUp = false, known = false)
-                    locs += locator.toCardLocation(
-                        PileRef.Tableau(col),
-                        cards.lastIndex,
-                        bounds
-                    )
-                    faceDownCount++
-                    firstFaceTop += downStep
-                }
-                val faceUpDistance = (faceRegion.top - firstFaceTop) / faceUpStep
-                var faceUpCount = (faceUpDistance.roundToInt() + 1)
-                    .coerceIn(1, Rank.entries.size)
-                if (card.known) {
-                    val leadingRegion = BoardRegion(
-                        columnRegion.left,
-                        firstFaceTop,
-                        columnRegion.right,
-                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
-                    )
-                    val leadingHit = recognizer.recognize(
-                        bitmap,
-                        leadingRegion,
-                        exactCardBounds = true
-                    )
-                    val leadingCard = leadingHit.card
-                    val leadingHeaderStats = SmashColorAnalyzer.analyze(
-                        bitmap,
-                        BoardRegion(
-                            columnRegion.left,
-                            firstFaceTop,
-                            columnRegion.right,
-                            (firstFaceTop + faceUpStep * 0.9f)
-                                .coerceAtMost(columnRegion.bottom)
-                        )
-                    )
-                    val expectedLeadingRed =
-                        if ((faceUpCount - 1) % 2 == 0) {
-                            card.suit.isRed
-                        } else {
-                            !card.suit.isRed
-                        }
-                    val leadingRed = when {
-                        leadingHeaderStats.redInkRatio >
-                            leadingHeaderStats.blackInkRatio * 1.20f -> true
-                        leadingHeaderStats.blackInkRatio >
-                            leadingHeaderStats.redInkRatio * 1.20f -> false
-                        else -> leadingHit.inferredRed ?: leadingCard?.suit?.isRed
-                    }
-                    if (leadingRed != null &&
-                        leadingRed != expectedLeadingRed &&
-                        card.rank.value + faceUpCount <= Rank.King.value
-                    ) {
-                        faceUpCount++
-                    }
-                    if (leadingCard?.known == true &&
-                        leadingCard.rank.value >= card.rank.value
-                    ) {
-                        val rankCount = leadingCard.rank.value - card.rank.value + 1
-                        val countDifference = rankCount - faceUpCount
-                        if (rankCount in 1..Rank.entries.size &&
-                            countDifference == 2
-                        ) {
-                            faceUpCount = rankCount
-                        }
-                    }
-                }
-                repeat(faceUpCount - 1) { exposedIndex ->
-                    val distanceFromBottom = faceUpCount - 1 - exposedIndex
-                    val inferredValue = card.rank.value + distanceFromBottom
-                    val inferredRed = if (distanceFromBottom % 2 == 0) {
-                        card.suit.isRed
-                    } else {
-                        !card.suit.isRed
-                    }
-                    val known = card.known && inferredValue <= Rank.King.value
-                    val inferred = Card(
-                        rank = if (known) Rank.fromValue(inferredValue) else Rank.Ace,
-                        suit = if (inferredRed) Suit.Hearts else Suit.Spades,
+                faceRegions.reversed().forEach { faceRegion ->
+                    val hit = recognizer.recognize(bitmap, faceRegion)
+                    val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
+                    var card = cardFromHit(hit) ?: Card(
+                        Rank.Ace,
+                        when (inkRed) {
+                            true -> Suit.Hearts
+                            false -> Suit.Spades
+                            null -> Suit.Clubs
+                        },
                         faceUp = true,
-                        known = known
+                        known = false,
+                        recognized = false
                     )
-                    val top = firstFaceTop + exposedIndex * faceUpStep
-                    val bounds = BoardRegion(
-                        columnRegion.left,
-                        top,
-                        columnRegion.right,
-                        (top + cardHeight).coerceAtMost(columnRegion.bottom)
-                    )
-                    cards += inferred
-                    locs += locator.toCardLocation(
-                        PileRef.Tableau(col),
-                        cards.lastIndex,
-                        bounds
-                    )
+                    if (inkRed != null && card.suit.isRed != inkRed) {
+                        card = card.copy(suit = if (inkRed) Suit.Hearts else Suit.Spades)
+                    }
+                    if (card.known && hit.card != null) {
+                        card = card.copy(recognized = true)
+                    }
+                    card = resolveBlackSuit(bitmap, faceRegion, card)
+                    card = recognizer.refineAmbiguousRank(bitmap, faceRegion, card)
+                    cards += card
+                    locs += locator.toCardLocation(PileRef.Tableau(col), cards.lastIndex, faceRegion)
+                    if (!card.known) diagnostics += "tableau$col[face]=${hit.diagnostic}"
                 }
-                cards += card
-                locs += locator.toCardLocation(PileRef.Tableau(col), cards.lastIndex, faceRegion)
-                if (!card.known) diagnostics += "tableau$col[top]=${hit.diagnostic}"
             }
             tableau[col] = cards
             locations[PileRef.Tableau(col)] = locs
-            faceRegion?.let {
-                diagnostics += "tableau$col.region=${"%.1f".format(it.top)}-${"%.1f".format(it.bottom)}"
+            if (faceRegions.isNotEmpty()) {
+                val top = faceRegions.first()
+                val bottom = faceRegions.last()
+                diagnostics += "tableau$col.region=${"%.1f".format(top.top)}-" +
+                    "${"%.1f".format(bottom.bottom)} faces=${faceRegions.size}"
             }
             val summary = cards.joinToString(",") { c ->
                 when {
@@ -416,11 +217,7 @@ class GameStateDetector(
             diagnostics += "tableau$col=$summary"
         }
 
-        val wasteConfidence = if (wasteCandidatesDisagree) {
-            wasteHit.confidence.coerceAtMost(0.70f)
-        } else {
-            wasteHit.confidence
-        }
+        val wasteConfidence = wasteHit.confidence
         val confidences = mutableListOf(board.confidence, stockHit.confidence, wasteConfidence)
         val avg = confidences.average().toFloat()
         val state = GameState(
@@ -505,28 +302,39 @@ class GameStateDetector(
     }
 
     /**
-     * Finds the lowest white face in a tableau column, then derives its exact
-     * top from the known card aspect ratio. This is substantially more stable
-     * than stepping through the large center rank as if it were another card.
+     * Finds every face-up card body in a tableau column. Uses a narrowed horizontal
+     * scan so neighbor columns do not bleed into recognition.
      */
-    private fun findPlayableFaceRegion(
+    private fun findAllPlayableFaceRegions(
         bitmap: Bitmap,
         column: BoardRegion,
         cardHeight: Float
-    ): BoardRegion? {
-        val rowHeight = (column.width / 24f).coerceAtLeast(2f)
-        var y = column.top
+    ): List<BoardRegion> {
+        val scanColumn = narrowColumnRegion(column)
+        val rowHeight = (scanColumn.width / 24f).coerceAtLeast(2f)
+        var y = scanColumn.top
         var lastWhiteBottom = -1f
         var whiteRows = 0
         var sawCardContent = false
         var blankRows = 0
         val maxBlankRows = (cardHeight * 0.22f / rowHeight).toInt().coerceAtLeast(4)
-        while (y < column.bottom) {
+        val minimumRows = (cardHeight * 0.22f / rowHeight).toInt().coerceAtLeast(3)
+        val faceBottoms = mutableListOf<Float>()
+
+        fun commitFace() {
+            if (lastWhiteBottom >= 0f && whiteRows >= minimumRows) {
+                faceBottoms += lastWhiteBottom
+            }
+            lastWhiteBottom = -1f
+            whiteRows = 0
+        }
+
+        while (y < scanColumn.bottom) {
             val row = BoardRegion(
-                column.left,
+                scanColumn.left,
                 y,
-                column.right,
-                (y + rowHeight).coerceAtMost(column.bottom)
+                scanColumn.right,
+                (y + rowHeight).coerceAtMost(scanColumn.bottom)
             )
             val stats = SmashColorAnalyzer.analyze(bitmap, row)
             val hasCardContent = stats.whiteRatio > 0.18f || stats.tealRatio > 0.12f
@@ -535,7 +343,11 @@ class GameStateDetector(
                 blankRows = 0
             } else if (sawCardContent) {
                 blankRows++
-                if (blankRows >= maxBlankRows) break
+                if (blankRows >= maxBlankRows) {
+                    commitFace()
+                    sawCardContent = false
+                    blankRows = 0
+                }
             }
             if (stats.whiteRatio > 0.28f && stats.tealRatio < 0.18f) {
                 lastWhiteBottom = row.bottom
@@ -543,20 +355,120 @@ class GameStateDetector(
             }
             y += rowHeight
         }
+        commitFace()
 
-        // Empty placeholders have only thin white border rows; a card face has
-        // a substantial white area.
-        val minimumRows = (cardHeight * 0.22f / rowHeight).toInt().coerceAtLeast(3)
-        if (lastWhiteBottom < 0f || whiteRows < minimumRows) return null
+        if (faceBottoms.isEmpty()) return emptyList()
 
-        val top = (lastWhiteBottom - cardHeight).coerceAtLeast(column.top)
+        val regions = faceBottoms.map { bottom ->
+            val top = (bottom - cardHeight).coerceAtLeast(column.top)
+            BoardRegion(
+                column.left,
+                top,
+                column.right,
+                (top + cardHeight).coerceAtMost(column.bottom)
+            )
+        }
+        return mergeOverlappingFaceRegions(regions, cardHeight)
+    }
+
+    /** Rank ink can split one card into two bands — merge bands closer than half a card. */
+    private fun mergeOverlappingFaceRegions(
+        faces: List<BoardRegion>,
+        cardHeight: Float
+    ): List<BoardRegion> {
+        if (faces.size <= 1) return faces
+        val sorted = faces.sortedBy { it.top }
+        val merged = mutableListOf<BoardRegion>()
+        var current = sorted.first()
+        for (i in 1 until sorted.size) {
+            val next = sorted[i]
+            if (next.top - current.bottom < cardHeight * 0.35f) {
+                current = if (next.bottom >= current.bottom) next else current
+            } else {
+                merged += current
+                current = next
+            }
+        }
+        merged += current
+        return merged
+    }
+
+    private fun narrowColumnRegion(column: BoardRegion, fraction: Float = 0.74f): BoardRegion {
+        val inset = column.width * (1f - fraction) / 2f
         return BoardRegion(
-            column.left,
-            top,
-            column.right,
-            (top + cardHeight).coerceAtMost(column.bottom)
+            left = column.left + inset,
+            top = column.top,
+            right = column.right - inset,
+            bottom = column.bottom
         )
     }
+
+    private fun resolveWasteDisagreement(
+        bitmap: Bitmap,
+        tight: RecognitionHit,
+        legacy: RecognitionHit,
+        tightRegion: BoardRegion,
+        legacyRegion: BoardRegion,
+        suitScores: Map<Suit, Float>
+    ): RecognitionHit {
+        val tightCard = tight.card
+        val legacyCard = legacy.card
+        when {
+            tightCard == null -> return legacy
+            legacyCard == null -> return tight
+            tightCard.id == legacyCard.id ->
+                return if (tight.confidence >= legacy.confidence) tight else legacy
+            tightCard.rank == legacyCard.rank ->
+                return if (tight.confidence >= legacy.confidence) tight else legacy
+        }
+
+        val ranks = setOf(tightCard.rank, legacyCard.rank)
+        val tightScores = recognizer.exactRankTemplateScores(bitmap, tightRegion, ranks)
+        val legacyScores = recognizer.exactRankTemplateScores(bitmap, legacyRegion, ranks)
+        val combined = ranks.associateWith { rank ->
+            maxOf(tightScores[rank] ?: 0f, legacyScores[rank] ?: 0f)
+        }
+        val bestEntry = combined.maxByOrNull { it.value }
+            ?: return if (tight.confidence >= legacy.confidence) tight else legacy
+        val secondBest = combined.filterKeys { it != bestEntry.key }.maxOfOrNull { it.value } ?: 0f
+        if (bestEntry.value - secondBest < 0.03f) {
+            // Truly tied — fall back to the stronger of the two original hits so a
+            // hint can still be produced instead of dropping the waste card.
+            return if (tight.confidence >= legacy.confidence) tight else legacy
+        }
+
+        val preferTight = (tightScores[bestEntry.key] ?: 0f) >= (legacyScores[bestEntry.key] ?: 0f)
+        val region = if (preferTight) tightRegion else legacyRegion
+        val baseSuit = if (preferTight) tightCard.suit else legacyCard.suit
+        var resolved = Card(
+            bestEntry.key,
+            baseSuit,
+            faceUp = true,
+            known = true,
+            recognized = true
+        )
+        resolved = resolveBlackSuit(bitmap, region, resolved, suitScores)
+        resolved = recognizer.refineAmbiguousRank(bitmap, region, resolved)
+        val tag = if (preferTight) "tight" else "legacy"
+        return RecognitionHit(
+            card = resolved,
+            confidence = bestEntry.value,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "waste-resolved-$tag-${resolved.rank.name}-${resolved.suit.name}@" +
+                "%.2f".format(bestEntry.value),
+            inferredRed = resolved.suit.isRed
+        )
+    }
+
+    /**
+     * Lowest visible face in a column — last entry from [findAllPlayableFaceRegions].
+     */
+    private fun findPlayableFaceRegion(
+        bitmap: Bitmap,
+        column: BoardRegion,
+        cardHeight: Float
+    ): BoardRegion? = findAllPlayableFaceRegions(bitmap, column, cardHeight).lastOrNull()
 
     fun regionForMove(
         locations: Map<PileRef, List<CardLocation>>,
@@ -590,15 +502,40 @@ class GameStateDetector(
         recognizer.release()
     }
 
+    private fun resolveBlackSuit(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card,
+        suitScores: Map<Suit, Float>? = null
+    ): Card {
+        if (!card.known || card.suit.isRed) return card
+        val scores = suitScores ?: recognizer.suitTemplateScores(
+            bitmap,
+            region,
+            setOf(Suit.Clubs, Suit.Spades)
+        )
+        val clubScore = scores[Suit.Clubs] ?: 0f
+        val spadeScore = scores[Suit.Spades] ?: 0f
+        val lowRank = card.rank.value <= Rank.Three.value
+        val minScore = if (lowRank) 0.48f else 0.55f
+        val margin = if (lowRank) 0.02f else 0.04f
+        if (clubScore < minScore && spadeScore < minScore) return card
+        return when {
+            clubScore - spadeScore >= margin -> card.copy(suit = Suit.Clubs)
+            spadeScore - clubScore >= margin -> card.copy(suit = Suit.Spades)
+            else -> card
+        }
+    }
+
     private fun cardFromHit(hit: RecognitionHit): Card? {
         if (hit.isEmpty || hit.isFaceDown) return null
-        hit.card?.let { return it }
+        hit.card?.let { return it.copy(recognized = true) }
         // Face-up occupancy without a confident rank/suit match.
         val suit = when (hit.inferredRed) {
             true -> Suit.Hearts
             false -> Suit.Spades
             null -> Suit.Clubs
         }
-        return Card(Rank.Ace, suit, faceUp = true, known = false)
+        return Card(Rank.Ace, suit, faceUp = true, known = false, recognized = false)
     }
 }

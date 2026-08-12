@@ -54,6 +54,7 @@ fun SettingsScreen(
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
     onOpenOverlaySettings: () -> Unit,
+    onOpenTemplateLab: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -168,6 +169,13 @@ fun SettingsScreen(
             }
         }
 
+        OutlinedButton(
+            onClick = onOpenTemplateLab,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Open Template Lab")
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -190,9 +198,10 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            "Test order: 1) Start and confirm capture notification / debug frames. " +
-                "2) Drop screenshots into test fixtures and tune templates. " +
-                "3) Run live overlay on Solitaire Smash.",
+            "Test order: 1) Start capture over Solitaire Smash. " +
+                "2) Open Template Lab to save rank/suit crops (hints pause). " +
+                "3) Run live overlay and tap Cancel on wrong hints. " +
+                "4) Pull analysis log via adb if needed.",
             style = MaterialTheme.typography.bodySmall
         )
     }

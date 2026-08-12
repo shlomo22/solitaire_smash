@@ -2,18 +2,20 @@ package com.personal.solitaireassistant.vision
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import com.personal.solitaireassistant.game.BoardRegion
 import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import com.personal.solitaireassistant.settings.UserTemplateStore
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.Mat
-import org.opencv.core.Rect
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import java.io.File
 import java.io.IOException
 import kotlin.math.max
 
@@ -26,75 +28,51 @@ data class RecognitionHit(
     val inferredRed: Boolean? = null
 )
 
+data class GlyphCrops(
+    val cardCrop: Bitmap,
+    val rankCorner: Bitmap,
+    val suitBadge: Bitmap,
+    val rankGlyph: Bitmap?
+)
+
 /**
  * Solitaire Smash card recognizer.
- * Color heuristics always run; OpenCV template matching is used when native libs load.
+ * Matches isolated rank-corner and suit-badge templates independently.
  */
 class CardRecognizer(
     private val context: Context,
-    private val minConfidence: Float = 0.65f
+    var minConfidence: Float = 0.65f
 ) {
-    private val bitmapRankTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
-    private val bitmapSuitTemplates = mutableMapOf<Suit, MutableList<LongArray>>()
-    private val rankTemplates = mutableMapOf<Rank, Mat>()
-    private val suitTemplates = mutableMapOf<Suit, Mat>()
+    private val userTemplateStore = UserTemplateStore(context)
+    private val bitmapRankCornerTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
+    private val bitmapRankGlyphTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
+    private val bitmapSuitBadgeTemplates = mutableMapOf<Suit, MutableList<LongArray>>()
+    private val rankCornerOpenCv = mutableMapOf<Rank, MutableList<Mat>>()
+    private val suitBadgeOpenCv = mutableMapOf<Suit, MutableList<Mat>>()
     private var emptyTemplate: Mat? = null
     private var faceDownTemplate: Mat? = null
     private var loaded = false
     private var openCvReady = false
 
+    fun reloadTemplates() {
+        releaseTemplateData()
+        loaded = false
+        ensureLoaded()
+    }
+
     fun ensureLoaded() {
         if (loaded) return
         loaded = true
-        Rank.entries.forEach { rank ->
-            val templates = mutableListOf<LongArray>()
-            val prefix = "rank_${rank.name.lowercase()}"
-            val templateNames = context.assets.list("templates")
-                .orEmpty()
-                .filter { name ->
-                    name == "$prefix.png" ||
-                        (name.startsWith("${prefix}_alt") && name.endsWith(".png"))
-                }
-                .sortedWith(compareBy({ it != "$prefix.png" }, { it }))
-                .take(MAX_BITMAP_TEMPLATES_PER_RANK)
-            templateNames.forEach { name ->
-                loadBitmap("templates/$name")?.let { bitmap ->
-                    templates += inkMask(bitmap)
-                    bitmap.recycle()
-                }
-            }
-            if (templates.isNotEmpty()) bitmapRankTemplates[rank] = templates
-        }
-        Suit.entries.forEach { suit ->
-            val prefix = "suit_${suit.name.lowercase()}"
-            val templates = mutableListOf<LongArray>()
-            context.assets.list("templates").orEmpty()
-                .filter { name ->
-                    name == "$prefix.png" ||
-                        (name.startsWith("${prefix}_alt") && name.endsWith(".png"))
-                }
-                .sortedWith(compareBy({ it != "$prefix.png" }, { it }))
-                .take(MAX_BITMAP_TEMPLATES_PER_SUIT)
-                .forEach { name ->
-                    loadBitmap("templates/$name")?.let { bitmap ->
-                        templates += inkMask(bitmap)
-                        bitmap.recycle()
-                    }
-                }
-            if (templates.isNotEmpty()) {
-                bitmapSuitTemplates[suit] = templates
-            }
-        }
+        loadBitmapTemplates()
         openCvReady = try {
             OpenCVLoader.initLocal()
         } catch (_: Throwable) {
             false
         }
         if (!openCvReady) {
-            Log.w(TAG, "OpenCV unavailable — using color/glyph heuristics only")
+            Log.w(TAG, "OpenCV unavailable — using ink-mask matching only")
             return
         }
-        // Probe that natives actually work (Robolectric often lies via initLocal).
         try {
             Mat(2, 2, org.opencv.core.CvType.CV_8UC1).release()
         } catch (t: Throwable) {
@@ -103,24 +81,17 @@ class CardRecognizer(
             return
         }
         try {
-            Rank.entries.forEach { rank ->
-                loadGray("templates/rank_${rank.name.lowercase()}.png")?.let {
-                    rankTemplates[rank] = it
-                }
-            }
-            Suit.entries.forEach { suit ->
-                loadGray("templates/suit_${suit.name.lowercase()}.png")?.let {
-                    suitTemplates[suit] = it
-                }
-            }
-            emptyTemplate = loadGray("templates/empty_slot.png")
-            faceDownTemplate = loadGray("templates/face_down.png")
+            loadOpenCvTemplates()
+            emptyTemplate = loadGrayAsset("templates/empty_slot.png")
+            faceDownTemplate = loadGrayAsset("templates/face_down.png")
             Log.i(
                 TAG,
-                "Templates loaded ranks=${rankTemplates.size} suits=${suitTemplates.size}"
+                "Templates loaded rankCorner=${bitmapRankCornerTemplates.size} " +
+                    "suitBadge=${bitmapSuitBadgeTemplates.size} " +
+                    "rankGlyph=${bitmapRankGlyphTemplates.size}"
             )
         } catch (t: Throwable) {
-            Log.w(TAG, "Template load failed", t)
+            Log.w(TAG, "OpenCV template load failed", t)
             openCvReady = false
         }
     }
@@ -136,7 +107,6 @@ class CardRecognizer(
         }
 
         val stats = SmashColorAnalyzer.analyze(bitmap, region)
-
         if (SmashColorAnalyzer.looksEmpty(stats)) {
             return RecognitionHit(null, 0.82f, false, true, "empty-color")
         }
@@ -153,109 +123,77 @@ class CardRecognizer(
             else -> null
         }
 
-        if (openCvReady) {
-            val crop = crop(bitmap, region)
-            if (crop != null) {
-                try {
-                    // Never override a clear white face-up with the face-down template —
-                    // on-device logs showed foundations matching face-down-template.
-                    if (stats.tealRatio > 0.15f && stats.whiteRatio < 0.22f &&
-                        templateFaceDown(crop)
-                    ) {
-                        return RecognitionHit(null, 0.88f, true, false, "face-down-template")
-                    }
-                    val suit = inferSuit(stats, crop, inkRed)
-                    val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
-                    var rankHit: Pair<Rank, Float>? = null
-                    var glyph: RankInkHeuristics.Guess? = null
-                    val rank = if (bitmapRankHit != null && bitmapRankHit.second >= 0.68f) {
-                        bitmapRankHit
-                    } else {
-                        rankHit = bestRank(crop)
-                        glyph = RankInkHeuristics.guess(crop)
-                        pickRank(bitmapRankHit, rankHit, glyph)
-                    }
-                    if (suit != null && rank != null) {
-                        val conf = rank.second.coerceAtMost(1f)
-                        return RecognitionHit(
-                            card = Card(rank.first, suit, faceUp = true, known = true),
-                            confidence = conf,
-                            isFaceDown = false,
-                            isEmpty = false,
-                            diagnostic = "match-${rank.first.name}-${suit.name}@${"%.2f".format(conf)}",
-                            inferredRed = suit.isRed
-                        )
-                    }
-                    if (suit != null) {
-                        val rankHint = bitmapRankHit?.let {
-                            "bitmap-${it.first.name}@${"%.2f".format(it.second)}"
-                        } ?: rankHit?.let {
-                            "${it.first.name}@${"%.2f".format(it.second)}"
-                        } ?: glyph?.let {
-                            "glyph-${it.rank.name}@${"%.2f".format(it.confidence)}"
-                        } ?: "null"
-                        return RecognitionHit(
-                            card = null,
-                            confidence = bitmapRankHit?.second ?: rankHit?.second ?: glyph?.confidence ?: 0.4f,
-                            isFaceDown = false,
-                            isEmpty = false,
-                            diagnostic = "face-up-color-${if (suit.isRed) "red" else "black"}-rank=$rankHint",
-                            inferredRed = suit.isRed
-                        )
-                    }
-                } finally {
-                    if (!crop.isRecycled) crop.recycle()
-                }
+        val crop = crop(bitmap, region) ?: return RecognitionHit(
+            null, 0.4f, false, true, "crop-failed"
+        )
+        return try {
+            if (openCvReady &&
+                stats.tealRatio > 0.15f &&
+                stats.whiteRatio < 0.22f &&
+                templateFaceDown(crop)
+            ) {
+                return RecognitionHit(null, 0.88f, true, false, "face-down-template")
             }
-        }
-
-        // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
-        val crop = crop(bitmap, region)
-        try {
-            val bitmapRank = crop?.let { bestBitmapRank(it, exactCardBounds) }
-            val glyph = crop?.let { RankInkHeuristics.guess(it) }
-            val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
-                ?.takeIf { it.second >= 0.45f }
-                ?.first
-            val suit = bitmapSuit ?: when (inkRed) {
-                    true -> Suit.Hearts
-                    false -> Suit.Spades
-                    null -> null
-                }
-            val rank = pickRank(bitmapRank, null, glyph)
-            if (suit != null && rank != null) {
-                return RecognitionHit(
-                    card = Card(rank.first, suit, faceUp = true, known = true),
-                    confidence = rank.second,
+            val rankHit = bestRankMatch(crop, exactCardBounds)
+            val suitHit = bestSuitMatch(crop, inkRed)
+            val glyph = if (rankHit == null) RankInkHeuristics.guess(crop) else null
+            val rank = rankHit ?: glyph?.let { it.rank to it.confidence.coerceAtLeast(minRankScore()) }
+            if (suitHit != null && rank != null && rank.second >= minRankScore()) {
+                val conf = minOf(rank.second, suitHit.second).coerceAtMost(1f)
+                RecognitionHit(
+                    card = Card(rank.first, suitHit.first, faceUp = true, known = true),
+                    confidence = conf,
                     isFaceDown = false,
                     isEmpty = false,
-                    diagnostic = "bitmap-${rank.first.name}-${suit.name}@${"%.2f".format(rank.second)}",
-                    inferredRed = suit.isRed
+                    diagnostic = "match-${rank.first.name}-${suitHit.first.name}@" +
+                        "%.2f".format(conf),
+                    inferredRed = suitHit.first.isRed
+                )
+            } else {
+                RecognitionHit(
+                    card = null,
+                    confidence = rank?.second ?: suitHit?.second ?: 0.4f,
+                    isFaceDown = false,
+                    isEmpty = false,
+                    diagnostic = buildString {
+                        append("partial-")
+                        append(rank?.let { "${it.first.name}@${"%.2f".format(it.second)}" } ?: "rank?")
+                        append('-')
+                        append(suitHit?.let { "${it.first.name}@${"%.2f".format(it.second)}" } ?: "suit?")
+                    },
+                    inferredRed = suitHit?.first?.isRed ?: inkRed
                 )
             }
-            return RecognitionHit(
-                card = null,
-                confidence = 0.55f,
-                isFaceDown = false,
-                isEmpty = false,
-                diagnostic = "face-up-color-${inkRed?.let { if (it) "red" else "black" } ?: "unknown"}",
-                inferredRed = inkRed
-            )
         } finally {
-            crop?.takeUnless { it.isRecycled }?.recycle()
+            if (!crop.isRecycled) crop.recycle()
         }
     }
 
-    fun rankShapeGuess(
-        bitmap: Bitmap,
-        region: BoardRegion
-    ): RankInkHeuristics.Guess? {
+    fun extractGlyphCrops(bitmap: Bitmap, region: BoardRegion): GlyphCrops? {
         val cardCrop = crop(bitmap, region) ?: return null
-        return try {
-            RankInkHeuristics.guess(cardCrop)
-        } finally {
+        val rankCorner = TemplateGlyphRegions.cropRankCorner(cardCrop) ?: run {
             cardCrop.recycle()
+            return null
         }
+        val suitBadge = TemplateGlyphRegions.cropSuitBadge(cardCrop) ?: run {
+            rankCorner.recycle()
+            cardCrop.recycle()
+            return null
+        }
+        val rankGlyph = TemplateGlyphRegions.cropRankGlyph(cardCrop)
+        return GlyphCrops(cardCrop, rankCorner, suitBadge, rankGlyph)
+    }
+
+    fun rankCornerScores(source: Bitmap, ranks: Set<Rank> = Rank.entries.toSet()): Map<Rank, Float> {
+        ensureLoaded()
+        val masks = cornerSourceMasks(source)
+        return scoreRankTemplates(masks, ranks, bitmapRankCornerTemplates, bitmapRankGlyphTemplates)
+    }
+
+    fun suitBadgeScores(source: Bitmap, suits: Set<Suit> = Suit.entries.toSet()): Map<Suit, Float> {
+        ensureLoaded()
+        val masks = badgeSourceMasks(source)
+        return scoreSuitTemplates(masks, suits)
     }
 
     fun exactRankTemplateScores(
@@ -263,22 +201,10 @@ class CardRecognizer(
         region: BoardRegion,
         ranks: Set<Rank>
     ): Map<Rank, Float> {
-        ensureLoaded()
         val cardCrop = crop(bitmap, region) ?: return emptyMap()
         return try {
-            val width = (cardCrop.width * 0.70f).toInt().coerceIn(8, cardCrop.width)
-            val height = (cardCrop.height * 0.54f).toInt().coerceIn(8, cardCrop.height)
-            val roi = Bitmap.createBitmap(cardCrop, 0, 0, width, height)
-            try {
-                val source = inkMask(roi)
-                ranks.mapNotNull { rank ->
-                    bitmapRankTemplates[rank]?.let { templates ->
-                        rank to templates.maxOf { template -> maskScore(source, template) }
-                    }
-                }.toMap()
-            } finally {
-                roi.recycle()
-            }
+            val corner = TemplateGlyphRegions.cropRankCorner(cardCrop) ?: return emptyMap()
+            rankCornerScores(corner, ranks)
         } finally {
             cardCrop.recycle()
         }
@@ -289,200 +215,300 @@ class CardRecognizer(
         region: BoardRegion,
         suits: Set<Suit>
     ): Map<Suit, Float> {
-        ensureLoaded()
         val cardCrop = crop(bitmap, region) ?: return emptyMap()
         return try {
-            val width = (cardCrop.width * 0.38f).toInt().coerceAtLeast(8)
-            val height = (cardCrop.height * 0.31f).toInt().coerceAtLeast(8)
-            val sourceMasks = mutableListOf<LongArray>()
-            for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
-                val x = (cardCrop.width * xFraction).toInt()
-                    .coerceIn(0, cardCrop.width - 8)
-                val actualWidth = width.coerceAtMost(cardCrop.width - x)
-                for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {
-                    val y = (cardCrop.height * yFraction).toInt()
-                        .coerceIn(0, cardCrop.height - 8)
-                    val actualHeight = height.coerceAtMost(cardCrop.height - y)
-                    val roi = Bitmap.createBitmap(
-                        cardCrop,
-                        x,
-                        y,
-                        actualWidth,
-                        actualHeight
-                    )
-                    sourceMasks += inkMask(roi)
-                    roi.recycle()
-                }
-            }
-            suits.mapNotNull { suit ->
-                bitmapSuitTemplates[suit]?.let { templates ->
-                    suit to templates.maxOf { template ->
-                        sourceMasks.maxOf { source -> maskScore(source, template) }
-                    }
-                }
-            }.toMap()
+            val badge = TemplateGlyphRegions.cropSuitBadge(cardCrop) ?: return emptyMap()
+            suitBadgeScores(badge, suits)
+        } finally {
+            cardCrop.recycle()
+        }
+    }
+
+    fun rankShapeGuess(bitmap: Bitmap, region: BoardRegion): RankInkHeuristics.Guess? {
+        val cardCrop = crop(bitmap, region) ?: return null
+        return try {
+            RankInkHeuristics.guess(cardCrop)
         } finally {
             cardCrop.recycle()
         }
     }
 
     fun release() {
-        rankTemplates.values.forEach { it.release() }
-        suitTemplates.values.forEach { it.release() }
+        releaseTemplateData()
+        loaded = false
+        openCvReady = false
+    }
+
+    private fun releaseTemplateData() {
+        rankCornerOpenCv.values.flatten().forEach { it.release() }
+        suitBadgeOpenCv.values.flatten().forEach { it.release() }
         emptyTemplate?.release()
         faceDownTemplate?.release()
-        bitmapRankTemplates.clear()
-        bitmapSuitTemplates.clear()
-        rankTemplates.clear()
-        suitTemplates.clear()
+        bitmapRankCornerTemplates.clear()
+        bitmapRankGlyphTemplates.clear()
+        bitmapSuitBadgeTemplates.clear()
+        rankCornerOpenCv.clear()
+        suitBadgeOpenCv.clear()
         emptyTemplate = null
         faceDownTemplate = null
-        loaded = false
     }
 
-    private fun inferSuit(
-        stats: SmashColorAnalyzer.RegionStats,
-        crop: Bitmap,
-        inkRed: Boolean?
-    ): Suit? {
-        val colorSuit = inkRed
-        val bitmapSuit = bestBitmapSuit(crop, colorSuit)
-        if (bitmapSuit != null && bitmapSuit.second >= 0.45f &&
-            (colorSuit == null || bitmapSuit.first.isRed == colorSuit)
-        ) {
-            return bitmapSuit.first
+    private fun loadBitmapTemplates() {
+        Rank.entries.forEach { rank ->
+            val corner = mutableListOf<LongArray>()
+            loadUserBitmaps(userTemplateStore.listRankCornerFiles(rank), corner)
+            loadAssetBitmaps(rankCornerAssetNames(rank), corner)
+            loadAssetBitmaps(legacyRankAssetNames(rank), corner)
+            if (corner.isNotEmpty()) bitmapRankCornerTemplates[rank] = corner
+
+            if (rank in UserTemplateStore.GLYPH_RANKS) {
+                val glyph = mutableListOf<LongArray>()
+                loadUserBitmaps(userTemplateStore.listRankGlyphFiles(rank), glyph)
+                if (glyph.isNotEmpty()) bitmapRankGlyphTemplates[rank] = glyph
+            }
         }
-        val templateSuit = bestSuit(crop)
-        if (templateSuit != null && colorSuit != null) {
-            val candidates = Suit.entries.filter { it.isRed == colorSuit }
-            val filtered = candidates.mapNotNull { suit ->
-                suitTemplates[suit]?.let { suit to matchTemplate(crop, it, badgeOnly = true) }
-            }.maxByOrNull { it.second }
-            if (filtered != null && filtered.second >= 0.45f) return filtered.first
-            return candidates.firstOrNull { it == templateSuit.first } ?: candidates.first()
-        }
-        if (templateSuit != null && templateSuit.second >= 0.5f) return templateSuit.first
-        return when (colorSuit) {
-            true -> Suit.Hearts
-            false -> Suit.Spades
-            null -> null
+        Suit.entries.forEach { suit ->
+            val badge = mutableListOf<LongArray>()
+            loadUserBitmaps(userTemplateStore.listSuitBadgeFiles(suit), badge)
+            loadAssetBitmaps(suitBadgeAssetNames(suit), badge)
+            loadAssetBitmaps(legacySuitAssetNames(suit), badge)
+            if (badge.isNotEmpty()) bitmapSuitBadgeTemplates[suit] = badge
         }
     }
 
-    private fun bestBitmapSuit(crop: Bitmap, isRed: Boolean? = null): Pair<Suit, Float>? {
-        if (bitmapSuitTemplates.isEmpty()) return null
-        val width = (crop.width * 0.38f).toInt().coerceAtLeast(8)
-        val height = (crop.height * 0.31f).toInt().coerceAtLeast(8)
-        val sourceMasks = mutableListOf<LongArray>()
-        // Keep the rank glyph out of the upper-right suit badge mask.
-        for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
-            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-            val actualWidth = width.coerceAtMost(crop.width - x)
-            for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {
-                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                val actualHeight = height.coerceAtMost(crop.height - y)
-                val roi = Bitmap.createBitmap(crop, x, y, actualWidth, actualHeight)
-                sourceMasks += inkMask(roi)
-                roi.recycle()
+    private fun loadOpenCvTemplates() {
+        Rank.entries.forEach { rank ->
+            val mats = mutableListOf<Mat>()
+            userTemplateStore.listRankCornerFiles(rank).forEach { file ->
+                loadGrayFile(file)?.let { mats += it }
             }
+            rankCornerAssetNames(rank).forEach { name ->
+                loadGrayAsset("templates/$name")?.let { mats += it }
+            }
+            legacyRankAssetNames(rank).forEach { name ->
+                loadGrayAsset("templates/$name")?.let { mats += it }
+            }
+            if (mats.isNotEmpty()) rankCornerOpenCv[rank] = mats
         }
-        var best: Pair<Suit, Float>? = null
-        var second = 0f
-        bitmapSuitTemplates
-            .filterKeys { suit -> isRed == null || suit.isRed == isRed }
-            .forEach { (suit, templateMasks) ->
-            val score = templateMasks.maxOf { templateMask ->
-                sourceMasks.maxOf { source -> maskScore(source, templateMask) }
+        Suit.entries.forEach { suit ->
+            val mats = mutableListOf<Mat>()
+            userTemplateStore.listSuitBadgeFiles(suit).forEach { file ->
+                loadGrayFile(file)?.let { mats += it }
             }
-            if (best == null || score > best!!.second) {
-                second = best?.second ?: 0f
-                best = suit to score
-            } else if (score > second) {
-                second = score
+            suitBadgeAssetNames(suit).forEach { name ->
+                loadGrayAsset("templates/$name")?.let { mats += it }
             }
+            legacySuitAssetNames(suit).forEach { name ->
+                loadGrayAsset("templates/$name")?.let { mats += it }
+            }
+            if (mats.isNotEmpty()) suitBadgeOpenCv[suit] = mats
         }
-        val top = best ?: return null
-        if (top.second < 0.42f) return null
-        if (top.second - second < 0.025f && top.second < 0.68f) return null
-        return top
     }
 
-    private fun pickRank(
-        bitmapHit: Pair<Rank, Float>?,
-        rankHit: Pair<Rank, Float>?,
-        glyph: RankInkHeuristics.Guess?
+    private fun loadUserBitmaps(files: List<File>, out: MutableList<LongArray>) {
+        files.take(MAX_USER_TEMPLATES).forEach { file ->
+            BitmapFactory.decodeFile(file.absolutePath)?.let { bitmap ->
+                out += inkMask(bitmap)
+                bitmap.recycle()
+            }
+        }
+    }
+
+    private fun loadAssetBitmaps(names: List<String>, out: MutableList<LongArray>) {
+        names.forEach { name ->
+            loadBitmapAsset("templates/$name")?.let { bitmap ->
+                out += inkMask(bitmap)
+                bitmap.recycle()
+            }
+        }
+    }
+
+    private fun rankCornerAssetNames(rank: Rank): List<String> =
+        listAssetNames("rank_corner_${rank.name.lowercase()}")
+
+    private fun legacyRankAssetNames(rank: Rank): List<String> =
+        listAssetNames("rank_${rank.name.lowercase()}")
+
+    private fun suitBadgeAssetNames(suit: Suit): List<String> =
+        listAssetNames("suit_badge_${suit.name.lowercase()}")
+
+    private fun legacySuitAssetNames(suit: Suit): List<String> =
+        listAssetNames("suit_${suit.name.lowercase()}")
+
+    private fun listAssetNames(prefix: String): List<String> =
+        context.assets.list("templates")
+            .orEmpty()
+            .filter { name ->
+                name == "$prefix.png" ||
+                    (name.startsWith("${prefix}_alt") && name.endsWith(".png"))
+            }
+            .sortedWith(compareBy({ it != "$prefix.png" }, { it }))
+            .take(MAX_ASSET_TEMPLATES)
+
+    private fun bestRankMatch(
+        cardCrop: Bitmap,
+        exactCardBounds: Boolean
     ): Pair<Rank, Float>? {
-        if (bitmapHit != null && bitmapHit.second >= 0.56f) return bitmapHit
-        if (bitmapHit != null && rankHit != null && bitmapHit.first == rankHit.first) {
-            return bitmapHit.first to max(bitmapHit.second, rankHit.second).coerceAtLeast(0.52f)
+        val corner = TemplateGlyphRegions.cropRankCorner(cardCrop) ?: return null
+        return try {
+            val cornerHit = pickBestRank(
+                cornerSourceMasks(corner),
+                Rank.entries.toSet(),
+                bitmapRankCornerTemplates,
+                bitmapRankGlyphTemplates
+            )
+            if (cornerHit != null) return cornerHit
+            if (exactCardBounds) return null
+            val glyphCrop = TemplateGlyphRegions.cropRankGlyph(cardCrop) ?: return null
+            try {
+                pickBestRank(
+                    cornerSourceMasks(glyphCrop),
+                    UserTemplateStore.GLYPH_RANKS,
+                    bitmapRankCornerTemplates,
+                    bitmapRankGlyphTemplates
+                )
+            } finally {
+                glyphCrop.recycle()
+            }
+        } finally {
+            corner.recycle()
         }
-        if (bitmapHit != null && glyph != null && bitmapHit.first == glyph.rank) {
-            return bitmapHit.first to max(bitmapHit.second, glyph.confidence).coerceAtLeast(0.52f)
+    }
+
+    private fun bestSuitMatch(
+        cardCrop: Bitmap,
+        inkRed: Boolean?
+    ): Pair<Suit, Float>? {
+        val badge = TemplateGlyphRegions.cropSuitBadge(cardCrop) ?: return null
+        return try {
+            val masks = badgeSourceMasks(badge)
+            pickBestSuit(masks, inkRed)
+        } finally {
+            badge.recycle()
         }
-        // Prefer agreement; avoid weak unique winners (logs showed everything → Eight).
-        if (rankHit != null && glyph != null && rankHit.first == glyph.rank) {
-            val conf = max(rankHit.second, glyph.confidence)
-            if (conf >= 0.38f) return rankHit.first to conf.coerceAtLeast(0.50f)
+    }
+
+    private fun cornerSourceMasks(source: Bitmap): List<LongArray> =
+        listOf(inkMask(source))
+
+    private fun badgeSourceMasks(source: Bitmap): List<LongArray> {
+        val masks = mutableListOf(inkMask(source))
+        if (source.width >= 12 && source.height >= 12) {
+            for (dx in listOf(-0.04f, 0f, 0.04f)) {
+                val shift = (source.width * dx).toInt()
+                if (shift == 0) continue
+                val left = shift.coerceAtLeast(0)
+                val width = (source.width - kotlin.math.abs(shift)).coerceAtLeast(8)
+                masks += inkMask(Bitmap.createBitmap(source, left, 0, width, source.height))
+            }
         }
-        if (rankHit != null && rankHit.second >= 0.48f) return rankHit
-        if (glyph != null && glyph.confidence >= 0.50f) return glyph.rank to glyph.confidence
-        if (rankHit != null && rankHit.second >= 0.42f) return rankHit
-        return null
+        return masks
+    }
+
+    private fun scoreRankTemplates(
+        sourceMasks: List<LongArray>,
+        ranks: Set<Rank>,
+        cornerTemplates: Map<Rank, List<LongArray>>,
+        glyphTemplates: Map<Rank, List<LongArray>>
+    ): Map<Rank, Float> =
+        ranks.mapNotNull { rank ->
+            val templates = cornerTemplates[rank].orEmpty() + glyphTemplates[rank].orEmpty()
+            if (templates.isEmpty()) return@mapNotNull null
+            rank to templates.maxOf { template ->
+                sourceMasks.maxOf { source -> maskScore(source, template) }
+            }
+        }.toMap()
+
+    private fun scoreSuitTemplates(
+        sourceMasks: List<LongArray>,
+        suits: Set<Suit>
+    ): Map<Suit, Float> =
+        suits.mapNotNull { suit ->
+            val templates = bitmapSuitBadgeTemplates[suit] ?: return@mapNotNull null
+            suit to templates.maxOf { template ->
+                sourceMasks.maxOf { source -> maskScore(source, template) }
+            }
+        }.toMap()
+
+    private fun pickBestRank(
+        sourceMasks: List<LongArray>,
+        ranks: Set<Rank>,
+        cornerTemplates: Map<Rank, List<LongArray>>,
+        glyphTemplates: Map<Rank, List<LongArray>>
+    ): Pair<Rank, Float>? {
+        val scores = scoreRankTemplates(sourceMasks, ranks, cornerTemplates, glyphTemplates)
+        return pickTopRankWithMargin(scores, minRankScore(), rankMargin())
+    }
+
+    private fun pickBestSuit(
+        sourceMasks: List<LongArray>,
+        inkRed: Boolean?
+    ): Pair<Suit, Float>? {
+        val filtered = bitmapSuitBadgeTemplates.filterKeys { suit ->
+            inkRed == null || suit.isRed == inkRed
+        }
+        val scores = filtered.mapValues { (_, templates) ->
+            templates.maxOf { template ->
+                sourceMasks.maxOf { source -> maskScore(source, template) }
+            }
+        }
+        return pickTopSuitWithMargin(scores, minSuitScore(), suitMargin())
+    }
+
+    private fun pickTopRankWithMargin(
+        scores: Map<Rank, Float>,
+        minScore: Float,
+        minMargin: Float
+    ): Pair<Rank, Float>? {
+        val ranked = scores.entries.sortedByDescending { it.value }
+        val best = ranked.firstOrNull() ?: return null
+        val second = ranked.getOrNull(1)?.value ?: 0f
+        if (best.value < minScore) return null
+        if (best.value - second < minMargin && best.value < minConfidence) return null
+        return best.key to best.value
     }
 
     /**
-     * Translation-tolerant binary-mask matching. Unlike OpenCV, this runs in
-     * fixture tests too and uses templates cropped from the exact Smash font.
+     * Re-scores nearby ranks on the exact card crop when 6–10 glyphs are easily confused.
+     * Corrects to the clearly stronger neighbor but keeps the original best guess when
+     * the difference is small, so cards still stay recognized and produce hints.
      */
-    private fun bestBitmapRank(
-        crop: Bitmap,
-        exactCardBounds: Boolean = false
-    ): Pair<Rank, Float>? {
-        if (bitmapRankTemplates.isEmpty()) return null
-        val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
-        val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
-        val sourceMasks = mutableListOf<LongArray>()
-        // A correctly bounded card exposes the small corner rank and the large
-        // center glyph together, matching the source templates directly.
-        Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
-            sourceMasks += inkMask(roi)
-            roi.recycle()
-        }
-        if (!exactCardBounds) {
-            // Candidate bounds may start on an overlapping header rather than
-            // the exact card top. Search for the large center glyph only when
-            // the caller could not supply complete card bounds.
-            for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
-                val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-                val actualW = w.coerceAtMost(crop.width - x)
-                for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
-                    val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                    val actualH = h.coerceAtMost(crop.height - y)
-                    val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
-                    sourceMasks += inkMask(roi)
-                    roi.recycle()
-                }
-            }
-        }
-        var best: Pair<Rank, Float>? = null
-        var second = 0f
-        bitmapRankTemplates.forEach { (rank, templateMasks) ->
-            val score = templateMasks.maxOf { templateMask ->
-                sourceMasks.maxOf { source -> maskScore(source, templateMask) }
-            }
-            when {
-                best == null || score > best!!.second -> {
-                    second = best?.second ?: 0f
-                    best = rank to score
-                }
-                score > second -> second = score
-            }
-        }
-        val top = best ?: return null
-        if (top.second < 0.48f) return null
-        if (top.second - second < 0.035f && top.second < 0.68f) return null
-        return top
+    fun refineAmbiguousRank(bitmap: Bitmap, region: BoardRegion, card: Card): Card {
+        if (!card.known || !card.recognized) return card
+        if (card.rank.value !in Rank.Six.value..Rank.Ten.value) return card
+        val candidates = Rank.entries.filter {
+            kotlin.math.abs(it.value - card.rank.value) <= 1
+        }.toSet()
+        val scores = exactRankTemplateScores(bitmap, region, candidates)
+        if (scores.isEmpty()) return card
+        val ranked = scores.entries.sortedByDescending { it.value }
+        val best = ranked.first()
+        if (best.key == card.rank) return card
+        val currentScore = scores[card.rank] ?: 0f
+        // Only override the original match when the neighbor is clearly stronger.
+        return if (best.value - currentScore >= 0.06f) card.copy(rank = best.key) else card
     }
+
+    private fun pickTopSuitWithMargin(
+        scores: Map<Suit, Float>,
+        minScore: Float,
+        minMargin: Float
+    ): Pair<Suit, Float>? {
+        val ranked = scores.entries.sortedByDescending { it.value }
+        val best = ranked.firstOrNull() ?: return null
+        val second = ranked.getOrNull(1)?.value ?: 0f
+        if (best.value < minScore) return null
+        if (best.value - second < minMargin && best.value < minConfidence) return null
+        return best.key to best.value
+    }
+
+    private fun minRankScore(): Float = (minConfidence * 0.65f).coerceIn(0.38f, 0.72f)
+
+    private fun minSuitScore(): Float = (minConfidence * 0.58f).coerceIn(0.35f, 0.65f)
+
+    private fun rankMargin(): Float = 0.018f + (1f - minConfidence) * 0.06f
+
+    private fun suitMargin(): Float = 0.015f + (1f - minConfidence) * 0.05f
 
     private fun inkMask(bitmap: Bitmap): LongArray {
         val size = 48
@@ -544,88 +570,27 @@ class CardRecognizer(
 
     private fun templateFaceDown(crop: Bitmap): Boolean {
         val tmpl = faceDownTemplate ?: return false
-        return matchTemplate(crop, tmpl, badgeOnly = false) >= 0.72f
+        return matchTemplate(crop, tmpl) >= 0.72f
     }
 
-    private fun bestRank(crop: Bitmap): Pair<Rank, Float>? {
-        if (rankTemplates.isEmpty()) return null
-        var best: Pair<Rank, Float>? = null
-        var second = 0f
-        for ((rank, template) in rankTemplates) {
-            val center = matchTemplate(crop, template, badgeOnly = false)
-            val badge = matchTemplate(crop, template, badgeOnly = true)
-            val score = max(center, badge)
-            when {
-                best == null || score > best.second -> {
-                    second = best?.second ?: 0f
-                    best = rank to score
-                }
-                score > second -> second = score
-            }
-        }
-        val top = best ?: return null
-        // Reject ambiguous / generic matches (Eight was winning everything at ~0.3).
-        if (top.second < 0.42f) return null
-        if (top.second - second < 0.06f && top.second < 0.55f) return null
-        return top
-    }
-
-    private fun bestSuit(crop: Bitmap): Pair<Suit, Float>? {
-        if (suitTemplates.isEmpty()) return null
-        var best: Pair<Suit, Float>? = null
-        for ((suit, template) in suitTemplates) {
-            val score = matchTemplate(crop, template, badgeOnly = true)
-            if (best == null || score > best.second) best = suit to score
-        }
-        return best
-    }
-
-    private fun matchTemplate(crop: Bitmap, template: Mat, badgeOnly: Boolean): Float {
+    private fun matchTemplate(crop: Bitmap, template: Mat): Float {
         val src = Mat()
         val gray = Mat()
         val resized = Mat()
         val result = Mat()
-        var roi: Mat? = null
-        var tmpl: Mat? = null
         return try {
             Utils.bitmapToMat(crop, src)
             Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
-            roi = if (badgeOnly) {
-                val w = (gray.cols() * 0.50).toInt().coerceAtLeast(8)
-                val h = (gray.rows() * 0.42).toInt().coerceAtLeast(8)
-                Mat(gray, Rect(0, 0, w.coerceAtMost(gray.cols()), h.coerceAtMost(gray.rows())))
-            } else {
-                val x = (gray.cols() * 0.08).toInt()
-                val y = (gray.rows() * 0.28).toInt()
-                val w = (gray.cols() * 0.70).toInt().coerceAtLeast(8)
-                val h = (gray.rows() * 0.60).toInt().coerceAtLeast(8)
-                Mat(
-                    gray,
-                    Rect(
-                        x.coerceAtMost(gray.cols() - 8),
-                        y.coerceAtMost(gray.rows() - 8),
-                        w.coerceAtMost(gray.cols() - x),
-                        h.coerceAtMost(gray.rows() - y)
-                    )
-                )
-            }
             Imgproc.resize(
-                roi,
+                gray,
                 resized,
                 Size(
                     max(template.cols().toDouble(), 8.0),
                     max(template.rows().toDouble(), 8.0)
                 )
             )
-            val tw = template.cols().coerceAtMost(resized.cols())
-            val th = template.rows().coerceAtMost(resized.rows())
-            tmpl = if (tw != template.cols() || th != template.rows()) {
-                Mat().also { Imgproc.resize(template, it, Size(tw.toDouble(), th.toDouble())) }
-            } else {
-                template
-            }
-            if (resized.cols() < tmpl!!.cols() || resized.rows() < tmpl.rows()) return 0f
-            Imgproc.matchTemplate(resized, tmpl, result, Imgproc.TM_CCOEFF_NORMED)
+            if (resized.cols() < template.cols() || resized.rows() < template.rows()) return 0f
+            Imgproc.matchTemplate(resized, template, result, Imgproc.TM_CCOEFF_NORMED)
             Core.minMaxLoc(result).maxVal.toFloat().coerceIn(0f, 1f)
         } catch (t: Throwable) {
             Log.w(TAG, "matchTemplate failed", t)
@@ -635,8 +600,6 @@ class CardRecognizer(
             gray.release()
             resized.release()
             result.release()
-            roi?.release()
-            if (tmpl != null && tmpl !== template) tmpl.release()
         }
     }
 
@@ -651,12 +614,11 @@ class CardRecognizer(
         return Bitmap.createBitmap(bitmap, left, top, w, h)
     }
 
-    private fun loadGray(assetPath: String): Mat? {
+    private fun loadGrayAsset(assetPath: String): Mat? {
         return try {
             context.assets.open(assetPath).use { input ->
                 val bytes = input.readBytes()
-                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    ?: return null
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
                 val rgba = Mat()
                 Utils.bitmapToMat(bmp, rgba)
                 val gray = Mat()
@@ -673,9 +635,23 @@ class CardRecognizer(
         }
     }
 
-    private fun loadBitmap(assetPath: String): Bitmap? = try {
+    private fun loadGrayFile(file: File): Mat? {
+        val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        return try {
+            val rgba = Mat()
+            Utils.bitmapToMat(bmp, rgba)
+            val gray = Mat()
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            rgba.release()
+            gray
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    private fun loadBitmapAsset(assetPath: String): Bitmap? = try {
         context.assets.open(assetPath).use { input ->
-            android.graphics.BitmapFactory.decodeStream(input)
+            BitmapFactory.decodeStream(input)
         }
     } catch (_: IOException) {
         null
@@ -683,7 +659,7 @@ class CardRecognizer(
 
     companion object {
         private const val TAG = "CardRecognizer"
-        private const val MAX_BITMAP_TEMPLATES_PER_RANK = 10
-        private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 5
+        private const val MAX_ASSET_TEMPLATES = 10
+        private const val MAX_USER_TEMPLATES = 8
     }
 }

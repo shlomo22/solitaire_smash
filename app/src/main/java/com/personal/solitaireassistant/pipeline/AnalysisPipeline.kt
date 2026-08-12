@@ -10,11 +10,17 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.SuggestedMove
 import com.personal.solitaireassistant.overlay.OverlayController
 import com.personal.solitaireassistant.settings.AssistantSettings
+import com.personal.solitaireassistant.settings.RejectedMoveStore
+import com.personal.solitaireassistant.solver.MoveFingerprint
+import com.personal.solitaireassistant.solver.MoveGenerator
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.GameStateDetector
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class AnalysisPipeline(
     appContext: Context,
@@ -23,6 +29,7 @@ class AnalysisPipeline(
 ) {
     private val detector = GameStateDetector(appContext)
     private val fileLogger = AnalysisFileLogger(appContext)
+    private val rejectedMoveStore = RejectedMoveStore(appContext)
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0
@@ -34,11 +41,36 @@ class AnalysisPipeline(
     private val recentStates = ArrayDeque<GameState>()
     private var lastFrameFingerprint: Long? = null
     private var lastDetection: DetectionResult? = null
+    private var lastStableState: GameState? = null
+    private val sessionRejected = mutableSetOf<String>()
+    private var templateLabMode = false
+    private val _labSnapshot = MutableStateFlow<LabSnapshot?>(null)
+    val labSnapshot: StateFlow<LabSnapshot?> = _labSnapshot.asStateFlow()
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
+    fun setTemplateLabMode(enabled: Boolean) {
+        templateLabMode = enabled
+        if (!enabled) {
+            // Ownership of the emitted bitmap belongs to the collector (ViewModel),
+            // which recycles it on the main thread. Recycling here races with reads.
+            _labSnapshot.value = null
+        } else {
+            overlayController.hideArrowTemporarily()
+            lastSuggestion = null
+            lastSuggestionSignature = null
+        }
+    }
+
+    fun reloadTemplates() {
+        detector.reloadTemplates()
+    }
+
+    fun detector(): GameStateDetector = detector
+
     fun updateSettings(settings: AssistantSettings) {
         settingsRef.set(settings)
+        detector.updateMinConfidence(settings.minMatchConfidence)
     }
 
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
@@ -66,6 +98,11 @@ class AnalysisPipeline(
                 lastDetection = detection
             }
             val elapsed = System.currentTimeMillis() - started
+            if (templateLabMode) {
+                publishLabSnapshot(bitmap, detection)
+                statusSink("Template Lab — frame captured")
+                return
+            }
             handleDetection(detection, elapsed, bitmap.width, bitmap.height)
         } catch (t: Throwable) {
             Log.e(TAG, "Analysis failed", t)
@@ -85,10 +122,32 @@ class AnalysisPipeline(
         lastLoggedOutcome = null
         sessionStarted = false
         recentStates.clear()
+        sessionRejected.clear()
         lastFrameFingerprint = null
         lastDetection = null
+        lastStableState = null
+        _labSnapshot.value?.bitmap?.recycle()
+        _labSnapshot.value = null
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
+    }
+
+    fun cancelCurrentHint() {
+        val state = lastStableState ?: return
+        val suggestion = lastSuggestion ?: return
+        val fingerprint = MoveFingerprint.of(state, suggestion.scored.move)
+        sessionRejected += fingerprint
+        rejectedMoveStore.reject(fingerprint)
+        fileLogger.append("REJECTED fingerprint=$fingerprint move=${suggestion.scored.move.label}")
+        statusSink("Rejected hint — showing next move")
+        val detection = lastDetection
+        if (detection?.state != null && lastSignature != null) {
+            refreshSuggestion(detection, lastSignature!!, knownFaceUp = countKnownFaceUp(detection.state))
+        } else {
+            overlayController.hideArrowTemporarily()
+            lastSuggestion = null
+            lastSuggestionSignature = null
+        }
     }
 
     private fun boardFingerprint(bitmap: Bitmap): Long {
@@ -171,10 +230,8 @@ class AnalysisPipeline(
             stableHits = 1
         }
 
-        val knownFaceUp = state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
-            state.waste.count { it.known } +
-            state.foundations.sumOf { pile -> pile.count { it.known } }
-        val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
+        val knownFaceUp = countKnownFaceUp(state)
+        val reliableFirstHit = detection.confidence >= 0.78f && knownFaceUp >= 4
 
         if (stableHits < 2 && !reliableFirstHit) {
             statusSink("Stabilizing detection… conf=${"%.2f".format(detection.confidence)}")
@@ -186,17 +243,75 @@ class AnalysisPipeline(
             return
         }
 
+        lastStableState = state
         if (recentStates.lastOrNull() != state) {
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
         }
+        refreshSuggestion(
+            detection,
+            signature,
+            knownFaceUp,
+            elapsedMs,
+            frameW,
+            frameH
+        )
+    }
+
+    private fun refreshSuggestion(
+        detection: DetectionResult,
+        signature: String,
+        knownFaceUp: Int,
+        elapsedMs: Long = 0L,
+        frameW: Int = 0,
+        frameH: Int = 0
+    ) {
+        val state = detection.state ?: return
+        if (!isDetectionReliableEnough(detection, knownFaceUp)) {
+            overlayController.hideArrowTemporarily()
+            lastSuggestion = null
+            lastSuggestionSignature = null
+            // Distinguish gate-blocked hints from genuine dead ends: report which
+            // threshold failed and whether a legal move existed anyway.
+            val legalCount = MoveGenerator.generate(state).size
+            val gateReason = gateFailureReason(detection, knownFaceUp)
+            val msg =
+                "Low detection quality — hiding hint conf=${"%.2f".format(detection.confidence)} " +
+                    "known=$knownFaceUp gate=$gateReason legalMoves=$legalCount"
+            statusSink(msg)
+            logOutcome(
+                "LOW_QUALITY",
+                msg,
+                detection,
+                elapsedMs,
+                frameW,
+                frameH,
+                move = null,
+                from = null,
+                to = null,
+                knownFaceUp = knownFaceUp
+            )
+            return
+        }
         val avoidStates = recentStates.dropLast(1)
-        val best = MoveSelector.bestMove(state, avoidStates)
+        val rejected = rejectedMoveStore.all() + sessionRejected
+        val best = MoveSelector.bestMove(state, avoidStates, rejected)
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
             lastSuggestionSignature = null
-            val msg = "No legal moves (${elapsedMs}ms) known=$knownFaceUp"
+            // Separate "board has zero legal moves" from "all legal moves were
+            // filtered out by avoid-loop / rejected-move memory".
+            val legal = MoveGenerator.generate(state)
+            val filteredOut = legal.count { move ->
+                MoveFingerprint.of(state, move) in rejected
+            }
+            val cause = when {
+                legal.isEmpty() -> "no-legal-moves"
+                legal.size == filteredOut -> "all-rejected($filteredOut)"
+                else -> "all-avoided(legal=${legal.size},rejected=$filteredOut)"
+            }
+            val msg = "No move suggested ($cause) (${elapsedMs}ms) known=$knownFaceUp"
             statusSink(msg)
             logOutcome(
                 "NO_MOVES",
@@ -297,6 +412,39 @@ class AnalysisPipeline(
         )
     }
 
+    private fun countKnownFaceUp(state: GameState): Int =
+        state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
+            state.waste.count { it.known } +
+            state.foundations.sumOf { pile -> pile.count { it.known } }
+
+    private fun isDetectionReliableEnough(
+        detection: DetectionResult,
+        knownFaceUp: Int
+    ): Boolean {
+        if (detection.confidence >= MIN_CONFIDENCE_FOR_ARROW &&
+            knownFaceUp >= MIN_KNOWN_FOR_ARROW
+        ) {
+            return true
+        }
+        return detection.confidence >= HIGH_CONFIDENCE_THRESHOLD &&
+            knownFaceUp >= MIN_KNOWN_HIGH_CONF
+    }
+
+    /** Explains which gate threshold blocked the arrow, for log triage. */
+    private fun gateFailureReason(detection: DetectionResult, knownFaceUp: Int): String {
+        val conf = detection.confidence
+        val lowConf = conf < MIN_CONFIDENCE_FOR_ARROW
+        val lowKnown = knownFaceUp < MIN_KNOWN_FOR_ARROW
+        return when {
+            lowConf && lowKnown ->
+                "conf<${MIN_CONFIDENCE_FOR_ARROW}&known<$MIN_KNOWN_FOR_ARROW"
+            lowConf -> "conf<$MIN_CONFIDENCE_FOR_ARROW"
+            lowKnown -> "known<$MIN_KNOWN_FOR_ARROW"
+            // Passed the primary gate values but failed the high-confidence fallback.
+            else -> "highConf-path:conf<$HIGH_CONFIDENCE_THRESHOLD|known<$MIN_KNOWN_HIGH_CONF"
+        }
+    }
+
     private fun logOutcome(
         outcome: String,
         status: String,
@@ -391,8 +539,30 @@ class AnalysisPipeline(
             is Move.WasteToFoundation -> {
                 pileRegion(PileRef.Waste) to pileRegion(PileRef.Foundation(move.toFoundation))
             }
-            Move.DrawStock, Move.RecycleWaste -> {
-                pileRegion(PileRef.Stock) to pileRegion(PileRef.Waste)
+            Move.DrawStock -> {
+                val stock = pileRegion(PileRef.Stock)
+                val waste = pileRegion(PileRef.Waste)
+                if (detection.state?.waste.isNullOrEmpty() && stock != null) {
+                    // Tap the stock pile itself; avoid pointing at the empty waste slot.
+                    val tapFrom = BoardRegion(
+                        left = stock.centerX - 1f,
+                        top = stock.top - 36f,
+                        right = stock.centerX + 1f,
+                        bottom = stock.top - 8f
+                    )
+                    val tapTo = BoardRegion(
+                        left = stock.left + stock.width * 0.25f,
+                        top = stock.top + stock.height * 0.35f,
+                        right = stock.left + stock.width * 0.75f,
+                        bottom = stock.top + stock.height * 0.85f
+                    )
+                    tapFrom to tapTo
+                } else {
+                    stock to waste
+                }
+            }
+            Move.RecycleWaste -> {
+                pileRegion(PileRef.Waste) to pileRegion(PileRef.Stock)
             }
         }
     }
@@ -411,7 +581,64 @@ class AnalysisPipeline(
             kotlin.math.abs(oldTo.centerY - newTo.centerY) < 16f
     }
 
+    private fun publishLabSnapshot(bitmap: Bitmap, detection: DetectionResult) {
+        // Emit a private copy and hand ownership to the collector. We must NOT
+        // recycle the previously emitted bitmap here: this runs on the capture
+        // thread and the ViewModel may still be reading it on the main thread,
+        // which caused a use-after-recycle crash when opening the Template Lab.
+        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        _labSnapshot.value = LabSnapshot(
+            bitmap = copy,
+            detection = detection,
+            regions = buildLabRegions(detection)
+        )
+    }
+
+    private fun buildLabRegions(detection: DetectionResult): List<LabCardRegion> {
+        val regions = mutableListOf<LabCardRegion>()
+        val state = detection.state
+        detection.locations[PileRef.Waste]?.lastOrNull()?.let { loc ->
+            regions += LabCardRegion(
+                id = "waste",
+                label = "Waste",
+                region = loc.bounds,
+                detectedCard = state?.wasteTop()
+            )
+        }
+        detection.locations.filterKeys { it is PileRef.Foundation }.forEach { (pile, locs) ->
+            val foundation = pile as PileRef.Foundation
+            locs.lastOrNull()?.let { loc ->
+                val card = state?.foundations?.getOrNull(foundation.index)?.lastOrNull()
+                if (card != null) {
+                    regions += LabCardRegion(
+                        id = "foundation-${foundation.index}",
+                        label = "Foundation ${foundation.index + 1}",
+                        region = loc.bounds,
+                        detectedCard = card
+                    )
+                }
+            }
+        }
+        detection.locations.filterKeys { it is PileRef.Tableau }.forEach { (pile, locs) ->
+            val col = (pile as PileRef.Tableau).index
+            locs.lastOrNull()?.let { loc ->
+                val card = state?.tableau?.getOrNull(col)?.lastOrNull()?.takeIf { it.faceUp }
+                regions += LabCardRegion(
+                    id = "tableau-$col",
+                    label = "Tableau ${col + 1}",
+                    region = loc.bounds,
+                    detectedCard = card?.takeIf { it.known }
+                )
+            }
+        }
+        return regions
+    }
+
     companion object {
         private const val TAG = "AnalysisPipeline"
+        private const val MIN_CONFIDENCE_FOR_ARROW = 0.75f
+        private const val MIN_KNOWN_FOR_ARROW = 4
+        private const val HIGH_CONFIDENCE_THRESHOLD = 0.82f
+        private const val MIN_KNOWN_HIGH_CONF = 6
     }
 }

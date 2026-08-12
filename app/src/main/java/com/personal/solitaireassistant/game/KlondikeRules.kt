@@ -31,6 +31,7 @@ object KlondikeRules {
                 for (to in 0 until 7) {
                     if (to == from) continue
                     val target = state.tableauTop(to)
+                    if (!tableauMoveCardsTrusted(moving, target)) continue
                     if (moving.canStackOnTableau(target)) {
                         moves += Move.TableauToTableau(from, start, to)
                     }
@@ -38,21 +39,32 @@ object KlondikeRules {
             }
 
             val top = column.last()
-            if (top.faceUp) {
+            if (top.faceUp && top.recognized && top.known) {
                 foundationIndexFor(state, top)?.let { foundation ->
-                    moves += Move.TableauToFoundation(from, foundation)
+                    val foundationTop = state.foundations[foundation].lastOrNull()
+                    if (foundationTop == null ||
+                        (foundationTop.recognized && foundationTop.known)
+                    ) {
+                        moves += Move.TableauToFoundation(from, foundation)
+                    }
                 }
             }
         }
 
         state.wasteTop()?.let { wasteTop ->
+            if (!wasteTop.recognized || !wasteTop.known) return@let
             for (to in 0 until 7) {
-                if (wasteTop.canStackOnTableau(state.tableauTop(to))) {
+                val target = state.tableauTop(to)
+                if (!tableauMoveCardsTrusted(wasteTop, target)) continue
+                if (wasteTop.canStackOnTableau(target)) {
                     moves += Move.WasteToTableau(to)
                 }
             }
             foundationIndexFor(state, wasteTop)?.let { foundation ->
-                moves += Move.WasteToFoundation(foundation)
+                val foundationTop = state.foundations[foundation].lastOrNull()
+                if (foundationTop == null || (foundationTop.recognized && foundationTop.known)) {
+                    moves += Move.WasteToFoundation(foundation)
+                }
             }
         }
 
@@ -178,14 +190,28 @@ object KlondikeRules {
     }
 
     private fun foundationIndexFor(state: GameState, card: Card): Int? {
+        if (card.rank == Rank.Ace) {
+            return state.foundations.indices.firstOrNull { state.foundations[it].isEmpty() }
+        }
         for (i in state.foundations.indices) {
-            if (card.canPlaceOnFoundation(state.foundations[i].lastOrNull())) {
-                // Prefer matching suit pile if already started; otherwise first empty.
-                val top = state.foundations[i].lastOrNull()
-                if (top == null || top.suit == card.suit) return i
+            val top = state.foundations[i].lastOrNull() ?: continue
+            if (top.suit == card.suit && card.canPlaceOnFoundation(top)) {
+                return i
             }
         }
         return null
+    }
+
+    /**
+     * Tableau stacking hints must not rely on geometrically inferred cards.
+     * Empty columns require a template-matched king as the moving card.
+     */
+    private fun tableauMoveCardsTrusted(moving: Card, target: Card?): Boolean {
+        if (!moving.recognized || !moving.known) return false
+        if (target == null) {
+            return moving.rank == Rank.King
+        }
+        return target.recognized && target.known
     }
 
     private fun isValidRun(cards: List<Card>): Boolean {

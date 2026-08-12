@@ -31,12 +31,15 @@ Device screenshots from Solitaire Smash live in `app/src/test/resources/screensh
 
 Geometry is calibrated for Smash layout: **foundations left → waste → stock right**, tableau below.
 
-Templates under `app/src/main/assets/templates/` were cropped from those shots. Replace them with sharper device captures for better rank/suit matching. OpenCV template matching runs on-device; JVM unit tests use color heuristics (teal backs / white faces) because OpenCV natives are unavailable under Robolectric.
+Templates under `app/src/main/assets/templates/` are bundled fallbacks. For best accuracy, use **Template Lab** in the app to capture rank-corner and suit-badge crops from your device (stored under `files/templates/`). See `app/src/main/assets/templates/README.md`.
+
+Match confidence in settings now controls recognizer thresholds directly.
 
 ## Device test gates
-1. **Capture** — Start the app, grant overlay + projection, enable debug frames, confirm `cache/frames/latest.png`
-2. **Detection** — Compare live diagnostics against `board_*.png` fixtures; retune `BoardGeometryProfile` if your phone resolution differs
-3. **Live overlay** — Start over Solitaire Smash and verify arrow endpoints / touch-through
+1. **Capture** — Start the app, grant overlay + projection, confirm capture notification
+2. **Template Lab** — Save rank/suit samples from live gameplay (2+ per confused rank, all suits)
+3. **Live overlay** — Verify arrow endpoints; tap Cancel on wrong hints
+4. **Logs** — `adb exec-out run-as com.personal.solitaireassistant cat files/logs/analysis.log`
 
 ## Permissions
 - Display over other apps (`SYSTEM_ALERT_WINDOW`)

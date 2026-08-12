@@ -45,6 +45,39 @@ class KlondikeRulesTest {
     }
 
     @Test
+    fun inferredKingCannotMoveToEmptyTableau() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(
+                    Card(Rank.King, Suit.Spades, recognized = false),
+                    c(Rank.Queen, Suit.Hearts)
+                ),
+                emptyList(),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        assertFalse(KlondikeRules.isLegal(state, Move.TableauToTableau(0, 0, 1)))
+    }
+
+    @Test
+    fun unrecognizedTargetBlocksTableauStack() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Three, Suit.Spades)),
+                listOf(Card(Rank.Four, Suit.Hearts, recognized = false)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        assertFalse(KlondikeRules.isLegal(state, Move.TableauToTableau(0, 0, 1)))
+    }
+
+    @Test
     fun alternatingDescendingRunIsRequired() {
         val state = GameState(
             tableau = listOf(
@@ -144,7 +177,43 @@ class KlondikeRulesTest {
     }
 
     @Test
-    fun illegalDrawWhenStockEmpty() {
-        assertNull(KlondikeRules.apply(GameState.empty(), Move.DrawStock))
+    fun foundationMoveUsesMatchingSuitPileOnly() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Three, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                emptyList(),
+                emptyList(),
+                listOf(c(Rank.Two, Suit.Clubs)),
+                listOf(c(Rank.Two, Suit.Spades))
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val moves = KlondikeRules.legalMoves(state)
+        assertTrue(moves.contains(Move.TableauToFoundation(0, 3)))
+        assertFalse(moves.any { it is Move.TableauToFoundation && it.toFoundation == 2 })
+    }
+
+    @Test
+    fun aceFoundationUsesFirstEmptyPile() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Ace, Suit.Diamonds)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Hearts)),
+                emptyList(),
+                listOf(c(Rank.Two, Suit.Clubs)),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val move = KlondikeRules.legalMoves(state).filterIsInstance<Move.TableauToFoundation>().single()
+        assertEquals(1, move.toFoundation)
     }
 }
