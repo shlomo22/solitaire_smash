@@ -423,13 +423,19 @@ class GameStateDetector(
             wasteCards.count { it.known }
         diagnostics += "knownFaceUp=$knownFaceUp"
 
-        return DetectionResult(
-            state = GameState(
+        val state = scrubWeakBlackFoundationSuits(
+            bitmap,
+            locations,
+            GameState(
                 tableau = tableau,
                 foundations = foundations,
                 stock = stockCards,
                 waste = wasteCards
-            ),
+            )
+        )
+
+        return DetectionResult(
+            state = state,
             locations = locations,
             confidence = avg,
             diagnostics = diagnostics,
@@ -569,6 +575,93 @@ class GameStateDetector(
 
     fun release() {
         recognizer.release()
+    }
+
+    /**
+     * Black-suit near-ties that happen to match a foundation look "legal" but
+     * are the main source of Clubs↔Spades false arrows. Demote those sources
+     * to suitAmbiguous so foundation moves are suppressed.
+     */
+    private fun scrubWeakBlackFoundationSuits(
+        bitmap: Bitmap,
+        locations: Map<PileRef, List<CardLocation>>,
+        state: GameState
+    ): GameState {
+        fun scrubPile(
+            cards: List<Card>,
+            pile: PileRef
+        ): List<Card> {
+            if (cards.isEmpty()) return cards
+            val card = cards.last()
+            if (!card.known || card.suit.isRed || card.suitAmbiguous) return cards
+            val placesOnBlackFoundation = state.foundations.any { pileCards ->
+                val top = pileCards.lastOrNull() ?: return@any false
+                !top.suit.isRed && card.canPlaceOnFoundation(top)
+            }
+            if (!placesOnBlackFoundation) return cards
+            val bounds = locations[pile]?.lastOrNull()?.bounds ?: return cards
+            val scores = recognizer.suitTemplateScores(
+                bitmap,
+                bounds,
+                setOf(Suit.Clubs, Suit.Spades)
+            )
+            val club = scores[Suit.Clubs] ?: 0f
+            val spade = scores[Suit.Spades] ?: 0f
+            val margin = kotlin.math.abs(club - spade)
+            val leader = if (spade >= club) Suit.Spades else Suit.Clubs
+            val bestScore = maxOf(club, spade)
+            // Match resolveBlackSuit confidence: only suppress when we would not
+            // have committed this suit in the first place.
+            val confident =
+                leader == card.suit &&
+                    (margin >= 0.050f || (margin >= 0.025f && bestScore >= 0.84f))
+            if (!confident) {
+                return cards.dropLast(1) + card.copy(suitAmbiguous = true)
+            }
+            // Extra guard for 2→A foundation: club/spade swaps here are the
+            // most common illegal arrows. Require shape not to strongly disagree.
+            val aceFoundation = state.foundations.any { pileCards ->
+                val top = pileCards.lastOrNull() ?: return@any false
+                top.rank == Rank.Ace &&
+                    !top.suit.isRed &&
+                    card.rank == Rank.Two &&
+                    card.canPlaceOnFoundation(top)
+            }
+            if (aceFoundation) {
+                val cropLeft = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+                val cropTop = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+                val cropRight = bounds.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+                val cropBottom = bounds.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+                if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+                    val crop = Bitmap.createBitmap(
+                        bitmap,
+                        cropLeft,
+                        cropTop,
+                        cropRight - cropLeft,
+                        cropBottom - cropTop
+                    )
+                    try {
+                        val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
+                        if (shape != null &&
+                            shape.suit != card.suit &&
+                            shape.margin >= 0.06f
+                        ) {
+                            return cards.dropLast(1) + card.copy(suitAmbiguous = true)
+                        }
+                    } finally {
+                        crop.recycle()
+                    }
+                }
+            }
+            return cards
+        }
+
+        val tableau = state.tableau.mapIndexed { index, cards ->
+            scrubPile(cards, PileRef.Tableau(index))
+        }
+        val waste = scrubPile(state.waste, PileRef.Waste)
+        if (tableau == state.tableau && waste == state.waste) return state
+        return state.copy(tableau = tableau, waste = waste)
     }
 
     private fun resolveBlackSuit(

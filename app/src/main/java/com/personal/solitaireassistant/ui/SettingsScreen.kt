@@ -190,9 +190,8 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            "Test order: 1) Start and confirm capture notification / debug frames. " +
-                "2) Drop screenshots into test fixtures and tune templates. " +
-                "3) Run live overlay on Solitaire Smash.",
+            "Start captures the whole screen (no app picker) and opens Solitaire Smash. " +
+                "Android still requires one tap to allow screen capture.",
             style = MaterialTheme.typography.bodySmall
         )
     }

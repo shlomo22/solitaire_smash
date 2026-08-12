@@ -893,6 +893,33 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
+    fun fortiethLiveBoardDoesNotMoveSpadeTwoOntoClubAce() {
+        val bitmap = load("screenshots/device_live_40.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val detection = detector.detect(bitmap)
+        val state = requireNotNull(detection.state)
+        val card = state.tableau[4].last()
+        val foundation = state.foundations[1].lastOrNull()
+        val best = MoveSelector.bestMove(state)?.move
+
+        assertEquals(Rank.Two, card.rank)
+        assertTrue(
+            "2 must stay Spades or be ambiguous, got $card",
+            card.suit == Suit.Spades || card.suitAmbiguous
+        )
+        assertEquals(Rank.Ace, foundation?.rank)
+        assertEquals(Suit.Clubs, foundation?.suit)
+        assertTrue(
+            best !is Move.TableauToFoundation ||
+                best.fromColumn != 4 ||
+                best.toFoundation != 1
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
     fun thirtyNinthLiveBoardDoesNotMoveBlackTenOntoBlackQueen() {
         val bitmap = load("screenshots/device_live_39.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)

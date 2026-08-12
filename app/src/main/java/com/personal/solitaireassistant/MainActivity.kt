@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -17,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.solitaireassistant.capture.CaptureService
+import com.personal.solitaireassistant.capture.SolitaireSmashLauncher
 import com.personal.solitaireassistant.ui.SettingsScreen
 import com.personal.solitaireassistant.ui.SettingsViewModel
 import com.personal.solitaireassistant.ui.SettingsViewModelFactory
@@ -34,7 +36,14 @@ class MainActivity : ComponentActivity() {
                 return@registerForActivityResult
             }
             CaptureService.start(this, result.resultCode, result.data!!)
-            viewModel.setTransientMessage("Capture starting…")
+            val launched = SolitaireSmashLauncher.launch(this)
+            viewModel.setTransientMessage(
+                if (launched) {
+                    "Capture starting — opening Solitaire Smash…"
+                } else {
+                    "Capture starting… Open Solitaire Smash manually"
+                }
+            )
         }
 
     private val notificationPermissionLauncher =
@@ -89,7 +98,16 @@ class MainActivity : ComponentActivity() {
 
     private fun requestProjectionConsent() {
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projectionLauncher.launch(mpm.createScreenCaptureIntent())
+        // Android 14+ otherwise shows a single-app vs entire-screen picker.
+        // Entire-screen capture skips that chooser; we then open Solitaire Smash.
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mpm.createScreenCaptureIntent(
+                MediaProjectionConfig.createConfigForDefaultDisplay()
+            )
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        projectionLauncher.launch(intent)
     }
 
     private fun openOverlaySettings() {
