@@ -40,7 +40,12 @@ data class Card(
     val suit: Suit,
     val faceUp: Boolean = true,
     /** False when occupancy/color is known but rank/suit matching failed. */
-    val known: Boolean = true
+    val known: Boolean = true,
+    /**
+     * True when color is trusted but Clubs vs Spades (or Hearts vs Diamonds)
+     * is too close to call. Tableau color rules still apply; foundation moves do not.
+     */
+    val suitAmbiguous: Boolean = false
 ) {
     val id: String get() = if (known) "${rank.name}_${suit.name}" else "U_${if (suit.isRed) "R" else "B"}"
 
@@ -55,9 +60,9 @@ data class Card(
     }
 
     fun canPlaceOnFoundation(top: Card?): Boolean {
-        if (!faceUp || !known) return false
+        if (!faceUp || !known || suitAmbiguous) return false
         if (top == null) return rank == Rank.Ace
-        if (!top.known) return false
+        if (!top.known || top.suitAmbiguous) return false
         return suit == top.suit && rank.isOneAbove(top.rank)
     }
 

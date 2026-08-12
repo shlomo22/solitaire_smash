@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.personal.solitaireassistant.game.BoardRegion
+import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.Move
 import com.personal.solitaireassistant.game.PileRef
@@ -117,24 +118,24 @@ class AnalysisPipeline(
     }
 
     private fun handleDetection(
-        detection: DetectionResult,
+        detectionRaw: DetectionResult,
         elapsedMs: Long,
         frameW: Int,
         frameH: Int
     ) {
-        val state = detection.state
-        if (state == null) {
+        val rawState = detectionRaw.state
+        if (rawState == null) {
             stableHits = 0
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
             overlayController.hideArrowTemporarily()
-            val msg = "No board (${detection.diagnostics.lastOrNull()}) ${elapsedMs}ms"
+            val msg = "No board (${detectionRaw.diagnostics.lastOrNull()}) ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(
                 "NO_BOARD",
                 msg,
-                detection,
+                detectionRaw,
                 elapsedMs,
                 frameW,
                 frameH,
@@ -144,6 +145,14 @@ class AnalysisPipeline(
                 knownFaceUp = 0
             )
             return
+        }
+
+        val previous = recentStates.lastOrNull() ?: lastDetection?.state
+        val state = stabilizeBlackSuits(rawState, previous)
+        val detection = if (state !== rawState) {
+            detectionRaw.copy(state = state)
+        } else {
+            detectionRaw
         }
 
         val signature = buildString {
@@ -409,6 +418,52 @@ class AnalysisPipeline(
             kotlin.math.abs(oldFrom.centerY - newFrom.centerY) < 16f &&
             kotlin.math.abs(oldTo.centerX - newTo.centerX) < 16f &&
             kotlin.math.abs(oldTo.centerY - newTo.centerY) < 16f
+    }
+
+    /**
+     * Prefer a previously confident black suit when the current frame is ambiguous
+     * for the same rank in the same pile. Prevents Clubs↔Spades flicker.
+     */
+    private fun stabilizeBlackSuits(
+        current: GameState,
+        previous: GameState?
+    ): GameState {
+        if (previous == null) return current
+
+        fun stabilizeCard(now: Card, before: Card?): Card {
+            if (!now.known || now.suit.isRed || !now.suitAmbiguous) return now
+            if (before == null || !before.known || before.suit.isRed) return now
+            if (before.rank != now.rank) return now
+            if (before.suitAmbiguous) return now
+            return now.copy(suit = before.suit, suitAmbiguous = false)
+        }
+
+        val tableau = current.tableau.mapIndexed { col, cards ->
+            val prevCol = previous.tableau.getOrNull(col).orEmpty()
+            cards.mapIndexed { index, card ->
+                stabilizeCard(card, prevCol.getOrNull(index))
+            }
+        }
+        val foundations = current.foundations.mapIndexed { index, pile ->
+            val prevPile = previous.foundations.getOrNull(index).orEmpty()
+            pile.mapIndexed { cardIndex, card ->
+                stabilizeCard(card, prevPile.getOrNull(cardIndex))
+            }
+        }
+        val waste = current.waste.mapIndexed { index, card ->
+            stabilizeCard(card, previous.waste.getOrNull(index))
+        }
+        if (tableau == current.tableau &&
+            foundations == current.foundations &&
+            waste == current.waste
+        ) {
+            return current
+        }
+        return current.copy(
+            tableau = tableau,
+            foundations = foundations,
+            waste = waste
+        )
     }
 
     companion object {

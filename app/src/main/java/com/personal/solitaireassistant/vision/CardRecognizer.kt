@@ -15,7 +15,9 @@ import org.opencv.core.Rect
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import java.io.IOException
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 data class RecognitionHit(
     val card: Card?,
@@ -186,6 +188,24 @@ class CardRecognizer(
                             inferredRed = suit.isRed
                         )
                     }
+                    if (suit == null && rank != null && inkRed == false) {
+                        val guess = ambiguousBlackSuit(crop)
+                        val conf = rank.second.coerceAtMost(1f)
+                        return RecognitionHit(
+                            card = Card(
+                                rank.first,
+                                guess,
+                                faceUp = true,
+                                known = true,
+                                suitAmbiguous = true
+                            ),
+                            confidence = conf,
+                            isFaceDown = false,
+                            isEmpty = false,
+                            diagnostic = "match-${rank.first.name}-${guess.name}-ambiguous@$conf",
+                            inferredRed = false
+                        )
+                    }
                     if (suit != null) {
                         val rankHint = bitmapRankHit?.let {
                             "bitmap-${it.first.name}@${"%.2f".format(it.second)}"
@@ -217,9 +237,16 @@ class CardRecognizer(
             val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
                 ?.takeIf { it.second >= 0.45f }
                 ?.first
-            val suit = bitmapSuit ?: when (inkRed) {
+            val shapeBlack = if (inkRed == false && crop != null) {
+                SuitBadgeHeuristics.guessBlackSuit(crop)
+                    ?.takeIf { it.margin >= 0.08f && it.confidence >= 0.55f }
+                    ?.suit
+            } else {
+                null
+            }
+            val suit = bitmapSuit ?: shapeBlack ?: when (inkRed) {
                     true -> Suit.Hearts
-                    false -> Suit.Spades
+                    false -> null
                     null -> null
                 }
             val rank = pickRank(bitmapRank, null, glyph)
@@ -231,6 +258,23 @@ class CardRecognizer(
                     isEmpty = false,
                     diagnostic = "bitmap-${rank.first.name}-${suit.name}@${"%.2f".format(rank.second)}",
                     inferredRed = suit.isRed
+                )
+            }
+            if (suit == null && rank != null && inkRed == false && crop != null) {
+                val guess = ambiguousBlackSuit(crop)
+                return RecognitionHit(
+                    card = Card(
+                        rank.first,
+                        guess,
+                        faceUp = true,
+                        known = true,
+                        suitAmbiguous = true
+                    ),
+                    confidence = rank.second,
+                    isFaceDown = false,
+                    isEmpty = false,
+                    diagnostic = "bitmap-${rank.first.name}-${guess.name}-ambiguous",
+                    inferredRed = false
                 )
             }
             return RecognitionHit(
@@ -292,28 +336,7 @@ class CardRecognizer(
         ensureLoaded()
         val cardCrop = crop(bitmap, region) ?: return emptyMap()
         return try {
-            val width = (cardCrop.width * 0.38f).toInt().coerceAtLeast(8)
-            val height = (cardCrop.height * 0.31f).toInt().coerceAtLeast(8)
-            val sourceMasks = mutableListOf<LongArray>()
-            for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
-                val x = (cardCrop.width * xFraction).toInt()
-                    .coerceIn(0, cardCrop.width - 8)
-                val actualWidth = width.coerceAtMost(cardCrop.width - x)
-                for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {
-                    val y = (cardCrop.height * yFraction).toInt()
-                        .coerceIn(0, cardCrop.height - 8)
-                    val actualHeight = height.coerceAtMost(cardCrop.height - y)
-                    val roi = Bitmap.createBitmap(
-                        cardCrop,
-                        x,
-                        y,
-                        actualWidth,
-                        actualHeight
-                    )
-                    sourceMasks += inkMask(roi)
-                    roi.recycle()
-                }
-            }
+            val sourceMasks = suitBadgeMasks(cardCrop, preferLocatedBadge = false)
             suits.mapNotNull { suit ->
                 bitmapSuitTemplates[suit]?.let { templates ->
                     suit to templates.maxOf { template ->
@@ -324,6 +347,18 @@ class CardRecognizer(
         } finally {
             cardCrop.recycle()
         }
+    }
+
+    fun blackSuitAmbiguous(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): Boolean {
+        val scores = suitTemplateScores(bitmap, region, setOf(Suit.Clubs, Suit.Spades))
+        val club = scores[Suit.Clubs] ?: 0f
+        val spade = scores[Suit.Spades] ?: 0f
+        val best = max(club, spade)
+        val margin = abs(club - spade)
+        return best < 0.72f || margin < BLACK_SUIT_MARGIN
     }
 
     fun release() {
@@ -352,6 +387,13 @@ class CardRecognizer(
         ) {
             return bitmapSuit.first
         }
+        if (colorSuit == false) {
+            SuitBadgeHeuristics.guessBlackSuit(crop)?.let { shape ->
+                if (shape.margin >= 0.08f && shape.confidence >= 0.55f) {
+                    return shape.suit
+                }
+            }
+        }
         val templateSuit = bestSuit(crop)
         if (templateSuit != null && colorSuit != null) {
             val candidates = Suit.entries.filter { it.isRed == colorSuit }
@@ -359,33 +401,26 @@ class CardRecognizer(
                 suitTemplates[suit]?.let { suit to matchTemplate(crop, it, badgeOnly = true) }
             }.maxByOrNull { it.second }
             if (filtered != null && filtered.second >= 0.45f) return filtered.first
+            // Prefer color-only fallback over a weak Clubs/Spades commit.
+            if (colorSuit == false) return null
             return candidates.firstOrNull { it == templateSuit.first } ?: candidates.first()
         }
         if (templateSuit != null && templateSuit.second >= 0.5f) return templateSuit.first
         return when (colorSuit) {
             true -> Suit.Hearts
-            false -> Suit.Spades
+            false -> null
             null -> null
         }
     }
 
     private fun bestBitmapSuit(crop: Bitmap, isRed: Boolean? = null): Pair<Suit, Float>? {
         if (bitmapSuitTemplates.isEmpty()) return null
-        val width = (crop.width * 0.38f).toInt().coerceAtLeast(8)
-        val height = (crop.height * 0.31f).toInt().coerceAtLeast(8)
-        val sourceMasks = mutableListOf<LongArray>()
-        // Keep the rank glyph out of the upper-right suit badge mask.
-        for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
-            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-            val actualWidth = width.coerceAtMost(crop.width - x)
-            for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {
-                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                val actualHeight = height.coerceAtMost(crop.height - y)
-                val roi = Bitmap.createBitmap(crop, x, y, actualWidth, actualHeight)
-                sourceMasks += inkMask(roi)
-                roi.recycle()
-            }
-        }
+        val sourceMasks = suitBadgeMasks(
+            crop,
+            preferLocatedBadge = isRed == false
+        )
+        var clubScore = 0f
+        var spadeScore = 0f
         var best: Pair<Suit, Float>? = null
         var second = 0f
         bitmapSuitTemplates
@@ -394,6 +429,11 @@ class CardRecognizer(
             val score = templateMasks.maxOf { templateMask ->
                 sourceMasks.maxOf { source -> maskScore(source, templateMask) }
             }
+            when (suit) {
+                Suit.Clubs -> clubScore = score
+                Suit.Spades -> spadeScore = score
+                else -> Unit
+            }
             if (best == null || score > best!!.second) {
                 second = best?.second ?: 0f
                 best = suit to score
@@ -401,10 +441,105 @@ class CardRecognizer(
                 second = score
             }
         }
+        if (isRed == false) {
+            // Shape is a tie-breaker only — never override a clear template winner.
+            if (kotlin.math.abs(clubScore - spadeScore) < BLACK_SUIT_MARGIN) {
+                SuitBadgeHeuristics.guessBlackSuit(crop)?.let { shape ->
+                    if (shape.margin >= 0.10f) {
+                        best = shape.suit to max(clubScore, spadeScore) + 0.02f
+                        second = min(clubScore, spadeScore)
+                    }
+                }
+            }
+        }
         val top = best ?: return null
         if (top.second < 0.42f) return null
-        if (top.second - second < 0.025f && top.second < 0.68f) return null
+        val requiredMargin =
+            if (isRed == false) BLACK_SUIT_MARGIN else 0.025f
+        val confidenceFloor = if (isRed == false) 0.78f else 0.68f
+        if (top.second - second < requiredMargin && top.second < confidenceFloor) return null
         return top
+    }
+
+    private fun suitBadgeMasks(
+        crop: Bitmap,
+        preferLocatedBadge: Boolean
+    ): List<LongArray> {
+        val masks = mutableListOf<LongArray>()
+        if (preferLocatedBadge) {
+            val located = SuitBadgeHeuristics.locateBadge(crop)
+            if (located != null) {
+                try {
+                    masks += inkMask(located.bitmap)
+                    val pad = max(1, min(located.width, located.height) / 8)
+                    val left = (located.left - pad).coerceAtLeast(0)
+                    val top = (located.top - pad).coerceAtLeast(0)
+                    val right = (located.left + located.width + pad).coerceAtMost(crop.width)
+                    val bottom = (located.top + located.height + pad).coerceAtMost(crop.height)
+                    if (right - left >= 8 && bottom - top >= 8) {
+                        val expanded = Bitmap.createBitmap(
+                            crop,
+                            left,
+                            top,
+                            right - left,
+                            bottom - top
+                        )
+                        masks += inkMask(expanded)
+                        expanded.recycle()
+                    }
+                } finally {
+                    if (!located.bitmap.isRecycled) located.bitmap.recycle()
+                }
+            }
+        }
+        val width = (crop.width * 0.38f).toInt().coerceAtLeast(8)
+        val height = (crop.height * 0.31f).toInt().coerceAtLeast(8)
+        val xFractions = if (preferLocatedBadge) {
+            listOf(0.56f, 0.60f, 0.64f)
+        } else {
+            listOf(0.54f, 0.58f, 0.61f, 0.64f)
+        }
+        val yFractions = if (preferLocatedBadge) {
+            listOf(0.0f, 0.04f)
+        } else {
+            listOf(0.0f, 0.03f, 0.06f)
+        }
+        for (xFraction in xFractions) {
+            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
+            val actualWidth = width.coerceAtMost(crop.width - x)
+            for (yFraction in yFractions) {
+                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
+                val actualHeight = height.coerceAtMost(crop.height - y)
+                val roi = Bitmap.createBitmap(crop, x, y, actualWidth, actualHeight)
+                masks += inkMask(roi)
+                roi.recycle()
+            }
+        }
+        return masks
+    }
+
+    private fun ambiguousBlackSuit(crop: Bitmap): Suit {
+        val scored = bestBitmapSuitLoose(crop)
+        if (scored != null) return scored
+        return SuitBadgeHeuristics.guessBlackSuit(crop)?.suit ?: Suit.Spades
+    }
+
+    /** Like bestBitmapSuit but returns the top black suit even when the margin is thin. */
+    private fun bestBitmapSuitLoose(crop: Bitmap): Suit? {
+        if (bitmapSuitTemplates.isEmpty()) return null
+        val sourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
+        var best: Pair<Suit, Float>? = null
+        bitmapSuitTemplates
+            .filterKeys { !it.isRed }
+            .forEach { (suit, templateMasks) ->
+                val score = templateMasks.maxOf { templateMask ->
+                    sourceMasks.maxOf { source -> maskScore(source, templateMask) }
+                }
+                if (best == null || score > best!!.second) {
+                    best = suit to score
+                }
+            }
+        return best?.takeIf { it.second >= 0.40f }?.first
     }
 
     private fun pickRank(
@@ -685,5 +820,6 @@ class CardRecognizer(
         private const val TAG = "CardRecognizer"
         private const val MAX_BITMAP_TEMPLATES_PER_RANK = 10
         private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 5
+        private const val BLACK_SUIT_MARGIN = 0.045f
     }
 }

@@ -142,10 +142,11 @@ class GameStateDetector(
             tightCard?.suit ?: baseCard?.suit
         }
         val fusedCard = if (baseCard != null && correctedRank != null) {
-            baseCard.copy(
+            val candidate = baseCard.copy(
                 rank = correctedRank,
                 suit = correctedSuit ?: baseCard.suit
             )
+            resolveBlackSuit(bitmap, tightWasteRegion, candidate)
         } else {
             null
         }
@@ -189,8 +190,11 @@ class GameStateDetector(
             locations[PileRef.Foundation(index)] = listOf(
                 locator.toCardLocation(PileRef.Foundation(index), 0, region)
             )
-            foundations[index] = listOfNotNull(cardFromHit(hit))
-            diagnostics += "foundation$index=${hit.diagnostic}:${hit.card}"
+            val foundationCard = cardFromHit(hit)?.let { card ->
+                resolveBlackSuit(bitmap, region, card)
+            }
+            foundations[index] = listOfNotNull(foundationCard)
+            diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard}"
         }
 
         locator.tableauColumnRegions(board).forEachIndexed { col, columnRegion ->
@@ -247,28 +251,7 @@ class GameStateDetector(
                 if (inkRed != null && card.suit.isRed != inkRed) {
                     card = card.copy(suit = if (inkRed) Suit.Hearts else Suit.Spades)
                 }
-                if (card.known && !card.suit.isRed) {
-                    val suitScores = recognizer.suitTemplateScores(
-                        bitmap,
-                        faceRegion,
-                        setOf(Suit.Clubs, Suit.Spades)
-                    )
-                    val clubScore = suitScores[Suit.Clubs] ?: 0f
-                    val spadeScore = suitScores[Suit.Spades] ?: 0f
-                    card = when {
-                        card.rank in setOf(Rank.Two, Rank.Five) &&
-                            clubScore >= 0.65f &&
-                            spadeScore - clubScore <= 0.15f ->
-                            card.copy(suit = Suit.Clubs)
-                        spadeScore >= 0.68f && spadeScore - clubScore >= 0.015f ->
-                            card.copy(suit = Suit.Spades)
-                        card.rank in setOf(Rank.Three, Rank.Four) &&
-                            spadeScore >= 0.80f &&
-                            clubScore - spadeScore <= 0.01f ->
-                            card.copy(suit = Suit.Spades)
-                        else -> card
-                    }
-                }
+                card = resolveBlackSuit(bitmap, faceRegion, card)
 
                 // Reconstruct the overlapped face-up run geometrically. Sampling
                 // colored header strips missed leading cards in long cascades;
@@ -423,13 +406,6 @@ class GameStateDetector(
         }
         val confidences = mutableListOf(board.confidence, stockHit.confidence, wasteConfidence)
         val avg = confidences.average().toFloat()
-        val state = GameState(
-            tableau = tableau,
-            foundations = foundations,
-            stock = stockCards,
-            waste = wasteCards
-        )
-
         val totalCards = tableau.sumOf { it.size } + foundations.sumOf { it.size } +
             wasteCards.size + stockCards.size
         if (totalCards == 0) {
@@ -448,7 +424,12 @@ class GameStateDetector(
         diagnostics += "knownFaceUp=$knownFaceUp"
 
         return DetectionResult(
-            state = state,
+            state = GameState(
+                tableau = tableau,
+                foundations = foundations,
+                stock = stockCards,
+                waste = wasteCards
+            ),
             locations = locations,
             confidence = avg,
             diagnostics = diagnostics,
@@ -588,6 +569,31 @@ class GameStateDetector(
 
     fun release() {
         recognizer.release()
+    }
+
+    private fun resolveBlackSuit(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card
+    ): Card {
+        if (!card.known || card.suit.isRed) return card
+        val suitScores = recognizer.suitTemplateScores(
+            bitmap,
+            region,
+            setOf(Suit.Clubs, Suit.Spades)
+        )
+        val clubScore = suitScores[Suit.Clubs] ?: 0f
+        val spadeScore = suitScores[Suit.Spades] ?: 0f
+        val margin = kotlin.math.abs(clubScore - spadeScore)
+        val leader = if (spadeScore >= clubScore) Suit.Spades else Suit.Clubs
+        val bestScore = maxOf(clubScore, spadeScore)
+        // Require either a clear margin or a strong absolute winner. Tiny
+        // 0.02–0.03 leads are common club/spade noise on Smash badges.
+        if (margin >= 0.050f || (margin >= 0.025f && bestScore >= 0.84f)) {
+            return card.copy(suit = leader, suitAmbiguous = false)
+        }
+        // Near-tie: keep color playable, but never send this card to foundation.
+        return card.copy(suitAmbiguous = true)
     }
 
     private fun cardFromHit(hit: RecognitionHit): Card? {
