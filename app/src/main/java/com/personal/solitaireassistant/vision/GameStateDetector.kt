@@ -519,11 +519,18 @@ class GameStateDetector(
         val lowRank = card.rank.value <= Rank.Three.value
         val minScore = if (lowRank) 0.48f else 0.55f
         val margin = if (lowRank) 0.02f else 0.04f
-        if (clubScore < minScore && spadeScore < minScore) return card
+        // Neither black suit matches its badge template confidently: trust the
+        // color but flag Clubs↔Spades as unresolved so foundation moves are
+        // suppressed (tableau color rules still apply).
+        if (clubScore < minScore && spadeScore < minScore) {
+            return card.copy(suitAmbiguous = true)
+        }
         return when {
-            clubScore - spadeScore >= margin -> card.copy(suit = Suit.Clubs)
-            spadeScore - clubScore >= margin -> card.copy(suit = Suit.Spades)
-            else -> card
+            clubScore - spadeScore >= margin -> card.copy(suit = Suit.Clubs, suitAmbiguous = false)
+            spadeScore - clubScore >= margin -> card.copy(suit = Suit.Spades, suitAmbiguous = false)
+            // Near-tie between Clubs and Spades: keep color playable but never
+            // commit to a foundation on a guess.
+            else -> card.copy(suitAmbiguous = true)
         }
     }
 

@@ -216,4 +216,28 @@ class KlondikeRulesTest {
         val move = KlondikeRules.legalMoves(state).filterIsInstance<Move.TableauToFoundation>().single()
         assertEquals(1, move.toFoundation)
     }
+
+    @Test
+    fun ambiguousBlackSuitCannotMoveToFoundation() {
+        val clubs = Card(Rank.Four, Suit.Clubs, suitAmbiguous = true)
+        val spadeFoundation = Card(Rank.Three, Suit.Spades)
+        assertFalse(clubs.canPlaceOnFoundation(spadeFoundation))
+
+        val state = GameState(
+            tableau = listOf(
+                listOf(clubs),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                emptyList(),
+                emptyList(),
+                listOf(spadeFoundation),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        assertFalse(KlondikeRules.isLegal(state, Move.TableauToFoundation(0, 2)))
+        assertTrue(clubs.canStackOnTableau(Card(Rank.Five, Suit.Hearts)))
+    }
 }

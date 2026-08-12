@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.personal.solitaireassistant.game.BoardRegion
+import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.Move
 import com.personal.solitaireassistant.game.PileRef
@@ -154,15 +155,19 @@ class AnalysisPipeline(
         val left = 0
         val right = bitmap.width
         val top = (bitmap.height * 0.20f).toInt()
-        val bottom = (bitmap.height * 0.68f).toInt()
+        val bottom = (bitmap.height * 0.68f).toInt().coerceAtMost(bitmap.height)
+        val regionHeight = (bottom - top).coerceAtLeast(1)
         val stepX = (bitmap.width / 54).coerceAtLeast(1)
-        val stepY = ((bottom - top) / 60).coerceAtLeast(1)
+        val stepY = (regionHeight / 60).coerceAtLeast(1)
+        val pixels = IntArray(bitmap.width * regionHeight)
+        bitmap.getPixels(pixels, 0, bitmap.width, left, top, right - left, regionHeight)
         var hash = -0x340d631b7bdddcdbL
-        var y = top
-        while (y < bottom) {
-            var x = left
-            while (x < right) {
-                val color = bitmap.getPixel(x, y)
+        var y = 0
+        while (y < regionHeight) {
+            val rowOffset = y * bitmap.width
+            var x = 0
+            while (x < bitmap.width) {
+                val color = pixels[rowOffset + x]
                 val quantized =
                     (((color shr 19) and 0x1F) shl 10) or
                         (((color shr 11) and 0x1F) shl 5) or
@@ -176,24 +181,24 @@ class AnalysisPipeline(
     }
 
     private fun handleDetection(
-        detection: DetectionResult,
+        detectionRaw: DetectionResult,
         elapsedMs: Long,
         frameW: Int,
         frameH: Int
     ) {
-        val state = detection.state
-        if (state == null) {
+        val rawState = detectionRaw.state
+        if (rawState == null) {
             stableHits = 0
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
             overlayController.hideArrowTemporarily()
-            val msg = "No board (${detection.diagnostics.lastOrNull()}) ${elapsedMs}ms"
+            val msg = "No board (${detectionRaw.diagnostics.lastOrNull()}) ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(
                 "NO_BOARD",
                 msg,
-                detection,
+                detectionRaw,
                 elapsedMs,
                 frameW,
                 frameH,
@@ -203,6 +208,14 @@ class AnalysisPipeline(
                 knownFaceUp = 0
             )
             return
+        }
+
+        val previous = recentStates.lastOrNull() ?: lastDetection?.state
+        val state = stabilizeBlackSuits(rawState, previous)
+        val detection = if (state !== rawState) {
+            detectionRaw.copy(state = state)
+        } else {
+            detectionRaw
         }
 
         val signature = buildString {
@@ -231,9 +244,18 @@ class AnalysisPipeline(
         }
 
         val knownFaceUp = countKnownFaceUp(state)
-        val reliableFirstHit = detection.confidence >= 0.78f && knownFaceUp >= 4
+        // Cold start still prefers two matching frames. After a move (or on a
+        // strong first read), publish immediately so the arrow does not wait
+        // for another full capture+detect cycle.
+        val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
+        val strongFirstHit = detection.confidence >= 0.75f && knownFaceUp >= 5
+        val postMoveFirstHit =
+            lastSuggestionSignature != null &&
+                detection.confidence >= 0.72f &&
+                knownFaceUp >= 4
+        val canPublishFirstHit = reliableFirstHit || strongFirstHit || postMoveFirstHit
 
-        if (stableHits < 2 && !reliableFirstHit) {
+        if (stableHits < 2 && !canPublishFirstHit) {
             statusSink("Stabilizing detection… conf=${"%.2f".format(detection.confidence)}")
             lastSuggestion?.let { restore ->
                 if (restore.from != null && restore.to != null) {
@@ -632,6 +654,52 @@ class AnalysisPipeline(
             }
         }
         return regions
+    }
+
+    /**
+     * Prefer a previously confident black suit when the current frame is ambiguous
+     * for the same rank in the same pile. Prevents Clubs↔Spades flicker.
+     */
+    private fun stabilizeBlackSuits(
+        current: GameState,
+        previous: GameState?
+    ): GameState {
+        if (previous == null) return current
+
+        fun stabilizeCard(now: Card, before: Card?): Card {
+            if (!now.known || now.suit.isRed || !now.suitAmbiguous) return now
+            if (before == null || !before.known || before.suit.isRed) return now
+            if (before.rank != now.rank) return now
+            if (before.suitAmbiguous) return now
+            return now.copy(suit = before.suit, suitAmbiguous = false)
+        }
+
+        val tableau = current.tableau.mapIndexed { col, cards ->
+            val prevCol = previous.tableau.getOrNull(col).orEmpty()
+            cards.mapIndexed { index, card ->
+                stabilizeCard(card, prevCol.getOrNull(index))
+            }
+        }
+        val foundations = current.foundations.mapIndexed { index, pile ->
+            val prevPile = previous.foundations.getOrNull(index).orEmpty()
+            pile.mapIndexed { cardIndex, card ->
+                stabilizeCard(card, prevPile.getOrNull(cardIndex))
+            }
+        }
+        val waste = current.waste.mapIndexed { index, card ->
+            stabilizeCard(card, previous.waste.getOrNull(index))
+        }
+        if (tableau == current.tableau &&
+            foundations == current.foundations &&
+            waste == current.waste
+        ) {
+            return current
+        }
+        return current.copy(
+            tableau = tableau,
+            foundations = foundations,
+            waste = waste
+        )
     }
 
     companion object {

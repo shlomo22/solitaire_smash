@@ -7,6 +7,18 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- Needed to discover / launch Solitaire Smash without QUERY_ALL_PACKAGES. -->
+    <queries>
+        <package android:name="com.funquest.solitaire.smash" />
+        <package android:name="com.solitairesmash.gp" />
+        <package android:name="solitaire.smash.cash.clash.casino" />
+        <package android:name="com.solitairegame.smashgame" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".SolitaireAssistantApp"
         android:allowBackup="false"

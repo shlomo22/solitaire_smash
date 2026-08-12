@@ -135,8 +135,8 @@ fun SettingsScreen(
                 Slider(
                     value = settings.captureIntervalMs.toFloat(),
                     onValueChange = { onInterval(it.toLong()) },
-                    valueRange = 250f..3000f,
-                    steps = 10
+                    valueRange = 150f..3000f,
+                    steps = 18
                 )
 
                 Text("Match confidence: ${"%.2f".format(settings.minMatchConfidence)}")
@@ -198,7 +198,9 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            "Test order: 1) Start capture over Solitaire Smash. " +
+            "Start captures the whole screen (no app picker) and opens Solitaire Smash; " +
+                "Android still requires one tap to allow screen capture. " +
+                "Test order: 1) Start capture over Solitaire Smash. " +
                 "2) Open Template Lab to save rank/suit crops (hints pause). " +
                 "3) Run live overlay and tap Cancel on wrong hints. " +
                 "4) Pull analysis log via adb if needed.",
