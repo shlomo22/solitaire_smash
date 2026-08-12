@@ -23,6 +23,7 @@ enum class Rank(val value: Int) {
     Jack(11),
     Queen(12),
     King(13);
+    
 
     fun isOneBelow(other: Rank): Boolean = value + 1 == other.value
 
