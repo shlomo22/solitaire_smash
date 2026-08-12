@@ -96,15 +96,19 @@ class AnalysisPipeline(
         val left = 0
         val right = bitmap.width
         val top = (bitmap.height * 0.20f).toInt()
-        val bottom = (bitmap.height * 0.68f).toInt()
+        val bottom = (bitmap.height * 0.68f).toInt().coerceAtMost(bitmap.height)
+        val regionHeight = (bottom - top).coerceAtLeast(1)
         val stepX = (bitmap.width / 54).coerceAtLeast(1)
-        val stepY = ((bottom - top) / 60).coerceAtLeast(1)
+        val stepY = (regionHeight / 60).coerceAtLeast(1)
+        val pixels = IntArray(bitmap.width * regionHeight)
+        bitmap.getPixels(pixels, 0, bitmap.width, left, top, right - left, regionHeight)
         var hash = -0x340d631b7bdddcdbL
-        var y = top
-        while (y < bottom) {
-            var x = left
-            while (x < right) {
-                val color = bitmap.getPixel(x, y)
+        var y = 0
+        while (y < regionHeight) {
+            val rowOffset = y * bitmap.width
+            var x = 0
+            while (x < bitmap.width) {
+                val color = pixels[rowOffset + x]
                 val quantized =
                     (((color shr 19) and 0x1F) shl 10) or
                         (((color shr 11) and 0x1F) shl 5) or
@@ -183,9 +187,18 @@ class AnalysisPipeline(
         val knownFaceUp = state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
             state.waste.count { it.known } +
             state.foundations.sumOf { pile -> pile.count { it.known } }
+        // Cold start still prefers two matching frames. After a move (or on a
+        // strong first read), publish immediately so the arrow does not wait
+        // for another full capture+detect cycle.
         val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
+        val strongFirstHit = detection.confidence >= 0.75f && knownFaceUp >= 5
+        val postMoveFirstHit =
+            lastSuggestionSignature != null &&
+                detection.confidence >= 0.72f &&
+                knownFaceUp >= 4
+        val canPublishFirstHit = reliableFirstHit || strongFirstHit || postMoveFirstHit
 
-        if (stableHits < 2 && !reliableFirstHit) {
+        if (stableHits < 2 && !canPublishFirstHit) {
             statusSink("Stabilizing detection… conf=${"%.2f".format(detection.confidence)}")
             lastSuggestion?.let { restore ->
                 if (restore.from != null && restore.to != null) {
