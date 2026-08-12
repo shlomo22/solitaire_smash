@@ -99,12 +99,33 @@ class MoveSelectorTest {
     }
 
     @Test
-    fun prefersCreatingEmptyColumnOverDrawingStock() {
+    fun prefersDrawOverCreatingEmptyColumnWithNoUsableKing() {
         val state = GameState(
             tableau = listOf(
                 listOf(c(Rank.Queen, Suit.Diamonds)),
                 listOf(c(Rank.King, Suit.Spades)),
                 emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(Move.DrawStock, best.move)
+    }
+
+    @Test
+    fun prefersCreatingEmptyColumnWhenAnotherKingCanUseIt() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Queen, Suit.Diamonds)),
+                listOf(c(Rank.King, Suit.Spades)),
+                listOf(c(Rank.King, Suit.Hearts)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                listOf(c(Rank.Five, Suit.Spades)),
+                listOf(c(Rank.Seven, Suit.Clubs)),
+                listOf(c(Rank.Seven, Suit.Spades))
             ),
             foundations = List(4) { emptyList() },
             stock = listOf(c(Rank.Ace, Suit.Clubs, false)),

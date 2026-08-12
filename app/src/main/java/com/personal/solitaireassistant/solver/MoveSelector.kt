@@ -63,7 +63,11 @@ object MoveSelector {
 
         val emptyBefore = before.tableau.count { it.isEmpty() }
         val emptyAfter = after.tableau.count { it.isEmpty() }
-        if (emptyAfter > emptyBefore) {
+        val createsUsefulEmpty =
+            move is Move.TableauToTableau &&
+                emptyAfter > emptyBefore &&
+                createsKingOpportunity(before, after, move)
+        if (createsUsefulEmpty) {
             score += 45.0
             reasons += "create-empty"
         } else if (emptyAfter < emptyBefore) {
@@ -98,14 +102,14 @@ object MoveSelector {
                 reasons += "recycle"
             }
             is Move.TableauToTableau -> {
-                if (createsKingOpportunity(before, after, move)) {
+                if (createsUsefulEmpty) {
                     score += 35.0
                     reasons += "king-setup"
                 }
                 // A tableau shuffle that exposes no card is usually busywork.
                 // Defer it behind drawing from stock or any productive move.
                 if (revealed == 0 && foundationDelta == 0 &&
-                    emptyAfter <= emptyBefore
+                    !createsUsefulEmpty
                 ) {
                     score -= 180.0
                     reasons += "defer-no-reveal-stack"
@@ -153,9 +157,21 @@ object MoveSelector {
         val emptied = before.tableau[move.fromColumn].isNotEmpty() &&
             after.tableau[move.fromColumn].isEmpty()
         if (!emptied) return false
-        return after.tableau.any { col ->
-            col.any { it.faceUp && it.rank == Rank.King }
-        } || after.wasteTop()?.rank == Rank.King
+        val emptyColumn = move.fromColumn
+        return MoveGenerator.generate(after).any { follow ->
+            when (follow) {
+                is Move.TableauToTableau ->
+                    follow.toColumn == emptyColumn &&
+                        follow.fromColumn != move.toColumn &&
+                        after.tableau[follow.fromColumn]
+                            .getOrNull(follow.startIndex)
+                            ?.rank == Rank.King
+                is Move.WasteToTableau ->
+                    follow.toColumn == emptyColumn &&
+                        after.wasteTop()?.rank == Rank.King
+                else -> false
+            }
+        }
     }
 
     private fun isTrivialReversible(

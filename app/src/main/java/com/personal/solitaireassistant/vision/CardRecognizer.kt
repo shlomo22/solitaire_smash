@@ -295,7 +295,7 @@ class CardRecognizer(
             val width = (cardCrop.width * 0.38f).toInt().coerceAtLeast(8)
             val height = (cardCrop.height * 0.31f).toInt().coerceAtLeast(8)
             val sourceMasks = mutableListOf<LongArray>()
-            for (xFraction in listOf(0.58f, 0.61f, 0.64f)) {
+            for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
                 val x = (cardCrop.width * xFraction).toInt()
                     .coerceIn(0, cardCrop.width - 8)
                 val actualWidth = width.coerceAtMost(cardCrop.width - x)
@@ -375,7 +375,7 @@ class CardRecognizer(
         val height = (crop.height * 0.31f).toInt().coerceAtLeast(8)
         val sourceMasks = mutableListOf<LongArray>()
         // Keep the rank glyph out of the upper-right suit badge mask.
-        for (xFraction in listOf(0.58f, 0.61f, 0.64f)) {
+        for (xFraction in listOf(0.54f, 0.58f, 0.61f, 0.64f)) {
             val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
             val actualWidth = width.coerceAtMost(crop.width - x)
             for (yFraction in listOf(0.0f, 0.03f, 0.06f)) {

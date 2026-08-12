@@ -69,12 +69,12 @@ class GameStateDetector(
         val exactRankScores = recognizer.exactRankTemplateScores(
             bitmap,
             tightWasteRegion,
-            setOf(Rank.Four, Rank.Seven, Rank.Eight, Rank.Nine, Rank.Ten, Rank.Jack)
+            Rank.entries.toSet()
         )
         val exactSuitScores = recognizer.suitTemplateScores(
             bitmap,
             tightWasteRegion,
-            setOf(Suit.Hearts, Suit.Diamonds)
+            Suit.entries.toSet()
         )
         // The legacy crop has the most rank training data, while the complete
         // tight crop is the only one that reliably contains the suit badge.
@@ -83,6 +83,23 @@ class GameStateDetector(
         val legacyCard = legacyWasteHit.card
         val tightCard = tightWasteHit.card
         val baseCard = legacyCard ?: tightCard
+        val rankedExactSuits = exactSuitScores.entries.sortedByDescending { it.value }
+        val exactSuitBest = rankedExactSuits.firstOrNull()
+        val exactSuitSecond = rankedExactSuits.getOrNull(1)?.value ?: 0f
+        val authoritativeExactSuit = exactSuitBest
+            ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
+            ?.key
+        val exactTenOverride =
+            legacyCard?.rank == Rank.King &&
+                (exactRankScores[Rank.Ten] ?: 0f) >= 0.90f
+        val exactQueenOverride =
+            legacyCard?.rank == Rank.Ten &&
+                (exactRankScores[Rank.Queen] ?: 0f) >= 0.90f
+        val exactEightSpadeOverride =
+            legacyCard?.rank == Rank.Seven &&
+                tightCard?.rank == Rank.Six &&
+                (exactRankScores[Rank.Eight] ?: 0f) >= 0.90f &&
+                (exactSuitScores[Suit.Spades] ?: 0f) >= 0.90f
         val exactFourOverride =
             legacyCard?.rank == Rank.Seven &&
                 (exactRankScores[Rank.Four] ?: 0f) >= 0.85f &&
@@ -90,29 +107,36 @@ class GameStateDetector(
                 (exactSuitScores[Suit.Diamonds] ?: 0f) >
                 (exactSuitScores[Suit.Hearts] ?: 0f) + 0.05f
         val correctedRank = when {
+            exactTenOverride -> Rank.Ten
+            exactQueenOverride -> Rank.Queen
+            exactEightSpadeOverride -> Rank.Eight
             exactFourOverride -> Rank.Four
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Jack &&
                 (exactRankScores[Rank.Jack] ?: 0f) >
                 (exactRankScores[Rank.Seven] ?: 0f) + 0.35f -> Rank.Jack
             legacyCard?.rank == Rank.Nine &&
-                tightCard?.rank == Rank.Ten -> Rank.Ten
-            legacyCard?.rank == Rank.Nine &&
-                (exactRankScores[Rank.Ten] ?: 0f) >= 0.45f &&
+                tightCard?.rank == Rank.Ten &&
+                (exactRankScores[Rank.Ten] ?: 0f) >= 0.85f &&
                 (exactRankScores[Rank.Ten] ?: 0f) >
-                (exactRankScores[Rank.Nine] ?: 0f) + 0.025f -> Rank.Ten
+                (exactRankScores[Rank.Nine] ?: 0f) + 0.10f -> Rank.Ten
             legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Eight -> Rank.Eight
-            legacyCard?.rank == Rank.Seven &&
-                (exactRankScores[Rank.Eight] ?: 0f) >= 0.45f &&
+                tightCard?.rank == Rank.Eight &&
+                (exactRankScores[Rank.Eight] ?: 0f) >= 0.85f &&
                 (exactRankScores[Rank.Eight] ?: 0f) >
-                (exactRankScores[Rank.Seven] ?: 0f) + 0.025f -> Rank.Eight
+                (exactRankScores[Rank.Seven] ?: 0f) + 0.10f -> Rank.Eight
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Six &&
                 tightCard.suit != legacyCard.suit -> Rank.Six
             else -> baseCard?.rank
         }
-        val correctedSuit = if (exactFourOverride) {
+        val correctedSuit = if ((exactTenOverride ||
+                exactQueenOverride ||
+                exactEightSpadeOverride) &&
+            authoritativeExactSuit != null
+        ) {
+            authoritativeExactSuit
+        } else if (exactFourOverride) {
             Suit.Diamonds
         } else {
             tightCard?.suit ?: baseCard?.suit
@@ -223,10 +247,7 @@ class GameStateDetector(
                 if (inkRed != null && card.suit.isRed != inkRed) {
                     card = card.copy(suit = if (inkRed) Suit.Hearts else Suit.Spades)
                 }
-                if (card.known &&
-                    card.suit == Suit.Spades &&
-                    card.rank in setOf(Rank.Two, Rank.Five)
-                ) {
+                if (card.known && !card.suit.isRed) {
                     val suitScores = recognizer.suitTemplateScores(
                         bitmap,
                         faceRegion,
@@ -234,8 +255,18 @@ class GameStateDetector(
                     )
                     val clubScore = suitScores[Suit.Clubs] ?: 0f
                     val spadeScore = suitScores[Suit.Spades] ?: 0f
-                    if (clubScore >= 0.65f && spadeScore - clubScore <= 0.035f) {
-                        card = card.copy(suit = Suit.Clubs)
+                    card = when {
+                        card.rank in setOf(Rank.Two, Rank.Five) &&
+                            clubScore >= 0.65f &&
+                            spadeScore - clubScore <= 0.15f ->
+                            card.copy(suit = Suit.Clubs)
+                        spadeScore >= 0.68f && spadeScore - clubScore >= 0.015f ->
+                            card.copy(suit = Suit.Spades)
+                        card.rank in setOf(Rank.Three, Rank.Four) &&
+                            spadeScore >= 0.80f &&
+                            clubScore - spadeScore <= 0.01f ->
+                            card.copy(suit = Suit.Spades)
+                        else -> card
                     }
                 }
 
@@ -283,12 +314,12 @@ class GameStateDetector(
                 val faceUpDistance = (faceRegion.top - firstFaceTop) / faceUpStep
                 var faceUpCount = (faceUpDistance.roundToInt() + 1)
                     .coerceIn(1, Rank.entries.size)
-                if (faceDownCount == 0 && card.known) {
+                if (card.known) {
                     val leadingRegion = BoardRegion(
                         columnRegion.left,
-                        columnRegion.top,
+                        firstFaceTop,
                         columnRegion.right,
-                        (columnRegion.top + cardHeight).coerceAtMost(columnRegion.bottom)
+                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
                     val leadingHit = recognizer.recognize(
                         bitmap,
@@ -300,9 +331,9 @@ class GameStateDetector(
                         bitmap,
                         BoardRegion(
                             columnRegion.left,
-                            columnRegion.top,
+                            firstFaceTop,
                             columnRegion.right,
-                            (columnRegion.top + faceUpStep * 0.9f)
+                            (firstFaceTop + faceUpStep * 0.9f)
                                 .coerceAtMost(columnRegion.bottom)
                         )
                     )

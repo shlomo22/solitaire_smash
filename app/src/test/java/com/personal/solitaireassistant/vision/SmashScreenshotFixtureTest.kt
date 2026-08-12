@@ -519,18 +519,16 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
-    fun fifteenthLiveBoardMovesJackRunOntoQueen() {
+    fun fifteenthLiveBoardAvoidsNonRevealingJackRun() {
         val bitmap = load("screenshots/device_live_15.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)
         val state = requireNotNull(detector.detect(bitmap).state)
 
         val best = requireNotNull(MoveSelector.bestMove(state))
-        assertTrue(
-            "the move is J-4 onto Q, so its first moving card must be J; got ${best.move.label}",
-            best.move is Move.TableauToTableau &&
-                best.move.fromColumn == 2 &&
-                best.move.toColumn == 6 &&
-                state.tableau[2][best.move.startIndex].rank == Rank.Jack
+        assertEquals(
+            "prefer the move that creates an empty column over shifting J-4 onto Q",
+            Move.TableauToTableau(fromColumn = 3, startIndex = 0, toColumn = 4),
+            best.move
         )
 
         detector.release()
@@ -855,6 +853,67 @@ class SmashScreenshotFixtureTest {
 
         detector.release()
         bitmap.recycle()
+    }
+
+    @Test
+    fun latestIssueScreenshotsRejectFalseMoves() {
+        fun check(index: Int, assertion: (com.personal.solitaireassistant.game.GameState, Move?) -> Unit) {
+            val path = "screenshots/issue_unknown_${index.toString().padStart(2, '0')}.png"
+            val bitmap = load(path)
+            val detector = GameStateDetector(context, minConfidence = 0.55f)
+            val detection = detector.detect(bitmap)
+            val state = requireNotNull(detection.state)
+            assertion(state, MoveSelector.bestMove(state)?.move)
+            detector.release()
+            bitmap.recycle()
+        }
+
+        check(1) { state, best ->
+            assertEquals(Rank.King, state.tableau[1].firstOrNull { it.faceUp }?.rank)
+            assertTrue(
+                best !is Move.TableauToTableau ||
+                    best.fromColumn != 1 ||
+                    best.toColumn != 0
+            )
+        }
+        check(6) { state, best ->
+            assertEquals(Suit.Spades, state.tableau[1].last().suit)
+            assertTrue(best !is Move.TableauToFoundation || best.fromColumn != 1)
+        }
+        check(12) { state, best ->
+            assertEquals(Rank.Ten, state.wasteTop()?.rank)
+            assertEquals(Suit.Diamonds, state.wasteTop()?.suit)
+            assertTrue(best !is Move.WasteToTableau)
+        }
+        check(15) { state, best ->
+            assertEquals(Rank.Queen, state.wasteTop()?.rank)
+            assertEquals(Suit.Spades, state.wasteTop()?.suit)
+            assertTrue(best !is Move.WasteToTableau)
+        }
+        check(18) { state, best ->
+            assertEquals(
+                listOf(Rank.Jack, Rank.Ten, Rank.Nine, Rank.Eight, Rank.Seven),
+                state.tableau[3].filter { it.faceUp }.map { it.rank }
+            )
+            assertTrue(
+                best !is Move.TableauToTableau ||
+                    best.fromColumn != 3 ||
+                    best.toColumn != 1
+            )
+        }
+        check(19) { state, best ->
+            assertEquals(Suit.Spades, state.tableau[4].last().suit)
+            assertTrue(best !is Move.TableauToFoundation || best.fromColumn != 4)
+        }
+        check(20) { state, best ->
+            assertEquals(Suit.Spades, state.tableau[1].last().suit)
+            assertTrue(best !is Move.TableauToFoundation || best.fromColumn != 1)
+        }
+        check(23) { state, best ->
+            assertEquals(Rank.Eight, state.wasteTop()?.rank)
+            assertEquals(Suit.Spades, state.wasteTop()?.suit)
+            assertTrue(best !is Move.WasteToFoundation)
+        }
     }
 
     @Test
