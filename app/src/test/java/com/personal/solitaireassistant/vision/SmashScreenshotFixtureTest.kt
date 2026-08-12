@@ -856,6 +856,60 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
+    fun latestBlackSuitBoardsKeepClubsOutOfSpadeFoundations() {
+        data class Fixture(
+            val path: String,
+            val column: Int,
+            val rank: Rank
+        )
+
+        listOf(
+            Fixture("screenshots/device_live_36.png", 2, Rank.Four),
+            Fixture("screenshots/device_live_37.png", 4, Rank.Four),
+            Fixture("screenshots/device_live_38.png", 6, Rank.Three)
+        ).forEach { fixture ->
+            val bitmap = load(fixture.path)
+            val detector = GameStateDetector(context, minConfidence = 0.55f)
+            val detection = detector.detect(bitmap)
+            val state = requireNotNull(detection.state)
+            val card = state.tableau[fixture.column].last()
+            val best = MoveSelector.bestMove(state)?.move
+
+            assertEquals(fixture.path, fixture.rank, card.rank)
+            assertEquals(fixture.path, Suit.Clubs, card.suit)
+            assertTrue(
+                fixture.path,
+                best !is Move.TableauToFoundation ||
+                    best.fromColumn != fixture.column
+            )
+
+            detector.release()
+            bitmap.recycle()
+        }
+    }
+
+    @Test
+    fun thirtyNinthLiveBoardDoesNotMoveBlackTenOntoBlackQueen() {
+        val bitmap = load("screenshots/device_live_39.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+        val best = MoveSelector.bestMove(state)?.move
+
+        assertEquals(Rank.Queen, state.tableau[3].last().rank)
+        assertEquals(Suit.Spades, state.tableau[3].last().suit)
+        assertEquals(Rank.Ten, state.tableau[6].last().rank)
+        assertEquals(Suit.Spades, state.tableau[6].last().suit)
+        assertTrue(
+            best !is Move.TableauToTableau ||
+                best.fromColumn != 6 ||
+                best.toColumn != 3
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
     fun latestIssueScreenshotsRejectFalseMoves() {
         fun check(index: Int, assertion: (com.personal.solitaireassistant.game.GameState, Move?) -> Unit) {
             val path = "screenshots/issue_unknown_${index.toString().padStart(2, '0')}.png"
