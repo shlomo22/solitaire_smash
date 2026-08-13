@@ -71,6 +71,7 @@ class AnalysisPipeline(
     fun updateSettings(settings: AssistantSettings) {
         settingsRef.set(settings)
         detector.updateMinConfidence(settings.minMatchConfidence)
+        detector.setIgnoreUserTemplates(settings.ignoreUserTemplates)
     }
 
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {

@@ -14,22 +14,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.solitaireassistant.capture.CaptureService
 import com.personal.solitaireassistant.ui.SettingsScreen
 import com.personal.solitaireassistant.ui.SettingsViewModel
 import com.personal.solitaireassistant.ui.SettingsViewModelFactory
-import com.personal.solitaireassistant.ui.TemplateLabScreen
 import com.personal.solitaireassistant.ui.theme.SolitaireAssistantTheme
-
-private enum class AppScreen {
-    Settings,
-    TemplateLab
-}
 
 class MainActivity : ComponentActivity() {
     private val viewModel: SettingsViewModel by viewModels {
@@ -60,29 +51,23 @@ class MainActivity : ComponentActivity() {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
             val serviceStatus by CaptureService.status.collectAsStateWithLifecycle()
             val statusMessage by CaptureService.statusMessage.collectAsStateWithLifecycle()
-            var screen by remember { mutableStateOf(AppScreen.Settings) }
             SolitaireAssistantTheme {
-                when (screen) {
-                    AppScreen.Settings -> SettingsScreen(
-                        state = uiState,
-                        serviceStatus = serviceStatus,
-                        statusMessage = statusMessage,
-                        openCvReady = (application as SolitaireAssistantApp).openCvReady,
-                        canDrawOverlays = Settings.canDrawOverlays(this),
-                        analysisLogPath = CaptureService.analysisLogPath(),
-                        onOverlayColor = viewModel::setOverlayColor,
-                        onInterval = viewModel::setCaptureInterval,
-                        onConfidence = viewModel::setConfidence,
-                        onDebugFrames = viewModel::setDebugFrames,
-                        onOpenOverlaySettings = ::openOverlaySettings,
-                        onOpenTemplateLab = { screen = AppScreen.TemplateLab },
-                        onStart = ::onStartClicked,
-                        onStop = { CaptureService.stop(this) }
-                    )
-                    AppScreen.TemplateLab -> TemplateLabScreen(
-                        onBack = { screen = AppScreen.Settings }
-                    )
-                }
+                SettingsScreen(
+                    state = uiState,
+                    serviceStatus = serviceStatus,
+                    statusMessage = statusMessage,
+                    openCvReady = (application as SolitaireAssistantApp).openCvReady,
+                    canDrawOverlays = Settings.canDrawOverlays(this),
+                    analysisLogPath = CaptureService.analysisLogPath(),
+                    onOverlayColor = viewModel::setOverlayColor,
+                    onInterval = viewModel::setCaptureInterval,
+                    onConfidence = viewModel::setConfidence,
+                    onDebugFrames = viewModel::setDebugFrames,
+                    onIgnoreUserTemplates = viewModel::setIgnoreUserTemplates,
+                    onOpenOverlaySettings = ::openOverlaySettings,
+                    onStart = ::onStartClicked,
+                    onStop = { CaptureService.stop(this) }
+                )
             }
         }
     }

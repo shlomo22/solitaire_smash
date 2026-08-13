@@ -53,8 +53,8 @@ fun SettingsScreen(
     onInterval: (Long) -> Unit,
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
+    onIgnoreUserTemplates: (Boolean) -> Unit,
     onOpenOverlaySettings: () -> Unit,
-    onOpenTemplateLab: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -157,6 +157,24 @@ fun SettingsScreen(
                         onCheckedChange = onDebugFrames
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Ignore Lab templates")
+                        Text(
+                            "Use bundled templates only; skip crops saved in Template Lab.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = settings.ignoreUserTemplates,
+                        onCheckedChange = onIgnoreUserTemplates
+                    )
+                }
             }
         }
 
@@ -167,13 +185,6 @@ fun SettingsScreen(
             ) {
                 Text("Grant overlay permission")
             }
-        }
-
-        OutlinedButton(
-            onClick = onOpenTemplateLab,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Open Template Lab")
         }
 
         Row(
@@ -199,9 +210,8 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             "Test order: 1) Start capture over Solitaire Smash. " +
-                "2) Open Template Lab to save rank/suit crops (hints pause). " +
-                "3) Run live overlay and tap Cancel on wrong hints. " +
-                "4) Pull analysis log via adb if needed.",
+                "2) Run live overlay and tap Cancel on wrong hints. " +
+                "3) Pull analysis log via adb if needed.",
             style = MaterialTheme.typography.bodySmall
         )
     }

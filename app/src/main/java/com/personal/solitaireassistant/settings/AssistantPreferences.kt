@@ -21,7 +21,9 @@ data class AssistantSettings(
     val overlayColorArgb: Int = Color(0xE6000000.toInt()).toArgb(),
     val captureIntervalMs: Long = 300L,
     val minMatchConfidence: Float = 0.72f,
-    val debugSaveFrames: Boolean = false
+    val debugSaveFrames: Boolean = false,
+    /** When true, recognition ignores user-captured Lab templates in files/templates/. */
+    val ignoreUserTemplates: Boolean = false
 ) {
     val overlayColor: Color get() = Color(overlayColorArgb)
 }
@@ -32,6 +34,7 @@ class AssistantPreferences(private val context: Context) {
         val captureIntervalMs = longPreferencesKey("capture_interval_ms")
         val minMatchConfidence = floatPreferencesKey("min_match_confidence")
         val debugSaveFrames = intPreferencesKey("debug_save_frames")
+        val ignoreUserTemplates = intPreferencesKey("ignore_user_templates")
     }
 
     val settings: Flow<AssistantSettings> = context.dataStore.data.map { prefs ->
@@ -50,7 +53,8 @@ class AssistantPreferences(private val context: Context) {
             },
             minMatchConfidence = prefs[Keys.minMatchConfidence]
                 ?: AssistantSettings().minMatchConfidence,
-            debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1
+            debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1,
+            ignoreUserTemplates = (prefs[Keys.ignoreUserTemplates] ?: 0) == 1
         )
     }
 
@@ -73,6 +77,12 @@ class AssistantPreferences(private val context: Context) {
     suspend fun updateDebugSaveFrames(enabled: Boolean) {
         context.dataStore.edit {
             it[Keys.debugSaveFrames] = if (enabled) 1 else 0
+        }
+    }
+
+    suspend fun updateIgnoreUserTemplates(enabled: Boolean) {
+        context.dataStore.edit {
+            it[Keys.ignoreUserTemplates] = if (enabled) 1 else 0
         }
     }
 }

@@ -46,6 +46,10 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.updateDebugSaveFrames(enabled) }
     }
 
+    fun setIgnoreUserTemplates(enabled: Boolean) {
+        viewModelScope.launch { preferences.updateIgnoreUserTemplates(enabled) }
+    }
+
     fun setTransientMessage(message: String) {
         transient.value = message
     }

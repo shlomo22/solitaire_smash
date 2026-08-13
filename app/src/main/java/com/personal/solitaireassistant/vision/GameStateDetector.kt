@@ -29,6 +29,10 @@ class GameStateDetector(
         recognizer.minConfidence = value.coerceIn(0.4f, 0.95f)
     }
 
+    fun setIgnoreUserTemplates(value: Boolean) {
+        recognizer.ignoreUserTemplates = value
+    }
+
     fun reloadTemplates() {
         recognizer.reloadTemplates()
     }
