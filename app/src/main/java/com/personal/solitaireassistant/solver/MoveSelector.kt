@@ -17,14 +17,36 @@ object MoveSelector {
         avoidStates: Collection<GameState> = emptyList(),
         rejectedFingerprints: Set<String> = emptySet()
     ): ScoredMove? {
+        val rejectedCardMoves = rejectedFingerprints.filterNot {
+            MoveFingerprint.isStockFallback(it)
+        }.toSet()
         val ranked = scoreAll(state)
-            .filter { MoveFingerprint.of(state, it.move) !in rejectedFingerprints }
+            .filter { MoveFingerprint.of(state, it.move) !in rejectedCardMoves }
             .sortedWith(
                 compareBy<ScoredMove> { it.score }
                     .thenBy { it.move.label }
                     .reversed()
             )
         if (ranked.isEmpty()) return null
+
+        val productive = ranked.filter { candidate ->
+            when (val move = candidate.move) {
+                is Move.DrawStock, Move.RecycleWaste -> false
+                else -> {
+                    val next = KlondikeRules.apply(state, move) ?: return@filter false
+                    isProductiveMove(state, next, move)
+                }
+            }
+        }
+        val stockMoves = ranked.filter {
+            it.move is Move.DrawStock || it.move is Move.RecycleWaste
+        }
+        val candidates = when {
+            productive.isNotEmpty() -> productive
+            stockMoves.isNotEmpty() -> stockMoves
+            else -> emptyList()
+        }
+        if (candidates.isEmpty()) return null
 
         val pick = { list: List<ScoredMove> ->
             if (avoidStates.isEmpty()) {
@@ -38,7 +60,12 @@ object MoveSelector {
                 }
             }
         }
-        return pick(ranked)
+        val chosen = pick(candidates)
+        if (chosen != null) return chosen
+        // If every card hint was rejected/avoided, still point at the stock.
+        return ranked.firstOrNull {
+            it.move is Move.DrawStock || it.move is Move.RecycleWaste
+        }
     }
 
     fun scoreAll(state: GameState): List<ScoredMove> {
@@ -114,6 +141,16 @@ object MoveSelector {
                 score += 25.0
                 reasons += "clear-waste"
             }
+            is Move.FoundationToTableau -> {
+                // Useful when a low foundation card unlocks tableau play; otherwise soft.
+                score += 12.0
+                reasons += "foundation-to-tableau"
+                val card = before.foundations[move.fromFoundation].lastOrNull()
+                if (card?.rank == Rank.Two || card?.rank == Rank.Ace) {
+                    score += 20.0
+                    reasons += "park-low-foundation"
+                }
+            }
             Move.DrawStock -> {
                 score += 5.0
                 reasons += "draw"
@@ -123,12 +160,18 @@ object MoveSelector {
                 } else if (hasProductiveTableauMove(before)) {
                     score -= 120.0
                     reasons += "defer-draw-for-tableau"
+                } else if (hasWastePlay(before)) {
+                    score -= 100.0
+                    reasons += "defer-draw-for-waste"
                 }
             }
             Move.RecycleWaste -> {
                 score -= 15.0
                 reasons += "recycle"
-                if (hasProductiveTableauMove(before) || hasTableauRevealMove(before)) {
+                if (hasProductiveTableauMove(before) ||
+                    hasTableauRevealMove(before) ||
+                    hasWastePlay(before)
+                ) {
                     score -= 80.0
                     reasons += "defer-recycle-for-tableau"
                 }
@@ -229,6 +272,28 @@ object MoveSelector {
                 else -> false
             }
         }
+
+    private fun hasWastePlay(state: GameState): Boolean =
+        MoveGenerator.generate(state).any {
+            it is Move.WasteToTableau || it is Move.WasteToFoundation
+        }
+
+    /**
+     * A hint-worthy move exposes a hidden card, clears a tableau column, or
+     * advances / clears waste or foundation piles.
+     */
+    private fun isProductiveMove(
+        before: GameState,
+        after: GameState,
+        move: Move
+    ): Boolean = when (move) {
+        is Move.TableauToFoundation, is Move.WasteToFoundation, is Move.WasteToTableau,
+        is Move.FoundationToTableau -> true
+        is Move.TableauToTableau ->
+            after.hiddenTableauCount() < before.hiddenTableauCount() ||
+                after.tableau.count { it.isEmpty() } > before.tableau.count { it.isEmpty() }
+        else -> false
+    }
 
     /**
      * Moving the top card off a column whose card below is already face-up never

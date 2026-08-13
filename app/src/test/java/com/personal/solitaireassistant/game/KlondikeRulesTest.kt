@@ -59,7 +59,7 @@ class KlondikeRulesTest {
             stock = emptyList(),
             waste = emptyList()
         )
-        assertFalse(KlondikeRules.isLegal(state, Move.TableauToTableau(0, 0, 1)))
+        assertFalse(KlondikeRules.legalMoves(state).any { it is Move.TableauToTableau })
     }
 
     @Test
@@ -74,7 +74,7 @@ class KlondikeRulesTest {
             stock = emptyList(),
             waste = emptyList()
         )
-        assertFalse(KlondikeRules.isLegal(state, Move.TableauToTableau(0, 0, 1)))
+        assertFalse(KlondikeRules.legalMoves(state).any { it is Move.TableauToTableau })
     }
 
     @Test
@@ -239,5 +239,26 @@ class KlondikeRulesTest {
         )
         assertFalse(KlondikeRules.isLegal(state, Move.TableauToFoundation(0, 2)))
         assertTrue(clubs.canStackOnTableau(Card(Rank.Five, Suit.Hearts)))
+    }
+
+    @Test
+    fun foundationTwoCanMoveOntoTableauThree() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Three, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Hearts), c(Rank.Two, Suit.Hearts)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val move = Move.FoundationToTableau(0, 0)
+        assertTrue(KlondikeRules.isLegal(state, move))
+        val next = requireNotNull(KlondikeRules.apply(state, move))
+        assertEquals(Rank.Ace, next.foundations[0].last().rank)
+        assertEquals(Rank.Two, next.tableau[0].last().rank)
     }
 }

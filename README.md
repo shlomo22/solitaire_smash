@@ -19,12 +19,13 @@ Personal Android overlay helper for Solitaire Smash (draw-3 Klondike).
 Use JDK 17 (a portable Temurin copy can live under `.jdk/`):
 
 ```bash
-set JAVA_HOME=.\.jdk\jdk-17.0.20+8
 gradlew.bat :app:assembleDebug
 gradlew.bat :app:testDebugUnitTest
 ```
 
-Open the project in Android Studio and set the Gradle JDK to 17 if Studio defaults to a newer JBR.
+`gradlew` auto-uses `.jdk/jdk-17.0.20+8` when `JAVA_HOME` is unset.
+
+**Android Studio:** Settings → Build, Execution, Deployment → Build Tools → Gradle → **Gradle JDK** → Add JDK → select `.jdk\jdk-17.0.20+8` in this project (do not use the bundled JBR 25).
 
 ## Screenshots & templates
 Device screenshots from Solitaire Smash live in `app/src/test/resources/screenshots/` (`board_a`…`board_d`).

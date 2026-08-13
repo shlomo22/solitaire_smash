@@ -46,6 +46,10 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.updateDebugSaveFrames(enabled) }
     }
 
+    fun setRecognitionReviewMode(enabled: Boolean) {
+        viewModelScope.launch { preferences.updateRecognitionReviewMode(enabled) }
+    }
+
     fun setTransientMessage(message: String) {
         transient.value = message
     }

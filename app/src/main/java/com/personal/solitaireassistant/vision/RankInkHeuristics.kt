@@ -153,4 +153,54 @@ object RankInkHeuristics {
             else -> null
         }
     }
+
+    /**
+     * Secondary Two↔Eight check: 8 keeps ink in both upper and lower lobes;
+     * 2 is markedly bottom-heavy with a weaker top bar.
+     */
+    fun looksLikeEightMoreThanTwo(bitmap: Bitmap): Boolean {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w < 24 || h < 24) return false
+        val left = (w * 0.18f).toInt()
+        val top = (h * 0.28f).toInt()
+        val right = (w * 0.82f).toInt()
+        val bottom = (h * 0.78f).toInt()
+        val rw = (right - left).coerceAtLeast(8)
+        val rh = (bottom - top).coerceAtLeast(8)
+        val step = max(1, min(rw, rh) / 48)
+        val rows = IntArray((rh + step - 1) / step)
+        var ink = 0
+        var yy = top
+        var rowIdx = 0
+        while (yy < bottom) {
+            var xx = left
+            while (xx < right) {
+                val c = bitmap.getPixel(xx, yy)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (SmashColorAnalyzer.isRedInk(r, g, b) ||
+                    SmashColorAnalyzer.isBlackInk(r, g, b)
+                ) {
+                    ink++
+                    if (rowIdx in rows.indices) rows[rowIdx]++
+                }
+                xx += step
+            }
+            yy += step
+            rowIdx++
+        }
+        if (ink < 8 || rows.isEmpty()) return false
+        val topBand = rows.take((rows.size * 0.33f).toInt().coerceAtLeast(1)).sum()
+        val midBand = rows.drop((rows.size * 0.33f).toInt())
+            .take((rows.size * 0.34f).toInt().coerceAtLeast(1)).sum()
+        val botBand = rows.takeLast((rows.size * 0.33f).toInt().coerceAtLeast(1)).sum()
+        val sum = (topBand + midBand + botBand).coerceAtLeast(1).toFloat()
+        val topR = topBand / sum
+        val midR = midBand / sum
+        val botR = botBand / sum
+        // 8: balanced lobes + meaningful mid. 2: bottom dominates.
+        return abs(topR - botR) < 0.14f && midR > 0.22f && botR < topR + 0.10f
+    }
 }

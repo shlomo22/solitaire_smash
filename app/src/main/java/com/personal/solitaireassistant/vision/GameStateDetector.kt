@@ -128,6 +128,8 @@ class GameStateDetector(
             )
             val foundationCard = cardFromHit(hit)?.let { card ->
                 resolveBlackSuit(bitmap, region, card)
+            }?.let { card ->
+                refineFoundationRank(bitmap, region, card)
             }
             foundations[index] = listOfNotNull(foundationCard)
             diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard ?: hit.card}"
@@ -278,8 +280,11 @@ class GameStateDetector(
                 val r = (color shr 16) and 0xFF
                 val g = (color shr 8) and 0xFF
                 val b = color and 0xFF
-                if (SmashColorAnalyzer.isCardWhite(r, g, b) ||
-                    SmashColorAnalyzer.isRedInk(r, g, b)
+                if (SmashColorAnalyzer.isHintArrowGreen(r, g, b)) {
+                    // skip overlay
+                } else if (SmashColorAnalyzer.isCardWhite(r, g, b) ||
+                    SmashColorAnalyzer.isRedInk(r, g, b) ||
+                    SmashColorAnalyzer.isBlackInk(r, g, b)
                 ) {
                     cardPixels++
                 }
@@ -422,6 +427,38 @@ class GameStateDetector(
                 return if (tight.confidence >= legacy.confidence) tight else legacy
         }
 
+        // Exact front-card crop + ink shape beat a wider legacy crop on known
+        // confused pairs (7/9 especially — Nine is over-templated).
+        val ink = recognizer.rankShapeGuess(bitmap, tightRegion)
+        if (ink != null &&
+            ink.confidence >= 0.45f &&
+            isConfusedWasteRankPair(tightCard.rank, legacyCard.rank) &&
+            (ink.rank == tightCard.rank || ink.rank == legacyCard.rank)
+        ) {
+            val preferTight = ink.rank == tightCard.rank
+            val region = if (preferTight) tightRegion else legacyRegion
+            val baseSuit = if (preferTight) tightCard.suit else legacyCard.suit
+            var resolved = Card(
+                ink.rank,
+                baseSuit,
+                faceUp = true,
+                known = true,
+                recognized = true
+            )
+            resolved = resolveBlackSuit(bitmap, region, resolved, suitScores)
+            resolved = recognizer.refineAmbiguousRank(bitmap, region, resolved)
+            val tag = if (preferTight) "tight" else "legacy"
+            return RecognitionHit(
+                card = resolved,
+                confidence = maxOf(ink.confidence, if (preferTight) tight.confidence else legacy.confidence),
+                isFaceDown = false,
+                isEmpty = false,
+                diagnostic = "waste-resolved-$tag-${resolved.rank.name}-${resolved.suit.name}@" +
+                    "%.2f".format(ink.confidence),
+                inferredRed = resolved.suit.isRed
+            )
+        }
+
         val ranks = setOf(tightCard.rank, legacyCard.rank)
         val tightScores = recognizer.exactRankTemplateScores(bitmap, tightRegion, ranks)
         val legacyScores = recognizer.exactRankTemplateScores(bitmap, legacyRegion, ranks)
@@ -459,6 +496,49 @@ class GameStateDetector(
                 "%.2f".format(bestEntry.value),
             inferredRed = resolved.suit.isRed
         )
+    }
+
+    /**
+     * Early foundations are almost always A–4. High ranks that barely beat Ace/Two
+     * are usually Nine/Seven template noise on low foundation cards.
+     */
+    private fun refineFoundationRank(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card
+    ): Card {
+        if (!card.known || !card.recognized) return card
+        if (card.rank.value <= Rank.Four.value) return card
+        val suspiciousHigh = card.rank.value in Rank.Seven.value..Rank.Jack.value
+        if (!suspiciousHigh) return card
+        val candidates = setOf(Rank.Ace, Rank.Two, Rank.Three, Rank.Four, card.rank)
+        val scores = recognizer.exactRankTemplateScores(bitmap, region, candidates)
+        val current = scores[card.rank] ?: return card
+        val ace = scores[Rank.Ace] ?: 0f
+        val two = scores[Rank.Two] ?: 0f
+        val three = scores[Rank.Three] ?: 0f
+        val four = scores[Rank.Four] ?: 0f
+        // Prefer Ace when it is competitive — common Ace↔Nine confusion.
+        if (ace >= 0.52f && current - ace <= 0.12f) {
+            return card.copy(rank = Rank.Ace)
+        }
+        val bestLow = listOf(
+            Rank.Two to two,
+            Rank.Three to three,
+            Rank.Four to four
+        ).maxByOrNull { it.second } ?: return card
+        if (bestLow.second >= 0.55f && current - bestLow.second <= 0.10f) {
+            return card.copy(rank = bestLow.first)
+        }
+        return card
+    }
+
+    private fun isConfusedWasteRankPair(a: Rank, b: Rank): Boolean {
+        val pair = setOf(a, b)
+        return pair == setOf(Rank.Seven, Rank.Nine) ||
+            pair == setOf(Rank.Two, Rank.Eight) ||
+            pair == setOf(Rank.Ace, Rank.Nine) ||
+            pair == setOf(Rank.Five, Rank.Six)
     }
 
     /**

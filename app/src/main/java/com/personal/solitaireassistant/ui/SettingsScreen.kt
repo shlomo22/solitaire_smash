@@ -53,6 +53,7 @@ fun SettingsScreen(
     onInterval: (Long) -> Unit,
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
+    onRecognitionReview: (Boolean) -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onOpenTemplateLab: () -> Unit,
     onStart: () -> Unit,
@@ -157,6 +158,33 @@ fun SettingsScreen(
                         onCheckedChange = onDebugFrames
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Recognition Review")
+                        Text(
+                            "Show card codes instead of arrows; Flag Wrong saves samples",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = settings.recognitionReviewMode,
+                        onCheckedChange = onRecognitionReview
+                    )
+                }
+
+                if (settings.recognitionReviewMode) {
+                    Text(
+                        "Samples: files/review_samples/ — " +
+                            "adb exec-out run-as com.personal.solitaireassistant " +
+                            "tar -c files/review_samples",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
 
@@ -201,9 +229,10 @@ fun SettingsScreen(
             "Start captures the whole screen (no app picker) and opens Solitaire Smash; " +
                 "Android still requires one tap to allow screen capture. " +
                 "Test order: 1) Start capture over Solitaire Smash. " +
-                "2) Open Template Lab to save rank/suit crops (hints pause). " +
-                "3) Run live overlay and tap Cancel on wrong hints. " +
-                "4) Pull analysis log via adb if needed.",
+                "2) Optional: enable Recognition Review to check codes and Flag Wrong. " +
+                "3) Open Template Lab to save rank/suit crops (hints pause). " +
+                "4) Run live overlay and tap Cancel on wrong hints. " +
+                "5) Pull analysis log or review_samples via adb if needed.",
             style = MaterialTheme.typography.bodySmall
         )
     }

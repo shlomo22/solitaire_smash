@@ -116,6 +116,10 @@ class UserTemplateStore(context: Context) {
         const val MAX_RANK_CORNER_PER_RANK = 8
         const val MAX_SUIT_BADGE_PER_SUIT = 5
         const val MAX_RANK_GLYPH_PER_RANK = 5
-        val GLYPH_RANKS = setOf(Rank.Jack, Rank.Queen, Rank.King)
+        val GLYPH_RANKS = setOf(
+            Rank.Two, Rank.Three, Rank.Four, Rank.Five, Rank.Six,
+            Rank.Seven, Rank.Eight, Rank.Nine, Rank.Ten,
+            Rank.Jack, Rank.Queen, Rank.King
+        )
     }
 }

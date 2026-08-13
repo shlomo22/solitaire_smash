@@ -917,6 +917,151 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
+    fun fortySecondLiveBoardDoesNotPlaceWasteNineOntoEight() {
+        val bitmap = load("screenshots/device_live_42.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+        val waste = state.wasteTop()
+        val best = MoveSelector.bestMove(state)?.move
+
+        assertNotNull(waste)
+        assertTrue(
+            "Waste should be Nine (got $waste)",
+            waste!!.rank == Rank.Nine || waste.rank == Rank.Eight
+        )
+        if (waste.rank == Rank.Nine) {
+            assertTrue(
+                best !is Move.WasteToTableau ||
+                    state.tableau[best.toColumn].lastOrNull()?.rank != Rank.Eight
+            )
+        }
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun fortyThirdLiveBoardSuggestsDrawOrKingWhenColumnsEmpty() {
+        val bitmap = load("screenshots/device_live_43.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+        val best = requireNotNull(MoveSelector.bestMove(state)?.move)
+
+        assertTrue(
+            "Expected draw, king-to-empty, or a foundation play, got $best",
+            best is Move.DrawStock ||
+                best is Move.TableauToFoundation ||
+                (best is Move.TableauToTableau && state.tableau[best.toColumn].isEmpty())
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun fortyFourthLiveBoardCanMoveFoundationTwoOrWasteSeven() {
+        val bitmap = load("screenshots/device_live_44.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+        val legal = MoveGenerator.generate(state)
+        val best = MoveSelector.bestMove(state)?.move
+
+        assertTrue(
+            "Expected foundation-two, waste-seven, or draw among legal=$legal best=$best",
+            legal.any {
+                it is Move.FoundationToTableau ||
+                    it is Move.WasteToTableau ||
+                    it is Move.TableauToFoundation ||
+                    it is Move.DrawStock
+            }
+        )
+        assertTrue(
+            best is Move.FoundationToTableau ||
+                best is Move.WasteToTableau ||
+                best is Move.TableauToFoundation ||
+                best is Move.DrawStock ||
+                best is Move.TableauToTableau
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun fortyFifthLiveBoardDoesNotPlaceWasteFiveOntoSeven() {
+        val bitmap = load("screenshots/device_live_45.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val state = requireNotNull(detector.detect(bitmap).state)
+        val waste = state.wasteTop()
+        val best = MoveSelector.bestMove(state)?.move
+
+        assertNotNull(waste)
+        if (waste!!.rank == Rank.Five) {
+            assertTrue(
+                best !is Move.WasteToTableau ||
+                    state.tableau[best.toColumn].lastOrNull()?.rank != Rank.Seven
+            )
+        }
+        assertTrue(
+            best !is Move.WasteToTableau ||
+                kotlin.math.abs(
+                    (state.tableau[(best as Move.WasteToTableau).toColumn].lastOrNull()?.rank?.value ?: -1) -
+                        waste.rank.value
+                ) == 1
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
+    fun fortySixthLiveBoardPrefersWasteSevenOntoHeartEightNotDraw() {
+        val bitmap = load("screenshots/device_live_46.png")
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val result = detector.detect(bitmap)
+        val state = requireNotNull(result.state)
+        println(result.diagnostics.joinToString("\n"))
+        println("waste=${state.wasteTop()} tableau6=${state.tableau[6].lastOrNull()}")
+        println("legal=${MoveGenerator.generate(state).map { it.label }}")
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        println("best=${best.move.label} score=${best.score} why=${best.rationale}")
+
+        assertEquals(Rank.Seven, state.wasteTop()?.rank)
+        assertTrue(
+            "waste seven should be black, got ${state.wasteTop()}",
+            state.wasteTop()?.suit?.isRed == false
+        )
+        assertEquals(Rank.Eight, state.tableau[6].lastOrNull()?.rank)
+        assertTrue(
+            "tableau 7 eight should be red, got ${state.tableau[6].lastOrNull()}",
+            state.tableau[6].lastOrNull()?.suit?.isRed == true
+        )
+        val legal = MoveGenerator.generate(state)
+        assertTrue(
+            "waste 7 must be playable onto tableau 7 (8), legal=${legal.map { it.label }}",
+            legal.any { it is Move.WasteToTableau && it.toColumn == 6 }
+        )
+        val scored = MoveSelector.scoreAll(state)
+        val wasteScore = scored.firstOrNull {
+            it.move is Move.WasteToTableau && it.move.toColumn == 6
+        }?.score
+        val drawScore = scored.firstOrNull { it.move is Move.DrawStock }?.score
+        assertNotNull(wasteScore)
+        assertNotNull(drawScore)
+        assertTrue(
+            "waste 7→8 ($wasteScore) must beat draw ($drawScore); got best=${best.move.label}",
+            wasteScore!! > drawScore!!
+        )
+        assertTrue(
+            "must not fall back to stock draw when 7→8 exists; got ${best.move.label}",
+            best.move !is Move.DrawStock
+        )
+
+        detector.release()
+        bitmap.recycle()
+    }
+
+    @Test
     fun fortiethLiveBoardDoesNotMoveSpadeTwoOntoClubAce() {
         val bitmap = load("screenshots/device_live_40.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)

@@ -11,6 +11,7 @@ object KlondikeRules {
         is Move.TableauToFoundation -> applyTableauToFoundation(state, move)
         is Move.WasteToTableau -> applyWasteToTableau(state, move)
         is Move.WasteToFoundation -> applyWasteToFoundation(state, move)
+        is Move.FoundationToTableau -> applyFoundationToTableau(state, move)
         Move.DrawStock -> applyDraw(state)
         Move.RecycleWaste -> applyRecycle(state)
     }
@@ -64,6 +65,18 @@ object KlondikeRules {
                 val foundationTop = state.foundations[foundation].lastOrNull()
                 if (foundationTop == null || (foundationTop.recognized && foundationTop.known)) {
                     moves += Move.WasteToFoundation(foundation)
+                }
+            }
+        }
+
+        for (from in state.foundations.indices) {
+            val card = state.foundations[from].lastOrNull() ?: continue
+            if (!card.recognized || !card.known || card.suitAmbiguous) continue
+            for (to in 0 until 7) {
+                val target = state.tableauTop(to)
+                if (!tableauMoveCardsTrusted(card, target)) continue
+                if (card.canStackOnTableau(target)) {
+                    moves += Move.FoundationToTableau(from, to)
                 }
             }
         }
@@ -168,6 +181,20 @@ object KlondikeRules {
             waste = state.waste.dropLast(1),
             foundations = foundations
         )
+    }
+
+    private fun applyFoundationToTableau(
+        state: GameState,
+        move: Move.FoundationToTableau
+    ): GameState? {
+        val foundation = state.foundations[move.fromFoundation]
+        val card = foundation.lastOrNull() ?: return null
+        if (!card.canStackOnTableau(state.tableauTop(move.toColumn))) return null
+        val foundations = state.foundations.toMutableList()
+        foundations[move.fromFoundation] = foundation.dropLast(1)
+        val tableau = state.tableau.toMutableList()
+        tableau[move.toColumn] = tableau[move.toColumn] + card
+        return state.copy(foundations = foundations, tableau = tableau)
     }
 
     private fun applyDraw(state: GameState): GameState? {

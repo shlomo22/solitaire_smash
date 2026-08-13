@@ -45,10 +45,15 @@ class AnalysisPipeline(
     private var lastStableState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
     private var templateLabMode = false
+    private var reviewRecognitionMode = false
+    private var lastReviewFrame: Bitmap? = null
+    private var lastReviewDump: String? = null
+    private val sampleStore = ReviewSampleStore(appContext)
     private val _labSnapshot = MutableStateFlow<LabSnapshot?>(null)
     val labSnapshot: StateFlow<LabSnapshot?> = _labSnapshot.asStateFlow()
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
+    val reviewSamplesPath: String get() = sampleStore.pathForDisplay()
 
     fun setTemplateLabMode(enabled: Boolean) {
         templateLabMode = enabled
@@ -57,6 +62,7 @@ class AnalysisPipeline(
             // which recycles it on the main thread. Recycling here races with reads.
             _labSnapshot.value = null
         } else {
+            overlayController.hideReviewStrip()
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
             lastSuggestionSignature = null
@@ -70,12 +76,24 @@ class AnalysisPipeline(
     fun detector(): GameStateDetector = detector
 
     fun updateSettings(settings: AssistantSettings) {
+        val wasReview = reviewRecognitionMode
         settingsRef.set(settings)
         detector.updateMinConfidence(settings.minMatchConfidence)
+        reviewRecognitionMode = settings.recognitionReviewMode
+        if (reviewRecognitionMode && !wasReview) {
+            overlayController.hideArrowTemporarily()
+            lastSuggestion = null
+            lastSuggestionSignature = null
+        } else if (!reviewRecognitionMode && wasReview) {
+            overlayController.hideReviewStrip()
+            recycleReviewFrame()
+            lastReviewDump = null
+        }
     }
 
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
         settingsRef.set(settings)
+        reviewRecognitionMode = settings.recognitionReviewMode
         if (!busy.compareAndSet(false, true)) {
             return
         }
@@ -104,6 +122,10 @@ class AnalysisPipeline(
                 statusSink("Template Lab — frame captured")
                 return
             }
+            if (reviewRecognitionMode) {
+                handleReviewMode(bitmap, detection, cached)
+                return
+            }
             handleDetection(detection, elapsed, bitmap.width, bitmap.height)
         } catch (t: Throwable) {
             Log.e(TAG, "Analysis failed", t)
@@ -112,6 +134,41 @@ class AnalysisPipeline(
             overlayController.hideArrowTemporarily()
         } finally {
             busy.set(false)
+        }
+    }
+
+    /**
+     * Saves the last review frame + recognition dump.
+     * @return sample index or null if nothing to save / write failed
+     */
+    fun flagWrongRecognition(): Int? {
+        val frame = lastReviewFrame
+        val dump = lastReviewDump
+        if (frame == null || frame.isRecycled || dump == null) {
+            statusSink("Nothing to flag yet — wait for a board frame")
+            return null
+        }
+        val copy = try {
+            frame.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (_: Throwable) {
+            null
+        }
+        if (copy == null) {
+            statusSink("Flag failed — frame unavailable")
+            return null
+        }
+        return try {
+            val index = sampleStore.save(copy, dump)
+            if (index != null) {
+                overlayController.setReviewSavedFeedback(index)
+                statusSink("Saved review sample #$index")
+                fileLogger.append("REVIEW_FLAG sample=#$index")
+            } else {
+                statusSink("Failed to save review sample")
+            }
+            index
+        } finally {
+            if (!copy.isRecycled) copy.recycle()
         }
     }
 
@@ -127,20 +184,48 @@ class AnalysisPipeline(
         lastFrameFingerprint = null
         lastDetection = null
         lastStableState = null
+        recycleReviewFrame()
+        lastReviewDump = null
         _labSnapshot.value?.bitmap?.recycle()
         _labSnapshot.value = null
+        overlayController.hideReviewStrip()
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
+    }
+
+    private fun handleReviewMode(bitmap: Bitmap, detection: DetectionResult, cached: Boolean) {
+        if (!cached || lastReviewFrame == null || lastReviewFrame!!.isRecycled) {
+            val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            recycleReviewFrame()
+            lastReviewFrame = copy
+        }
+        lastReviewDump = RecognitionBoardFormatter.dump(detection)
+        val lines = RecognitionBoardFormatter.overlayLines(detection)
+        overlayController.showReviewStrip(lines)
+        statusSink("Review — conf=${"%.2f".format(detection.confidence)}")
+    }
+
+    private fun recycleReviewFrame() {
+        lastReviewFrame?.let { frame ->
+            if (!frame.isRecycled) frame.recycle()
+        }
+        lastReviewFrame = null
     }
 
     fun cancelCurrentHint() {
         val state = lastStableState ?: return
         val suggestion = lastSuggestion ?: return
         val fingerprint = MoveFingerprint.of(state, suggestion.scored.move)
-        sessionRejected += fingerprint
-        rejectedMoveStore.reject(fingerprint)
-        fileLogger.append("REJECTED fingerprint=$fingerprint move=${suggestion.scored.move.label}")
-        statusSink("Rejected hint — showing next move")
+        // Never remember stock draw/recycle as rejected — that leaves the user
+        // with no arrow when every card hint has already been cancelled.
+        if (!MoveFingerprint.isStockFallback(fingerprint)) {
+            sessionRejected += fingerprint
+            rejectedMoveStore.reject(fingerprint)
+            fileLogger.append("REJECTED fingerprint=$fingerprint move=${suggestion.scored.move.label}")
+            statusSink("Rejected hint — showing next move")
+        } else {
+            statusSink("Stock hint kept available")
+        }
         val detection = lastDetection
         if (detection?.state != null && lastSignature != null) {
             refreshSuggestion(detection, lastSignature!!, knownFaceUp = countKnownFaceUp(detection.state))
@@ -317,7 +402,13 @@ class AnalysisPipeline(
         }
         val avoidStates = recentStates.dropLast(1)
         val rejected = rejectedMoveStore.all() + sessionRejected
-        val best = MoveSelector.bestMove(state, avoidStates, rejected)
+        var best = MoveSelector.bestMove(state, avoidStates, rejected)
+        if (best == null) {
+            // Guaranteed stock/recycle arrow whenever the pile still has cards.
+            best = MoveSelector.scoreAll(state).firstOrNull {
+                it.move is Move.DrawStock || it.move is Move.RecycleWaste
+            }
+        }
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
@@ -326,7 +417,8 @@ class AnalysisPipeline(
             // filtered out by avoid-loop / rejected-move memory".
             val legal = MoveGenerator.generate(state)
             val filteredOut = legal.count { move ->
-                MoveFingerprint.of(state, move) in rejected
+                val fp = MoveFingerprint.of(state, move)
+                !MoveFingerprint.isStockFallback(fp) && fp in rejected
             }
             val cause = when {
                 legal.isEmpty() -> "no-legal-moves"
@@ -560,6 +652,10 @@ class AnalysisPipeline(
             }
             is Move.WasteToFoundation -> {
                 pileRegion(PileRef.Waste) to pileRegion(PileRef.Foundation(move.toFoundation))
+            }
+            is Move.FoundationToTableau -> {
+                pileRegion(PileRef.Foundation(move.fromFoundation)) to
+                    pileRegion(PileRef.Tableau(move.toColumn))
             }
             Move.DrawStock -> {
                 val stock = pileRegion(PileRef.Stock)

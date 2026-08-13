@@ -18,6 +18,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import com.personal.solitaireassistant.game.BoardRegion
@@ -119,21 +120,27 @@ class MoveOverlayView @JvmOverloads constructor(
 
 class OverlayController(
     private val context: Context,
-    private val onCancelHint: () -> Unit = {}
+    private val onCancelHint: () -> Unit = {},
+    private val onFlagWrong: () -> Unit = {}
 ) {
     private val windowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var arrowView: MoveOverlayView? = null
     private var cancelButton: TextView? = null
+    private var reviewStrip: LinearLayout? = null
+    private var reviewCodesView: TextView? = null
+    private var flagWrongButton: TextView? = null
     private var colorArgb: Int = 0xE6000000.toInt()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingBlink: Runnable? = null
+    private var reviewActive = false
 
     fun canDrawOverlays(): Boolean =
         Settings.canDrawOverlays(context)
 
     fun showIdle() = runOnMain {
         if (!canDrawOverlays()) return@runOnMain
+        if (reviewActive) return@runOnMain
         ensureArrowView()
         arrowView?.clearArrow()
         hideCancelButton()
@@ -145,7 +152,7 @@ class OverlayController(
     }
 
     fun showMove(from: BoardRegion, to: BoardRegion) = runOnMain {
-        if (!canDrawOverlays()) return@runOnMain
+        if (!canDrawOverlays() || reviewActive) return@runOnMain
         cancelBlink()
         ensureArrowView()
         arrowView?.showArrow(from, to)
@@ -153,7 +160,7 @@ class OverlayController(
     }
 
     fun blinkMove(from: BoardRegion, to: BoardRegion) = runOnMain {
-        if (!canDrawOverlays()) return@runOnMain
+        if (!canDrawOverlays() || reviewActive) return@runOnMain
         cancelBlink()
         ensureArrowView()
         arrowView?.clearArrow()
@@ -172,12 +179,43 @@ class OverlayController(
         hideCancelButton()
     }
 
+    fun showReviewStrip(codesText: String) = runOnMain {
+        if (!canDrawOverlays()) return@runOnMain
+        reviewActive = true
+        cancelBlink()
+        arrowView?.clearArrow()
+        hideCancelButton()
+        ensureReviewStrip()
+        reviewCodesView?.text = codesText
+        reviewStrip?.visibility = View.VISIBLE
+    }
+
+    fun setReviewSavedFeedback(sampleIndex: Int) = runOnMain {
+        flagWrongButton?.text =
+            context.getString(com.personal.solitaireassistant.R.string.overlay_flag_wrong) +
+                " ✓#$sampleIndex"
+        mainHandler.postDelayed({
+            flagWrongButton?.text =
+                context.getString(com.personal.solitaireassistant.R.string.overlay_flag_wrong)
+        }, 1800L)
+    }
+
+    fun hideReviewStrip() = runOnMain {
+        reviewActive = false
+        reviewStrip?.visibility = View.GONE
+    }
+
     fun hide() = runOnMain {
         cancelBlink()
+        reviewActive = false
         removeView(arrowView)
         arrowView = null
         removeView(cancelButton)
         cancelButton = null
+        removeView(reviewStrip)
+        reviewStrip = null
+        reviewCodesView = null
+        flagWrongButton = null
     }
 
     /** Overlay views must only be mutated on the main thread. */
@@ -196,6 +234,54 @@ class OverlayController(
         }
         windowManager.addView(overlay, overlayLayoutParams())
         arrowView = overlay
+    }
+
+    private fun ensureReviewStrip() {
+        if (reviewStrip != null) return
+        val codes = TextView(context).apply {
+            setTextColor(0xFFFFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.START
+            setPadding(dp(12), dp(8), dp(12), dp(4))
+            text = context.getString(com.personal.solitaireassistant.R.string.overlay_review_waiting)
+        }
+        val flag = TextView(context).apply {
+            text = context.getString(com.personal.solitaireassistant.R.string.overlay_flag_wrong)
+            setTextColor(0xFFFFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            background = roundedBackground(0xCCB71C1C.toInt())
+            alpha = 0.95f
+            isClickable = true
+            isFocusable = false
+            setOnClickListener { onFlagWrong() }
+        }
+        val strip = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBackground(0xE6121212.toInt())
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            addView(
+                codes,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+            addView(
+                flag,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+            )
+        }
+        windowManager.addView(strip, reviewStripLayoutParams())
+        reviewStrip = strip
+        reviewCodesView = codes
+        flagWrongButton = flag
     }
 
     private fun showCancelButton() {
@@ -255,6 +341,23 @@ class OverlayController(
         }
     }
 
+    private fun reviewStripLayoutParams(): WindowManager.LayoutParams {
+        val type = overlayWindowType()
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(48)
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            title = "SolitaireReviewOverlay"
+        }
+    }
+
     private fun overlayWindowType(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -274,12 +377,13 @@ class OverlayController(
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
 
-    private fun roundedBackground() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-        cornerRadius = dp(18).toFloat()
-        setColor(0xCC4A148C.toInt())
-        setStroke(dp(1), 0x88FFFFFF.toInt())
-    }
+    private fun roundedBackground(color: Int = 0xCC4A148C.toInt()) =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(18).toFloat()
+            setColor(color)
+            setStroke(dp(1), 0x88FFFFFF.toInt())
+        }
 
     private fun cancelBlink() {
         pendingBlink?.let(mainHandler::removeCallbacks)

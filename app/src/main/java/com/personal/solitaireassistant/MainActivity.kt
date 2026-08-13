@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
                         onInterval = viewModel::setCaptureInterval,
                         onConfidence = viewModel::setConfidence,
                         onDebugFrames = viewModel::setDebugFrames,
+                        onRecognitionReview = viewModel::setRecognitionReviewMode,
                         onOpenOverlaySettings = ::openOverlaySettings,
                         onOpenTemplateLab = { screen = AppScreen.TemplateLab },
                         onStart = ::onStartClicked,

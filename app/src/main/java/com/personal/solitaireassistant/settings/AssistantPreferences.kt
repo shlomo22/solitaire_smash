@@ -21,7 +21,8 @@ data class AssistantSettings(
     val overlayColorArgb: Int = Color(0xE6000000.toInt()).toArgb(),
     val captureIntervalMs: Long = 200L,
     val minMatchConfidence: Float = 0.72f,
-    val debugSaveFrames: Boolean = false
+    val debugSaveFrames: Boolean = false,
+    val recognitionReviewMode: Boolean = false
 ) {
     val overlayColor: Color get() = Color(overlayColorArgb)
 }
@@ -32,6 +33,7 @@ class AssistantPreferences(private val context: Context) {
         val captureIntervalMs = longPreferencesKey("capture_interval_ms")
         val minMatchConfidence = floatPreferencesKey("min_match_confidence")
         val debugSaveFrames = intPreferencesKey("debug_save_frames")
+        val recognitionReviewMode = intPreferencesKey("recognition_review_mode")
     }
 
     val settings: Flow<AssistantSettings> = context.dataStore.data.map { prefs ->
@@ -50,7 +52,8 @@ class AssistantPreferences(private val context: Context) {
             },
             minMatchConfidence = prefs[Keys.minMatchConfidence]
                 ?: AssistantSettings().minMatchConfidence,
-            debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1
+            debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1,
+            recognitionReviewMode = (prefs[Keys.recognitionReviewMode] ?: 0) == 1
         )
     }
 
@@ -73,6 +76,12 @@ class AssistantPreferences(private val context: Context) {
     suspend fun updateDebugSaveFrames(enabled: Boolean) {
         context.dataStore.edit {
             it[Keys.debugSaveFrames] = if (enabled) 1 else 0
+        }
+    }
+
+    suspend fun updateRecognitionReviewMode(enabled: Boolean) {
+        context.dataStore.edit {
+            it[Keys.recognitionReviewMode] = if (enabled) 1 else 0
         }
     }
 }

@@ -126,6 +126,9 @@ class CardRecognizer(
         val crop = crop(bitmap, region) ?: return RecognitionHit(
             null, 0.4f, false, true, "crop-failed"
         )
+        if (exactCardBounds) {
+            neutralizeHintArrowGreen(crop)
+        }
         return try {
             if (openCvReady &&
                 stats.tealRatio > 0.15f &&
@@ -136,8 +139,8 @@ class CardRecognizer(
             }
             val rankHit = bestRankMatch(crop, exactCardBounds)
             val suitHit = bestSuitMatch(crop, inkRed)
-            val glyph = if (rankHit == null) RankInkHeuristics.guess(crop) else null
-            val rank = rankHit ?: glyph?.let { it.rank to it.confidence.coerceAtLeast(minRankScore()) }
+            val inkGuess = RankInkHeuristics.guess(crop)
+            val rank = resolveRankWithInk(rankHit, inkGuess)
             if (suitHit != null && rank != null && rank.second >= minRankScore()) {
                 val conf = minOf(rank.second, suitHit.second).coerceAtMost(1f)
                 RecognitionHit(
@@ -264,6 +267,7 @@ class CardRecognizer(
             if (rank in UserTemplateStore.GLYPH_RANKS) {
                 val glyph = mutableListOf<LongArray>()
                 loadUserBitmaps(userTemplateStore.listRankGlyphFiles(rank), glyph)
+                loadAssetBitmaps(rankGlyphAssetNames(rank), glyph)
                 if (glyph.isNotEmpty()) bitmapRankGlyphTemplates[rank] = glyph
             }
         }
@@ -326,6 +330,9 @@ class CardRecognizer(
     private fun rankCornerAssetNames(rank: Rank): List<String> =
         listAssetNames("rank_corner_${rank.name.lowercase()}")
 
+    private fun rankGlyphAssetNames(rank: Rank): List<String> =
+        listAssetNames("rank_glyph_${rank.name.lowercase()}")
+
     private fun legacyRankAssetNames(rank: Rank): List<String> =
         listAssetNames("rank_${rank.name.lowercase()}")
 
@@ -357,22 +364,55 @@ class CardRecognizer(
                 bitmapRankCornerTemplates,
                 bitmapRankGlyphTemplates
             )
-            if (cornerHit != null) return cornerHit
-            if (exactCardBounds) return null
-            val glyphCrop = TemplateGlyphRegions.cropRankGlyph(cardCrop) ?: return null
-            try {
-                pickBestRank(
-                    cornerSourceMasks(glyphCrop),
-                    UserTemplateStore.GLYPH_RANKS,
-                    bitmapRankCornerTemplates,
-                    bitmapRankGlyphTemplates
-                )
-            } finally {
-                glyphCrop.recycle()
+            val glyphCrop = TemplateGlyphRegions.cropRankGlyph(cardCrop)
+            val glyphHit = if (glyphCrop != null) {
+                try {
+                    val glyphRanks = if (bitmapRankGlyphTemplates.isNotEmpty()) {
+                        UserTemplateStore.GLYPH_RANKS
+                    } else {
+                        Rank.entries.toSet()
+                    }
+                    pickBestRank(
+                        cornerSourceMasks(glyphCrop),
+                        glyphRanks,
+                        bitmapRankCornerTemplates,
+                        bitmapRankGlyphTemplates
+                    )
+                } finally {
+                    glyphCrop.recycle()
+                }
+            } else {
+                null
             }
+            mergeRankHits(cornerHit, glyphHit, exactCardBounds)
         } finally {
             corner.recycle()
         }
+    }
+
+    private fun mergeRankHits(
+        cornerHit: Pair<Rank, Float>?,
+        glyphHit: Pair<Rank, Float>?,
+        exactCardBounds: Boolean
+    ): Pair<Rank, Float>? {
+        if (cornerHit == null) return glyphHit
+        if (glyphHit == null) return cornerHit
+        if (cornerHit.first == glyphHit.first) {
+            return cornerHit.first to maxOf(cornerHit.second, glyphHit.second)
+        }
+        // Center glyph is more reliable for chunky 5–9 Smash ranks when the
+        // corner match is soft or the two disagree by only one step.
+        val closeNeighbors =
+            kotlin.math.abs(cornerHit.first.value - glyphHit.first.value) <= 2
+        val cornerSoft = cornerHit.second < 0.72f
+        if (closeNeighbors &&
+            (glyphHit.second >= cornerHit.second + 0.03f ||
+                (cornerSoft && glyphHit.second >= 0.52f) ||
+                (exactCardBounds && cornerSoft && glyphHit.second >= cornerHit.second - 0.02f))
+        ) {
+            return glyphHit
+        }
+        return cornerHit
     }
 
     private fun bestSuitMatch(
@@ -469,13 +509,15 @@ class CardRecognizer(
     }
 
     /**
-     * Re-scores nearby ranks on the exact card crop when 6–10 glyphs are easily confused.
+     * Re-scores nearby ranks on the exact card crop when glyphs are easily confused.
      * Corrects to the clearly stronger neighbor but keeps the original best guess when
      * the difference is small, so cards still stay recognized and produce hints.
      */
     fun refineAmbiguousRank(bitmap: Bitmap, region: BoardRegion, card: Card): Card {
         if (!card.known || !card.recognized) return card
-        if (card.rank.value !in Rank.Six.value..Rank.Ten.value) return card
+        val twoEight = disambiguateTwoEight(bitmap, region, card)
+        if (twoEight != card) return twoEight
+        if (card.rank.value !in Rank.Five.value..Rank.Ten.value) return card
         val candidates = Rank.entries.filter {
             kotlin.math.abs(it.value - card.rank.value) <= 1
         }.toSet()
@@ -486,8 +528,83 @@ class CardRecognizer(
         if (best.key == card.rank) return card
         val currentScore = scores[card.rank] ?: 0f
         // Only override the original match when the neighbor is clearly stronger.
-        return if (best.value - currentScore >= 0.06f) card.copy(rank = best.key) else card
+        val margin = if (card.rank.value in Rank.Five.value..Rank.Nine.value &&
+            best.key.value in Rank.Five.value..Rank.Nine.value
+        ) {
+            0.035f
+        } else {
+            0.06f
+        }
+        return if (best.value - currentScore >= margin) card.copy(rank = best.key) else card
     }
+
+    /**
+     * Smash 2 and 8 templates are close; prefer the ink-shape guess when scores
+     * are within a small band, otherwise keep the stronger template.
+     */
+    private fun disambiguateTwoEight(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card
+    ): Card {
+        if (card.rank != Rank.Two && card.rank != Rank.Eight) return card
+        val scores = exactRankTemplateScores(bitmap, region, setOf(Rank.Two, Rank.Eight))
+        val two = scores[Rank.Two] ?: 0f
+        val eight = scores[Rank.Eight] ?: 0f
+        if (two < 0.45f && eight < 0.45f) return card
+        val gap = kotlin.math.abs(two - eight)
+        val shape = rankShapeGuess(bitmap, region)
+        // Only promote Two→Eight from shape, never demote a true Eight.
+        if (card.rank == Rank.Two &&
+            gap <= 0.06f &&
+            shape?.rank == Rank.Eight &&
+            shape.confidence >= 0.45f
+        ) {
+            return card.copy(rank = Rank.Eight)
+        }
+        // Narrow Two>Eight ties on red cards: 8 has more closed mid ink.
+        if (card.rank == Rank.Two && gap <= 0.045f && card.suit.isRed) {
+            val crop = crop(bitmap, region) ?: return card
+            return try {
+                if (RankInkHeuristics.looksLikeEightMoreThanTwo(crop)) {
+                    card.copy(rank = Rank.Eight)
+                } else {
+                    card
+                }
+            } finally {
+                crop.recycle()
+            }
+        }
+        return card
+    }
+
+    private fun resolveRankWithInk(
+        rankHit: Pair<Rank, Float>?,
+        inkGuess: RankInkHeuristics.Guess?
+    ): Pair<Rank, Float>? {
+        if (rankHit == null) {
+            return inkGuess?.let { it.rank to it.confidence.coerceAtLeast(minRankScore()) }
+        }
+        if (inkGuess == null || inkGuess.rank == rankHit.first) return rankHit
+        if (inkGuess.confidence < 0.45f) return rankHit
+        // Prefer under-templated ranks when ink agrees — never demote Eight→Two etc.
+        if (rankHit.second < 0.80f && prefersUnderTemplatedInk(rankHit.first, inkGuess.rank)) {
+            return inkGuess.rank to maxOf(inkGuess.confidence, minRankScore())
+        }
+        if (rankHit.second < 0.70f &&
+            kotlin.math.abs(rankHit.first.value - inkGuess.rank.value) <= 2 &&
+            prefersUnderTemplatedInk(rankHit.first, inkGuess.rank)
+        ) {
+            return inkGuess.rank to maxOf(inkGuess.confidence, minRankScore())
+        }
+        return rankHit
+    }
+
+    private fun prefersUnderTemplatedInk(template: Rank, ink: Rank): Boolean =
+        (ink == Rank.Seven && template == Rank.Nine) ||
+            (ink == Rank.Ace && template == Rank.Nine) ||
+            (ink == Rank.Eight && template == Rank.Two) ||
+            (ink == Rank.Five && template == Rank.Six)
 
     private fun pickTopSuitWithMargin(
         scores: Map<Suit, Float>,
@@ -509,6 +626,26 @@ class CardRecognizer(
     private fun rankMargin(): Float = 0.018f + (1f - minConfidence) * 0.06f
 
     private fun suitMargin(): Float = 0.015f + (1f - minConfidence) * 0.05f
+
+    /** Replace overlay arrow green with nearby card white so it is not scored as ink. */
+    private fun neutralizeHintArrowGreen(crop: Bitmap) {
+        val w = crop.width
+        val h = crop.height
+        val pixels = IntArray(w * h)
+        crop.getPixels(pixels, 0, w, 0, 0, w, h)
+        var changed = false
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            if (SmashColorAnalyzer.isHintArrowGreen(r, g, b)) {
+                pixels[i] = (0xFF shl 24) or (0xF2 shl 16) or (0xF2 shl 8) or 0xF2
+                changed = true
+            }
+        }
+        if (changed) crop.setPixels(pixels, 0, w, 0, 0, w, h)
+    }
 
     private fun inkMask(bitmap: Bitmap): LongArray {
         val size = 48

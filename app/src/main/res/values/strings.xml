@@ -6,4 +6,6 @@
     <string name="capture_channel_name">Screen capture</string>
     <string name="capture_channel_description">Foreground service while analyzing Solitaire Smash</string>
     <string name="overlay_cancel_hint">Cancel</string>
+    <string name="overlay_flag_wrong">Flag Wrong</string>
+    <string name="overlay_review_waiting">Waiting for board…</string>
 </resources>

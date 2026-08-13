@@ -49,9 +49,15 @@ class CaptureService : Service() {
         super.onCreate()
         instance = this
         _status.value = Status.Starting
-        overlayController = OverlayController(this) {
-            pipeline?.cancelCurrentHint()
-        }
+        overlayController = OverlayController(
+            this,
+            onCancelHint = { pipeline?.cancelCurrentHint() },
+            onFlagWrong = {
+                scope.launch(Dispatchers.IO) {
+                    pipeline?.flagWrongRecognition()
+                }
+            }
+        )
         pipeline = AnalysisPipeline(
             appContext = applicationContext,
             overlayController = overlayController!!,

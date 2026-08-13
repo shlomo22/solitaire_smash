@@ -88,6 +88,10 @@ object SmashColorAnalyzer {
             (r + g + b) < 280 &&
             !(g > r + 40 && b > r + 40) // exclude teal backs
 
+    /** Overlay hint arrow — vivid lime green, not teal backs or card art. */
+    fun isHintArrowGreen(r: Int, g: Int, b: Int): Boolean =
+        g > 175 && r in 20..150 && b < 110 && g > r + 55 && g > b + 70
+
     fun looksFaceDown(stats: RegionStats): Boolean =
         // Teal backs include white borders and dark suit-pattern icons.
         stats.tealRatio > 0.20f &&
