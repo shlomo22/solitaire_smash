@@ -14,13 +14,19 @@ import com.personal.solitaireassistant.game.ScoredMove
 object MoveSelector {
     fun bestMove(
         state: GameState,
-        avoidStates: Collection<GameState> = emptyList()
+        avoidStates: Collection<GameState> = emptyList(),
+        rejectedFingerprints: Set<String> = emptySet()
     ): ScoredMove? {
-        val ranked = scoreAll(state).sortedWith(
-            compareBy<ScoredMove> { it.score }
-                .thenBy { it.move.label }
-                .reversed()
-        )
+        val rejectedCardMoves = rejectedFingerprints.filterNot {
+            MoveFingerprint.isStockFallback(it)
+        }.toSet()
+        val ranked = scoreAll(state)
+            .filter { MoveFingerprint.of(state, it.move) !in rejectedCardMoves }
+            .sortedWith(
+                compareBy<ScoredMove> { it.score }
+                    .thenBy { it.move.label }
+                    .reversed()
+            )
         if (avoidStates.isEmpty()) return ranked.firstOrNull()
 
         return ranked.firstOrNull { candidate ->

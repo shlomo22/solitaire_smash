@@ -5,4 +5,5 @@
     <string name="capture_notification_text">Watching screen for Klondike moves</string>
     <string name="capture_channel_name">Screen capture</string>
     <string name="capture_channel_description">Foreground service while analyzing Solitaire Smash</string>
+    <string name="overlay_cancel_hint">Cancel</string>
 </resources>

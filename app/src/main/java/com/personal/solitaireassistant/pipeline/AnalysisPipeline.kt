@@ -11,6 +11,8 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.SuggestedMove
 import com.personal.solitaireassistant.overlay.OverlayController
 import com.personal.solitaireassistant.settings.AssistantSettings
+import com.personal.solitaireassistant.settings.RejectedMoveStore
+import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.GameStateDetector
@@ -24,6 +26,7 @@ class AnalysisPipeline(
 ) {
     private val detector = GameStateDetector(appContext)
     private val fileLogger = AnalysisFileLogger(appContext)
+    private val rejectedMoveStore = RejectedMoveStore(appContext)
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0
@@ -35,6 +38,8 @@ class AnalysisPipeline(
     private val recentStates = ArrayDeque<GameState>()
     private var lastFrameFingerprint: Long? = null
     private var lastDetection: DetectionResult? = null
+    private var lastStableState: GameState? = null
+    private val sessionRejected = mutableSetOf<String>()
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -86,11 +91,51 @@ class AnalysisPipeline(
         lastLoggedOutcome = null
         sessionStarted = false
         recentStates.clear()
+        sessionRejected.clear()
         lastFrameFingerprint = null
         lastDetection = null
+        lastStableState = null
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
     }
+
+    fun cancelCurrentHint() {
+        val state = lastStableState ?: return
+        val suggestion = lastSuggestion ?: return
+        val fingerprint = MoveFingerprint.of(state, suggestion.scored.move)
+        // Never remember stock draw/recycle as rejected — that leaves the user
+        // with no arrow when every card hint has already been cancelled.
+        if (!MoveFingerprint.isStockFallback(fingerprint)) {
+            sessionRejected += fingerprint
+            rejectedMoveStore.reject(fingerprint)
+            fileLogger.append(
+                "REJECTED fingerprint=$fingerprint move=${suggestion.scored.move.label}"
+            )
+            statusSink("Rejected hint — showing next move")
+        } else {
+            statusSink("Stock hint kept available")
+        }
+        val detection = lastDetection
+        if (detection?.state != null && lastSignature != null) {
+            showBestSuggestion(
+                detection = detection,
+                signature = lastSignature!!,
+                knownFaceUp = countKnownFaceUp(detection.state),
+                elapsedMs = 0L,
+                frameW = 0,
+                frameH = 0
+            )
+        } else {
+            overlayController.hideArrowTemporarily()
+            lastSuggestion = null
+            lastSuggestionSignature = null
+        }
+    }
+
+    private fun countKnownFaceUp(state: GameState): Int =
+        state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
+            state.waste.count { it.known } +
+            state.foundations.sumOf { pile -> pile.count { it.known } }
 
     private fun boardFingerprint(bitmap: Bitmap): Long {
         val left = 0
@@ -180,9 +225,7 @@ class AnalysisPipeline(
             stableHits = 1
         }
 
-        val knownFaceUp = state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
-            state.waste.count { it.known } +
-            state.foundations.sumOf { pile -> pile.count { it.known } }
+        val knownFaceUp = countKnownFaceUp(state)
         val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
 
         if (stableHits < 2 && !reliableFirstHit) {
@@ -195,12 +238,33 @@ class AnalysisPipeline(
             return
         }
 
+        lastStableState = state
         if (recentStates.lastOrNull() != state) {
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
         }
+        showBestSuggestion(
+            detection = detection,
+            signature = signature,
+            knownFaceUp = knownFaceUp,
+            elapsedMs = elapsedMs,
+            frameW = frameW,
+            frameH = frameH
+        )
+    }
+
+    private fun showBestSuggestion(
+        detection: DetectionResult,
+        signature: String,
+        knownFaceUp: Int,
+        elapsedMs: Long,
+        frameW: Int,
+        frameH: Int
+    ) {
+        val state = detection.state ?: return
         val avoidStates = recentStates.dropLast(1)
-        val best = MoveSelector.bestMove(state, avoidStates)
+        val rejected = rejectedMoveStore.all() + sessionRejected
+        val best = MoveSelector.bestMove(state, avoidStates, rejected)
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null

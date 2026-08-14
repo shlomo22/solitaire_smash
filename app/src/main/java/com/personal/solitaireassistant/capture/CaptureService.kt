@@ -47,7 +47,9 @@ class CaptureService : Service() {
         super.onCreate()
         instance = this
         _status.value = Status.Starting
-        overlayController = OverlayController(this)
+        overlayController = OverlayController(this) {
+            pipeline?.cancelCurrentHint()
+        }
         pipeline = AnalysisPipeline(
             appContext = applicationContext,
             overlayController = overlayController!!,
@@ -231,6 +233,10 @@ class CaptureService : Service() {
         val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
         fun analysisLogPath(): String? = instance?.pipeline?.analysisLogPath
+
+        fun cancelCurrentHint() {
+            instance?.pipeline?.cancelCurrentHint()
+        }
 
         fun start(context: Context, resultCode: Int, data: Intent) {
             val intent = Intent(context, CaptureService::class.java).apply {
