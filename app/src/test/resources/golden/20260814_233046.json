@@ -638,9 +638,7 @@
         "kind": "Empty"
       },
       "truth": {
-        "kind": "FaceUp",
-        "rank": "Two",
-        "suit": "Spades"
+        "kind": "Empty"
       }
     }
   ]

@@ -192,9 +192,8 @@ object DeckConstraintPass {
         if (right - left < 8 || bottom - top < 8) return null
         val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
         return try {
-            SuitBadgeHeuristics.guessBlackSuit(crop)?.takeIf {
-                it.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN
-            }
+            SuitBadgeHeuristics.guessBlackSuit(crop, CardRecognizer.TOP_BLACK_SHAPE_VETO_MARGIN)
+                ?.takeIf { it.margin >= CardRecognizer.TOP_BLACK_SHAPE_VETO_MARGIN }
         } finally {
             crop.recycle()
         }

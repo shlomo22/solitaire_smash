@@ -1131,6 +1131,20 @@ class GameStateDetector(
                     tiebreakShape
                 )
                 if (leader != null) {
+                    val recovered = recognizer.recoverLowConfidenceSpade(
+                        leader = leader,
+                        clubScore = clubScore,
+                        spadeScore = spadeScore,
+                        margin = margin,
+                        crop = cardCrop,
+                        rank = card.rank
+                    )
+                    if (recovered != null) {
+                        return card.copy(
+                            suit = recovered.first,
+                            suitAmbiguous = recovered.second
+                        )
+                    }
                     return card.copy(
                         suit = leader,
                         suitAmbiguous = ambiguous

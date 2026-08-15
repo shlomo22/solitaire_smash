@@ -932,7 +932,8 @@ class CardRecognizer(
             if (tiebreakShape != null && tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN) {
                 if (tiebreakShape.suit == Suit.Clubs &&
                     crop != null &&
-                    spadeShapeBlocksClubVeto(crop)
+                    spadeShapeBlocksClubVeto(crop) &&
+                    !widePeakClubShapeVetoApplies(scores)
                 ) {
                     return null to true
                 }
@@ -980,7 +981,7 @@ class CardRecognizer(
 
     private fun widePeakClubShapeVetoApplies(scores: BlackSuitTemplateScores): Boolean {
         if (!widePeakClubTemplatesCompetitive(scores)) return false
-        if (scores.topMargin >= 0.100f) return true
+        if (scores.topMargin >= 0.100f && scores.fullClub >= 0.859f) return true
         if (scores.fullMargin < 0.038f && scores.topMargin < 0.048f) return true
         if (scores.fullMargin < 0.048f &&
             scores.topMargin >= 0.075f &&
@@ -990,6 +991,30 @@ class CardRecognizer(
             return true
         }
         return false
+    }
+
+    /**
+     * Foundation and other tiny badges: wide-peak alone reads club but the pip is
+     * often a spade when template scores are weak and nearly tied.
+     */
+    fun recoverLowConfidenceSpade(
+        leader: Suit,
+        clubScore: Float,
+        spadeScore: Float,
+        margin: Float,
+        crop: Bitmap?,
+        rank: Rank? = null
+    ): Pair<Suit, Boolean>? {
+        if (leader != Suit.Clubs || crop == null) return null
+        if (margin >= 0.025f || max(clubScore, spadeScore) >= 0.80f) return null
+        if (clubScore > spadeScore + 0.020f && rank != Rank.Four) return null
+        val noWidePeak = SuitBadgeHeuristics.guessBlackSuit(
+            crop,
+            minMargin = 0.22f,
+            allowWidePeakClubRule = false
+        ) ?: return null
+        if (noWidePeak.suit != Suit.Spades || noWidePeak.margin < 0.22f) return null
+        return Suit.Spades to true
     }
 
     private fun redBitmapScores(crop: Bitmap): Pair<Float, Float> {
