@@ -169,4 +169,25 @@ class MoveSelectorTest {
         val best = requireNotNull(MoveSelector.bestMove(moved, avoidStates = listOf(original)))
         assertEquals(Move.WasteToTableau(toColumn = 3), best.move)
     }
+
+    @Test
+    fun prefersDirectWasteStackOverTableauShuffle() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Jack, Suit.Clubs)),
+                listOf(c(Rank.Nine, Suit.Hearts, false), c(Rank.Eight, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = listOf(c(Rank.Ten, Suit.Hearts))
+        )
+        val best = MoveSelector.bestMove(state)
+        assertTrue(best != null)
+        assertTrue(
+            "Expected waste 10H onto JC, got ${best!!.move}",
+            best.move is Move.WasteToTableau &&
+                (best.move as Move.WasteToTableau).toColumn == 0
+        )
+    }
 }

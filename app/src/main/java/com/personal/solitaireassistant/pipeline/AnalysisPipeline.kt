@@ -2,7 +2,9 @@ package com.personal.solitaireassistant.pipeline
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.util.Log
+import com.personal.solitaireassistant.capture.PendingSnapshot
 import com.personal.solitaireassistant.game.BoardRegion
 import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
@@ -16,6 +18,7 @@ import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.GameStateDetector
+import com.personal.solitaireassistant.vision.recognitionTraceLines
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -38,6 +41,8 @@ class AnalysisPipeline(
     private val recentStates = ArrayDeque<GameState>()
     private var lastFrameFingerprint: Long? = null
     private var lastDetection: DetectionResult? = null
+    private var lastFrameBitmap: Bitmap? = null
+    private val snapshotLock = Any()
     private var lastStableState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
 
@@ -69,7 +74,10 @@ class AnalysisPipeline(
             }
             if (!cached || lastDetection == null) {
                 lastFrameFingerprint = fingerprint
+            }
+            synchronized(snapshotLock) {
                 lastDetection = detection
+                retainFrameLocked(bitmap)
             }
             val elapsed = System.currentTimeMillis() - started
             handleDetection(detection, elapsed, bitmap.width, bitmap.height)
@@ -93,10 +101,44 @@ class AnalysisPipeline(
         recentStates.clear()
         sessionRejected.clear()
         lastFrameFingerprint = null
-        lastDetection = null
+        synchronized(snapshotLock) {
+            lastDetection = null
+            lastFrameBitmap?.recycle()
+            lastFrameBitmap = null
+        }
         lastStableState = null
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
+    }
+
+    fun createSnapshot(): PendingSnapshot? {
+        val snapshot = synchronized(snapshotLock) {
+            val frame = lastFrameBitmap?.takeIf { !it.isRecycled } ?: return@synchronized null
+            val detection = lastDetection ?: return@synchronized null
+            val copy = frame.copy(Bitmap.Config.ARGB_8888, false) ?: return@synchronized null
+            PendingSnapshot(
+                bitmap = copy,
+                slots = detection.recognizedSlots,
+                diagnostics = detection.diagnostics
+            )
+        } ?: return null
+        overlayController.hideArrowTemporarily()
+        return snapshot
+    }
+
+    private fun retainFrameLocked(src: Bitmap) {
+        val dest = lastFrameBitmap
+        if (dest != null &&
+            !dest.isRecycled &&
+            dest.isMutable &&
+            dest.width == src.width &&
+            dest.height == src.height
+        ) {
+            Canvas(dest).drawBitmap(src, 0f, 0f, null)
+        } else {
+            dest?.recycle()
+            lastFrameBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+        }
     }
 
     fun cancelCurrentHint() {
@@ -169,6 +211,28 @@ class AnalysisPipeline(
         frameH: Int
     ) {
         val rawState = detectionRaw.state
+        if (!detectionRaw.livePlayScreen) {
+            stableHits = 0
+            lastSignature = null
+            lastSuggestion = null
+            lastSuggestionSignature = null
+            overlayController.hideArrowTemporarily()
+            val msg = "Waiting for game board… ${elapsedMs}ms"
+            statusSink(msg)
+            logOutcome(
+                "NOT_PLAY_SCREEN",
+                msg,
+                detectionRaw,
+                elapsedMs,
+                frameW,
+                frameH,
+                move = null,
+                from = null,
+                to = null,
+                knownFaceUp = 0
+            )
+            return
+        }
         if (rawState == null) {
             stableHits = 0
             lastSignature = null
@@ -411,6 +475,11 @@ class AnalysisPipeline(
                 appendLine("  $fromTxt $toTxt")
                 appendLine("  signature=$lastSignature")
                 detection.diagnostics.forEach { d -> appendLine("  diag: $d") }
+                val slotTraces = recognitionTraceLines(detection.recognizedSlots)
+                if (slotTraces.isNotEmpty()) {
+                    appendLine("  recognition:")
+                    slotTraces.forEach { line -> appendLine(line) }
+                }
             }.trimEnd()
         )
     }
@@ -424,27 +493,37 @@ class AnalysisPipeline(
             detector.regionForMove(locs, ref, index, detection.board)
         fun tableauRunSource(move: Move.TableauToTableau): BoardRegion? {
             val locations = locs[PileRef.Tableau(move.fromColumn)] ?: return null
-            val bottom = locations.lastOrNull()?.bounds ?: return null
             val column = detection.state?.tableau?.getOrNull(move.fromColumn) ?: return null
+            val profile = detection.board?.profile
+            val storedStart = locations.getOrNull(move.startIndex)?.bounds
+            val headerHeight = when {
+                storedStart != null && profile != null ->
+                    storedStart.width * profile.cardAspect * profile.faceUpOverlap
+                storedStart != null ->
+                    (storedStart.bottom - storedStart.top) * 0.28f
+                else -> null
+            }
+            if (storedStart != null && headerHeight != null) {
+                return BoardRegion(
+                    left = storedStart.left,
+                    top = storedStart.top,
+                    right = storedStart.right,
+                    bottom = (storedStart.top + headerHeight).coerceAtMost(storedStart.bottom)
+                )
+            }
+            val bottom = locations.lastOrNull()?.bounds ?: return null
             val movingCount = column.size - move.startIndex
             if (movingCount <= 1) return bottom
-            val profile = detection.board?.profile ?: return pileRegion(
-                PileRef.Tableau(move.fromColumn),
-                move.startIndex
-            )
+            if (profile == null) {
+                return pileRegion(PileRef.Tableau(move.fromColumn), move.startIndex)
+            }
             val cardHeight = bottom.width * profile.cardAspect
             val faceUpStep = cardHeight * profile.faceUpOverlap
-            val storedStart = locations.firstOrNull {
-                it.cardIndex == move.startIndex
-            }?.bounds
-            val firstMovingTop = storedStart?.top
-                ?: (bottom.top - (movingCount - 1) * faceUpStep)
-            // Anchor in the visible header of the first moving card, rather
-            // than the obscured center of its full card body.
+            val firstMovingTop = bottom.top - (movingCount - 1) * faceUpStep
             return BoardRegion(
-                left = storedStart?.left ?: bottom.left,
+                left = bottom.left,
                 top = firstMovingTop,
-                right = storedStart?.right ?: bottom.right,
+                right = bottom.right,
                 bottom = firstMovingTop + faceUpStep
             )
         }

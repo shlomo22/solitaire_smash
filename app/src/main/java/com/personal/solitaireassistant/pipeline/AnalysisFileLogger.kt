@@ -15,6 +15,10 @@ import java.util.concurrent.Executors
  * Path: files/logs/analysis.log
  * Pull with: adb exec-out run-as com.personal.solitaireassistant cat files/logs/analysis.log
  * Or share via device file manager / Android Studio Device Explorer.
+ *
+ * On ARROW / NO_MOVE outcomes the log includes a `recognition:` block per slot:
+ * rank source (rank-png, rank-glyph, …), suit source (suit-png, suit-shape-red, …),
+ * top PNG template scores, and post-passes (resolve-red-suit, deck-constraint, …).
  */
 class AnalysisFileLogger(context: Context) {
     private val appContext = context.applicationContext

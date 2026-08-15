@@ -190,7 +190,7 @@ object KlondikeRules {
 
     private fun isValidRun(cards: List<Card>): Boolean {
         if (cards.isEmpty()) return false
-        if (cards.any { !it.faceUp }) return false
+        if (cards.any { !it.faceUp || it.inferred }) return false
         for (i in 0 until cards.lastIndex) {
             val upper = cards[i]
             val lower = cards[i + 1]

@@ -1,0 +1,238 @@
+package com.personal.solitaireassistant.vision
+
+import android.graphics.Bitmap
+import com.personal.solitaireassistant.game.BoardRegion
+import com.personal.solitaireassistant.game.Card
+import com.personal.solitaireassistant.game.GameState
+import com.personal.solitaireassistant.game.PileRef
+import com.personal.solitaireassistant.game.Rank
+import com.personal.solitaireassistant.game.Suit
+
+/**
+ * Solitaire uses one deck: each rank+suit appears at most once among known cards.
+ * When independent slot reads collide (often H↔D or C↔S), pick assignments that
+ * minimize duplicates using per-slot template scores.
+ */
+object DeckConstraintPass {
+    private data class Entry(
+        val pile: PileRef,
+        val cardIndex: Int,
+        val bounds: BoardRegion,
+        var card: Card,
+        val confidence: Float,
+        val recognizedIndex: Int
+    )
+
+    fun apply(
+        bitmap: Bitmap,
+        recognizer: CardRecognizer,
+        state: GameState,
+        recognizedSlots: MutableList<RecognizedSlot>
+    ): GameState {
+        val tableau = state.tableau.map { it.toMutableList() }.toMutableList()
+        val foundations = state.foundations.map { it.toMutableList() }.toMutableList()
+        val waste = state.waste.toMutableList()
+
+        val entries = collectEntries(tableau, foundations, waste, recognizedSlots)
+        if (entries.size < 2) {
+            return state
+        }
+
+        resolveDuplicateCardIds(bitmap, recognizer, entries)
+        resolvePartnerSuitSwaps(bitmap, recognizer, entries)
+
+        entries.forEach { entry ->
+            setCard(tableau, foundations, waste, entry.pile, entry.cardIndex, entry.card)
+            val slot = recognizedSlots[entry.recognizedIndex]
+            val beforeLabel = slot.engine.shortLabel()
+            val afterLabel = slotGuessFromCard(entry.card).shortLabel()
+            val updatedTrace = if (beforeLabel != afterLabel) {
+                slot.trace.withPost("deck-constraint:$beforeLabel->$afterLabel")
+            } else {
+                slot.trace
+            }
+            recognizedSlots[entry.recognizedIndex] = slot.copy(
+                engine = slotGuessFromCard(entry.card),
+                trace = updatedTrace
+            )
+        }
+
+        return state.copy(
+            tableau = tableau.map { it.toList() },
+            foundations = foundations.map { it.toList() },
+            waste = waste.toList()
+        )
+    }
+
+    private fun collectEntries(
+        tableau: List<MutableList<Card>>,
+        foundations: List<MutableList<Card>>,
+        waste: MutableList<Card>,
+        recognizedSlots: List<RecognizedSlot>
+    ): MutableList<Entry> {
+        val entries = mutableListOf<Entry>()
+        recognizedSlots.forEachIndexed { recognizedIndex, slot ->
+            if (slot.inferred) return@forEachIndexed
+            if (slot.engine.kind != SlotKind.FaceUp) return@forEachIndexed
+            val rank = slot.engine.rank ?: return@forEachIndexed
+            val suit = slot.engine.suit ?: return@forEachIndexed
+            val card = getCard(tableau, foundations, waste, slot.pile, slot.index)
+                ?: return@forEachIndexed
+            if (!card.faceUp || !card.known) return@forEachIndexed
+            entries += Entry(
+                pile = slot.pile,
+                cardIndex = slot.index,
+                bounds = slot.bounds,
+                card = card.copy(rank = rank, suit = suit),
+                confidence = slot.confidence,
+                recognizedIndex = recognizedIndex
+            )
+        }
+        return entries
+    }
+
+    private fun resolvePartnerSuitSwaps(
+        bitmap: Bitmap,
+        recognizer: CardRecognizer,
+        entries: MutableList<Entry>
+    ) {
+        entries.groupBy { it.card.rank }.forEach { (_, group) ->
+            if (group.size != 2) return@forEach
+            val first = group[0]
+            val second = group[1]
+            if (first.card.suit.isRed != second.card.suit.isRed) return@forEach
+            if (first.card.suit == second.card.suit) return@forEach
+
+            val suits = if (first.card.suit.isRed) {
+                setOf(Suit.Hearts, Suit.Diamonds)
+            } else {
+                setOf(Suit.Clubs, Suit.Spades)
+            }
+            val firstScores = recognizer.suitTemplateScores(bitmap, first.bounds, suits)
+            val secondScores = recognizer.suitTemplateScores(bitmap, second.bounds, suits)
+            val firstAlt = partnerSuit(first.card.suit)
+            val secondAlt = partnerSuit(second.card.suit)
+            val direct =
+                suitScore(firstScores, first.card.suit) + suitScore(secondScores, second.card.suit)
+            val swapped =
+                suitScore(firstScores, firstAlt) + suitScore(secondScores, secondAlt)
+            if (swapped <= direct + 0.06f) return@forEach
+
+            first.card = first.card.copy(suit = firstAlt, suitAmbiguous = false)
+            second.card = second.card.copy(suit = secondAlt, suitAmbiguous = false)
+        }
+    }
+
+    private fun partnerSuit(suit: Suit): Suit = when (suit) {
+        Suit.Hearts -> Suit.Diamonds
+        Suit.Diamonds -> Suit.Hearts
+        Suit.Clubs -> Suit.Spades
+        Suit.Spades -> Suit.Clubs
+    }
+
+    private fun suitScore(scores: Map<Suit, Float>, suit: Suit): Float =
+        scores[suit] ?: 0f
+
+    private fun resolveDuplicateCardIds(
+        bitmap: Bitmap,
+        recognizer: CardRecognizer,
+        entries: MutableList<Entry>
+    ) {
+        val used = entries.map { it.card.id }.toMutableSet()
+        val byId = entries.groupBy { it.card.id }
+        byId.filter { it.value.size > 1 }.forEach { (_, group) ->
+            group.sortedByDescending { it.confidence }.drop(1).forEach { entry ->
+                val oldId = entry.card.id
+                val replacement = bestAlternateAssignment(
+                    bitmap = bitmap,
+                    recognizer = recognizer,
+                    entry = entry,
+                    usedIds = used,
+                    preferSameRank = true
+                ) ?: entry.card.copy(suitAmbiguous = true)
+                used.remove(oldId)
+                used.add(replacement.id)
+                entry.card = replacement
+            }
+        }
+    }
+
+    private fun bestAlternateAssignment(
+        bitmap: Bitmap,
+        recognizer: CardRecognizer,
+        entry: Entry,
+        usedIds: Set<String>,
+        preferSameRank: Boolean,
+        forceSuit: Suit? = null
+    ): Card? {
+        val rank = entry.card.rank
+        val candidates = mutableListOf<Card>()
+        val suits = when {
+            forceSuit != null -> listOf(forceSuit)
+            entry.card.suit.isRed -> listOf(Suit.Hearts, Suit.Diamonds)
+            else -> listOf(Suit.Clubs, Suit.Spades)
+        }
+        suits.forEach { suit ->
+            if (suit == entry.card.suit) return@forEach
+            val card = entry.card.copy(suit = suit, suitAmbiguous = false)
+            if (card.id in usedIds) return@forEach
+            if (preferSameRank && card.rank != rank) return@forEach
+            candidates += card
+        }
+        if (candidates.isEmpty()) return null
+
+        val scores = recognizer.suitTemplateScores(
+            bitmap,
+            entry.bounds,
+            suits.toSet()
+        )
+        val currentScore = scores[entry.card.suit] ?: 0f
+        val pick = candidates.maxByOrNull { candidate ->
+            val suitScore = scores[candidate.suit] ?: 0f
+            suitScore + entry.confidence * 0.05f
+        } ?: return null
+        val altScore = scores[pick.suit] ?: 0f
+        return when {
+            candidates.size == 1 &&
+                entry.confidence >= 0.70f &&
+                currentScore >= altScore + 0.08f &&
+                currentScore >= 0.58f -> null
+            candidates.size == 1 -> pick
+            altScore >= currentScore + 0.04f -> pick
+            altScore >= 0.52f && altScore >= currentScore + 0.035f -> pick
+            else -> null
+        }
+    }
+
+    private fun getCard(
+        tableau: List<MutableList<Card>>,
+        foundations: List<MutableList<Card>>,
+        waste: MutableList<Card>,
+        pile: PileRef,
+        index: Int
+    ): Card? = when (pile) {
+        is PileRef.Tableau -> tableau.getOrNull(pile.index)?.getOrNull(index)
+        is PileRef.Foundation -> foundations.getOrNull(pile.index)?.getOrNull(index)
+        PileRef.Waste -> waste.getOrNull(index)
+        else -> null
+    }
+
+    private fun setCard(
+        tableau: MutableList<MutableList<Card>>,
+        foundations: MutableList<MutableList<Card>>,
+        waste: MutableList<Card>,
+        pile: PileRef,
+        index: Int,
+        card: Card
+    ) {
+        when (pile) {
+            is PileRef.Tableau ->
+                tableau.getOrNull(pile.index)?.set(index, card)
+            is PileRef.Foundation ->
+                foundations.getOrNull(pile.index)?.set(index, card)
+            PileRef.Waste ->
+                if (index in waste.indices) waste[index] = card
+            else -> Unit
+        }
+    }
+}

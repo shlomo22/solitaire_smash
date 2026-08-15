@@ -14,11 +14,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.solitaireassistant.capture.CaptureService
+import com.personal.solitaireassistant.capture.PendingSnapshotHolder
 import com.personal.solitaireassistant.capture.SolitaireSmashLauncher
+import com.personal.solitaireassistant.ui.GoldenReviewScreen
 import com.personal.solitaireassistant.ui.SettingsScreen
 import com.personal.solitaireassistant.ui.SettingsViewModel
 import com.personal.solitaireassistant.ui.SettingsViewModelFactory
@@ -26,7 +29,8 @@ import com.personal.solitaireassistant.ui.theme.SolitaireAssistantTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: SettingsViewModel by viewModels {
-        SettingsViewModelFactory((application as SolitaireAssistantApp).preferences)
+        val app = application as SolitaireAssistantApp
+        SettingsViewModelFactory(app, app.preferences)
     }
 
     private val projectionLauncher =
@@ -56,27 +60,73 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        maybeOpenGoldenReview(intent)
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
             val serviceStatus by CaptureService.status.collectAsStateWithLifecycle()
             val statusMessage by CaptureService.statusMessage.collectAsStateWithLifecycle()
             SolitaireAssistantTheme {
-                SettingsScreen(
-                    state = uiState,
-                    serviceStatus = serviceStatus,
-                    statusMessage = statusMessage,
-                    openCvReady = (application as SolitaireAssistantApp).openCvReady,
-                    canDrawOverlays = Settings.canDrawOverlays(this),
-                    analysisLogPath = CaptureService.analysisLogPath(),
-                    onOverlayColor = viewModel::setOverlayColor,
-                    onInterval = viewModel::setCaptureInterval,
-                    onConfidence = viewModel::setConfidence,
-                    onDebugFrames = viewModel::setDebugFrames,
-                    onOpenOverlaySettings = ::openOverlaySettings,
-                    onStart = ::onStartClicked,
-                    onStop = { CaptureService.stop(this) }
-                )
+                val snapshot =
+                    if (uiState.showGoldenReview) PendingSnapshotHolder.peek() else null
+                if (uiState.showGoldenReview && snapshot != null) {
+                    GoldenReviewScreen(
+                        bitmap = snapshot.bitmap,
+                        slots = snapshot.slots,
+                        onSave = viewModel::saveGoldenReview,
+                        onDiscard = viewModel::discardGoldenReview,
+                        onRecapture = {
+                            viewModel.discardGoldenReview()
+                            SolitaireSmashLauncher.launch(this)
+                        }
+                    )
+                } else {
+                    if (uiState.showGoldenReview && snapshot == null) {
+                        LaunchedEffect(Unit) { viewModel.closeGoldenReview() }
+                    }
+                    SettingsScreen(
+                        state = uiState,
+                        serviceStatus = serviceStatus,
+                        statusMessage = statusMessage,
+                        openCvReady = (application as SolitaireAssistantApp).openCvReady,
+                        canDrawOverlays = Settings.canDrawOverlays(this),
+                        analysisLogPath = CaptureService.analysisLogPath(),
+                        onOverlayColor = viewModel::setOverlayColor,
+                        onInterval = viewModel::setCaptureInterval,
+                        onConfidence = viewModel::setConfidence,
+                        onDebugFrames = viewModel::setDebugFrames,
+                        onOpenOverlaySettings = ::openOverlaySettings,
+                        onStart = ::onStartClicked,
+                        onStop = { CaptureService.stop(this) },
+                        onSnapshotBoard = ::onSnapshotClicked,
+                        onEvaluateGolden = viewModel::evaluateGoldenSet
+                    )
+                }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        maybeOpenGoldenReview(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshGoldenCount()
+    }
+
+    private fun maybeOpenGoldenReview(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_GOLDEN_REVIEW, false) == true) {
+            viewModel.openGoldenReview()
+        }
+    }
+
+    private fun onSnapshotClicked() {
+        if (CaptureService.snapshotBoard()) {
+            viewModel.openGoldenReview()
+        } else {
+            viewModel.setTransientMessage("No board frame yet — wait for capture")
         }
     }
 
@@ -116,5 +166,10 @@ class MainActivity : ComponentActivity() {
             Uri.parse("package:$packageName")
         )
         startActivity(intent)
+    }
+
+    companion object {
+        const val EXTRA_OPEN_GOLDEN_REVIEW =
+            "com.personal.solitaireassistant.OPEN_GOLDEN_REVIEW"
     }
 }

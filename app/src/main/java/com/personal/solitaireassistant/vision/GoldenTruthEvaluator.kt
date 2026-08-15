@@ -1,0 +1,257 @@
+package com.personal.solitaireassistant.vision
+
+import android.content.Context
+import android.graphics.Bitmap
+import kotlin.math.hypot
+
+data class GoldenEvalReport(
+    val sampleCount: Int,
+    val slotCount: Int,
+    val matchedSlots: Int,
+    val rankErrors: Int,
+    val suitErrors: Int,
+    val occupancyErrors: Int,
+    val missingSlots: Int,
+    val confusions: List<Pair<String, Int>>,
+    val mismatches: List<String>
+) {
+    val accuracy: Float
+        get() = if (slotCount == 0) 0f else matchedSlots.toFloat() / slotCount
+
+    fun summary(): String {
+        if (sampleCount == 0) return "No golden samples saved yet."
+        val lines = mutableListOf(
+            "Golden set: $sampleCount samples, $slotCount labeled slots",
+            "Accuracy: ${"%.0f".format(accuracy * 100f)}% ($matchedSlots/$slotCount)",
+            "Rank errors: $rankErrors  Suit errors: $suitErrors  Occupancy: $occupancyErrors  Missing: $missingSlots"
+        )
+        if (confusions.isNotEmpty()) {
+            lines += "Confusions:"
+            confusions.take(8).forEach { (pair, count) ->
+                lines += "  $pair ($count)"
+            }
+        }
+        if (mismatches.isNotEmpty()) {
+            lines += "Examples:"
+            mismatches.take(12).forEach { lines += "  $it" }
+        }
+        return lines.joinToString("\n")
+    }
+}
+
+object GoldenTruthEvaluator {
+    fun evaluate(
+        context: Context,
+        store: GoldenTruthStore = GoldenTruthStore(context)
+    ): GoldenEvalReport {
+        val detector = GameStateDetector(context)
+        try {
+            return evaluate(store, detector)
+        } finally {
+            detector.release()
+        }
+    }
+
+    fun evaluate(
+        store: GoldenTruthStore,
+        detector: GameStateDetector
+    ): GoldenEvalReport {
+        var slotCount = 0
+        var matched = 0
+        var rankErrors = 0
+        var suitErrors = 0
+        var occupancyErrors = 0
+        var missingSlots = 0
+        val confusionMap = linkedMapOf<String, Int>()
+        val mismatches = mutableListOf<String>()
+        val samples = store.listSamples()
+
+        samples.forEach { sample ->
+            val bitmap = store.loadBitmap(sample.id) ?: return@forEach
+            try {
+                compareSample(
+                    sample = sample,
+                    bitmap = bitmap,
+                    detector = detector,
+                    onSlot = { slotCount++ },
+                    onMatch = { matched++ },
+                    onRank = { rankErrors++ },
+                    onSuit = { suitErrors++ },
+                    onOccupancy = { occupancyErrors++ },
+                    onMissing = { missingSlots++ },
+                    onConfusion = { key ->
+                        confusionMap[key] = (confusionMap[key] ?: 0) + 1
+                    },
+                    onMismatch = { mismatches += it }
+                )
+            } finally {
+                bitmap.recycle()
+            }
+        }
+
+        return finishReport(
+            sampleCount = samples.size,
+            slotCount = slotCount,
+            matched = matched,
+            rankErrors = rankErrors,
+            suitErrors = suitErrors,
+            occupancyErrors = occupancyErrors,
+            missingSlots = missingSlots,
+            confusionMap = confusionMap,
+            mismatches = mismatches
+        )
+    }
+
+    /**
+     * Same report as [evaluate], for fixtures already loaded in memory
+     * (Robolectric / desktop classpath, no device filesDir).
+     */
+    fun evaluateLoaded(
+        samples: List<Pair<GoldenSample, Bitmap>>,
+        detector: GameStateDetector
+    ): GoldenEvalReport {
+        var slotCount = 0
+        var matched = 0
+        var rankErrors = 0
+        var suitErrors = 0
+        var occupancyErrors = 0
+        var missingSlots = 0
+        val confusionMap = linkedMapOf<String, Int>()
+        val mismatches = mutableListOf<String>()
+        samples.forEach { (sample, bitmap) ->
+            compareSample(
+                sample = sample,
+                bitmap = bitmap,
+                detector = detector,
+                onSlot = { slotCount++ },
+                onMatch = { matched++ },
+                onRank = { rankErrors++ },
+                onSuit = { suitErrors++ },
+                onOccupancy = { occupancyErrors++ },
+                onMissing = { missingSlots++ },
+                onConfusion = { key ->
+                    confusionMap[key] = (confusionMap[key] ?: 0) + 1
+                },
+                onMismatch = { mismatches += it }
+            )
+        }
+        return finishReport(
+            sampleCount = samples.size,
+            slotCount = slotCount,
+            matched = matched,
+            rankErrors = rankErrors,
+            suitErrors = suitErrors,
+            occupancyErrors = occupancyErrors,
+            missingSlots = missingSlots,
+            confusionMap = confusionMap,
+            mismatches = mismatches
+        )
+    }
+
+    private fun finishReport(
+        sampleCount: Int,
+        slotCount: Int,
+        matched: Int,
+        rankErrors: Int,
+        suitErrors: Int,
+        occupancyErrors: Int,
+        missingSlots: Int,
+        confusionMap: Map<String, Int>,
+        mismatches: List<String>
+    ): GoldenEvalReport {
+        val confusions = confusionMap.entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
+        return GoldenEvalReport(
+            sampleCount = sampleCount,
+            slotCount = slotCount,
+            matchedSlots = matched,
+            rankErrors = rankErrors,
+            suitErrors = suitErrors,
+            occupancyErrors = occupancyErrors,
+            missingSlots = missingSlots,
+            confusions = confusions,
+            mismatches = mismatches
+        )
+    }
+
+    fun compareSample(
+        sample: GoldenSample,
+        bitmap: Bitmap,
+        detector: GameStateDetector,
+        onSlot: () -> Unit = {},
+        onMatch: () -> Unit = {},
+        onRank: () -> Unit = {},
+        onSuit: () -> Unit = {},
+        onOccupancy: () -> Unit = {},
+        onMissing: () -> Unit = {},
+        onConfusion: (String) -> Unit = {},
+        onMismatch: (String) -> Unit = {}
+    ) {
+        val detection = detector.detect(bitmap)
+        val labeled = sample.slots.filter { !it.inferred }
+        labeled.forEach { truthSlot ->
+            onSlot()
+            val detected = findMatchingSlot(detection.recognizedSlots, truthSlot)
+            if (detected == null) {
+                onMissing()
+                onMismatch("${sample.id} ${truthSlot.pile} missing (truth=${truthSlot.truth.shortLabel()})")
+                return@forEach
+            }
+            val actual = detected.engine
+            val expected = truthSlot.truth
+            if (actual.kind != expected.kind) {
+                onOccupancy()
+                onConfusion("${expected.kind.name} → ${actual.kind.name}")
+                onMismatch(
+                    "${sample.id} ${truthSlot.pile} occupancy " +
+                        "${expected.shortLabel()} vs ${actual.shortLabel()}"
+                )
+                return@forEach
+            }
+            if (expected.kind != SlotKind.FaceUp) {
+                onMatch()
+                return@forEach
+            }
+            var ok = true
+            if (expected.rank != null && actual.rank != expected.rank) {
+                ok = false
+                onRank()
+                onConfusion("${expected.rank.name} → ${actual.rank?.name ?: "?"}")
+            }
+            if (expected.suit != null && actual.suit != expected.suit) {
+                ok = false
+                onSuit()
+                onConfusion("${expected.suit.name} → ${actual.suit?.name ?: "?"}")
+            }
+            if (ok) {
+                onMatch()
+            } else {
+                onMismatch(
+                    "${sample.id} ${truthSlot.pile} " +
+                        "${expected.shortLabel()} vs ${actual.shortLabel()}"
+                )
+            }
+        }
+    }
+
+    fun findMatchingSlot(
+        detected: List<RecognizedSlot>,
+        truth: GoldenSlot
+    ): RecognizedSlot? {
+        val pile = runCatching { parsePileRefKey(truth.pile) }.getOrNull() ?: return null
+        val cx = truth.bounds.centerX
+        val cy = truth.bounds.centerY
+        return detected
+            .filter { it.pile == pile && !it.inferred }
+            .minByOrNull { hypot(it.bounds.centerX - cx, it.bounds.centerY - cy) }
+            ?.takeIf { match ->
+                hypot(
+                    match.bounds.centerX - cx,
+                    match.bounds.centerY - cy
+                ) < MATCH_DISTANCE_PX
+            }
+    }
+
+    private const val MATCH_DISTANCE_PX = 80f
+}

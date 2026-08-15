@@ -93,6 +93,23 @@ object RankInkHeuristics {
         val midCR = midC / colSum
         val rightR = rightBand / colSum
 
+        val maxCol = cols.maxOrNull()?.toFloat() ?: 0f
+        var colValleys = 0
+        if (maxCol >= 1.5f) {
+            val hi = maxCol * 0.45f
+            val lo = maxCol * 0.15f
+            var state = 0
+            for (value in cols) {
+                when {
+                    value >= hi -> {
+                        if (state == 2) colValleys++
+                        state = 1
+                    }
+                    value <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+
         // Very rough shape rules for Smash's bubbly ranks.
         return when {
             // A: pointed top, wider bottom, hollow-ish mid
@@ -100,9 +117,16 @@ object RankInkHeuristics {
                 density in 0.08f..0.32f ->
                 Guess(Rank.Ace, 0.62f)
 
-            // K: wide, dense, ink in left and right
-            aspect > 0.75f && density > 0.16f && leftR > 0.22f && rightR > 0.22f &&
-                midCR < 0.45f ->
+            // 10: two glyphs with a gap, or a clearly wide pair. Must beat K,
+            // which also has left+right ink.
+            colValleys >= 1 && aspect > 0.95f && density in 0.10f..0.32f ->
+                Guess(Rank.Ten, 0.60f)
+            aspect > 1.18f && density in 0.10f..0.30f ->
+                Guess(Rank.Ten, 0.56f)
+
+            // K: single glyph, no column gap
+            aspect in 0.75f..1.15f && density > 0.16f && leftR > 0.22f && rightR > 0.22f &&
+                midCR < 0.45f && colValleys == 0 ->
                 Guess(Rank.King, 0.58f)
 
             // Q: round / wide with bottom weight
@@ -113,10 +137,6 @@ object RankInkHeuristics {
             // J: tall and relatively narrow
             aspect < 0.70f && density in 0.08f..0.28f && midCR > 0.30f ->
                 Guess(Rank.Jack, 0.55f)
-
-            // 10: wide glyph (two characters)
-            aspect > 1.05f && density in 0.10f..0.30f ->
-                Guess(Rank.Ten, 0.56f)
 
             // 8: stacked weight top+bot, lighter mid often
             aspect in 0.55f..0.95f && abs(topR - botR) < 0.12f && midR < 0.40f &&

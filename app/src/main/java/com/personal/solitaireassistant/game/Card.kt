@@ -45,12 +45,14 @@ data class Card(
      * True when color is trusted but Clubs vs Spades (or Hearts vs Diamonds)
      * is too close to call. Tableau color rules still apply; foundation moves do not.
      */
-    val suitAmbiguous: Boolean = false
+    val suitAmbiguous: Boolean = false,
+    /** True for tableau cascade cards guessed from the exposed top card only. */
+    val inferred: Boolean = false
 ) {
     val id: String get() = if (known) "${rank.name}_${suit.name}" else "U_${if (suit.isRed) "R" else "B"}"
 
     fun canStackOnTableau(target: Card?): Boolean {
-        if (!known) return false
+        if (!known || inferred) return false
         if (target == null) return rank == Rank.King
         if (!target.known) return false
         return faceUp &&

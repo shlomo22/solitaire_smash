@@ -171,4 +171,22 @@ class KlondikeRulesTest {
         assertFalse(KlondikeRules.isLegal(state, Move.TableauToFoundation(0, 2)))
         assertTrue(clubs.canStackOnTableau(Card(Rank.Five, Suit.Hearts)))
     }
+
+    @Test
+    fun inferredCascadeCardsCannotMove() {
+        val inferred = Card(Rank.Queen, Suit.Hearts, inferred = true)
+        val top = Card(Rank.Jack, Suit.Clubs)
+        val state = GameState(
+            tableau = listOf(
+                listOf(inferred, top),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        assertTrue(
+            KlondikeRules.legalMoves(state).none { it is Move.TableauToTableau }
+        )
+    }
 }

@@ -47,9 +47,11 @@ class CaptureService : Service() {
         super.onCreate()
         instance = this
         _status.value = Status.Starting
-        overlayController = OverlayController(this) {
-            pipeline?.cancelCurrentHint()
-        }
+        overlayController = OverlayController(
+            this,
+            onCancelHint = { pipeline?.cancelCurrentHint() },
+            onLabelBoard = { takeGoldenSnapshot() }
+        )
         pipeline = AnalysisPipeline(
             appContext = applicationContext,
             overlayController = overlayController!!,
@@ -183,6 +185,25 @@ class CaptureService : Service() {
         super.onDestroy()
     }
 
+    private fun takeGoldenSnapshot(): Boolean {
+        val snap = pipeline?.createSnapshot()
+        if (snap == null) {
+            _statusMessage.value = "No board frame yet — wait for capture"
+            return false
+        }
+        PendingSnapshotHolder.set(snap)
+        overlayController?.setReviewMode(true)
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            putExtra(MainActivity.EXTRA_OPEN_GOLDEN_REVIEW, true)
+        }
+        startActivity(intent)
+        _statusMessage.value = "Snapshot captured — confirm cards"
+        return true
+    }
+
     private fun buildNotification(): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
@@ -233,6 +254,12 @@ class CaptureService : Service() {
         val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
         fun analysisLogPath(): String? = instance?.pipeline?.analysisLogPath
+
+        fun snapshotBoard(): Boolean = instance?.takeGoldenSnapshot() == true
+
+        fun setGoldenReviewActive(active: Boolean) {
+            instance?.overlayController?.setReviewMode(active)
+        }
 
         fun cancelCurrentHint() {
             instance?.pipeline?.cancelCurrentHint()

@@ -87,6 +87,15 @@ object MoveSelector {
                 score += 25.0
                 reasons += "clear-waste"
                 val wasteCard = before.wasteTop()
+                val target = before.tableauTop(move.toColumn)
+                if (wasteCard != null &&
+                    target != null &&
+                    wasteCard.rank.isOneBelow(target.rank)
+                ) {
+                    // Ten onto Jack, etc. — prefer over no-reveal tableau shuffles.
+                    score += 130.0
+                    reasons += "direct-stack"
+                }
                 if (wasteCard?.rank == Rank.Ace || wasteCard?.rank == Rank.Two) {
                     // In draw-3, immediately parking a low waste card exposes the
                     // next waste card while preserving tableau reveal moves.

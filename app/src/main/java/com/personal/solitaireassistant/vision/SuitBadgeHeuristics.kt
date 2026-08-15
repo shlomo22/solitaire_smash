@@ -7,8 +7,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Locates the upper-right suit badge and classifies black suits by shape.
- * Spades are pointed at the top; clubs have a wider three-lobe silhouette.
+ * Locates the top-left suit pip (to the right of the rank) and classifies
+ * black suits by shape. Spades are pointed at the top; clubs have a wider
+ * three-lobe silhouette.
  */
 object SuitBadgeHeuristics {
     data class Guess(
@@ -29,48 +30,91 @@ object SuitBadgeHeuristics {
         val w = cardCrop.width
         val h = cardCrop.height
         if (w < 20 || h < 20) return null
+        // Smash uses the standard corner index: rank top-left, pip top-right.
+        // The huge center glyph sits lower and must never be treated as the pip.
+        return findPipIn(cardCrop, (w * 0.48f).toInt(), 0, w, (h * 0.26f).toInt().coerceAtLeast(12))
+            ?: findPipIn(
+                cardCrop,
+                (w * 0.38f).toInt(),
+                0,
+                w,
+                (h * 0.22f).toInt().coerceAtLeast(12)
+            )
+    }
 
-        val searchLeft = (w * 0.48f).toInt()
-        val searchTop = 0
-        val searchRight = (w * 0.98f).toInt().coerceAtMost(w)
-        val searchBottom = (h * 0.38f).toInt().coerceAtMost(h)
-        val sw = (searchRight - searchLeft).coerceAtLeast(8)
-        val sh = (searchBottom - searchTop).coerceAtLeast(8)
-        val step = max(1, min(sw, sh) / 36)
+    private fun findPipIn(
+        cardCrop: Bitmap,
+        searchLeft: Int,
+        searchTop: Int,
+        searchRight: Int,
+        searchBottom: Int
+    ): LocatedBadge? {
+        val w = cardCrop.width
+        val h = cardCrop.height
+        if (searchRight - searchLeft < 8 || searchBottom - searchTop < 8) return null
+        val colW = searchRight - searchLeft
+        val colH = searchBottom - searchTop
+        val colInk = IntArray(colW)
+        for (x in searchLeft until searchRight) {
+            var n = 0
+            for (y in searchTop until searchBottom) {
+                if (isInk(cardCrop.getPixel(x, y))) n++
+            }
+            colInk[x - searchLeft] = n
+        }
+        val threshold = max(1, colH / 12)
+        val runs = mutableListOf<IntRange>()
+        var runStart = -1
+        for (x in 0 until colW) {
+            val on = colInk[x] >= threshold
+            if (on && runStart < 0) runStart = x
+            if (!on && runStart >= 0) {
+                if (x - runStart >= 2) runs += runStart until x
+                runStart = -1
+            }
+        }
+        if (runStart >= 0 && colW - runStart >= 2) runs += runStart until colW
 
-        var minX = sw
-        var maxX = 0
-        var minY = sh
-        var maxY = 0
+        val pipRun = when {
+            runs.isEmpty() -> return null
+            runs.size >= 2 -> runs.last()
+            else -> {
+                val only = runs[0]
+                val width = only.last - only.first + 1
+                if (width >= colW * 0.55f) {
+                    val split = only.first + (width * 0.52f).toInt()
+                    split..only.last
+                } else {
+                    only
+                }
+            }
+        }
+
+        val left = (searchLeft + pipRun.first - 2).coerceIn(0, w - 8)
+        val right = (searchLeft + pipRun.last + 3).coerceIn(left + 8, w)
+        var minY = searchBottom
+        var maxY = searchTop
         var ink = 0
-        var yy = searchTop
-        while (yy < searchBottom) {
-            var xx = searchLeft
-            while (xx < searchRight) {
-                if (isInk(cardCrop.getPixel(xx, yy))) {
-                    val lx = xx - searchLeft
-                    val ly = yy - searchTop
-                    minX = min(minX, lx)
-                    maxX = max(maxX, lx)
-                    minY = min(minY, ly)
-                    maxY = max(maxY, ly)
+        for (x in left until right) {
+            for (y in searchTop until searchBottom) {
+                if (isInk(cardCrop.getPixel(x, y))) {
+                    minY = min(minY, y)
+                    maxY = max(maxY, y)
                     ink++
                 }
-                xx += step
             }
-            yy += step
         }
-        if (ink < 4) return null
-
-        val padX = max(1, ((maxX - minX + 1) * 0.18f).toInt())
-        val padY = max(1, ((maxY - minY + 1) * 0.18f).toInt())
-        val left = (searchLeft + minX - padX).coerceIn(0, w - 8)
-        val top = (searchTop + minY - padY).coerceIn(0, h - 8)
-        val right = (searchLeft + maxX + padX + 1).coerceIn(left + 8, w)
-        val bottom = (searchTop + maxY + padY + 1).coerceIn(top + 8, h)
+        if (ink < 6 || maxY < minY) return null
+        if (minY > h * 0.18f) return null
+        val padY = max(1, ((maxY - minY + 1) * 0.14f).toInt())
+        val top = (minY - padY).coerceIn(0, h - 8)
+        val bottom = (maxY + padY + 1).coerceIn(top + 8, h)
         val bw = right - left
         val bh = bottom - top
         if (bw < 8 || bh < 8) return null
+        if (bh > h * 0.28f || bw > w * 0.34f) return null
+        val aspect = bw.toFloat() / bh
+        if (aspect < 0.45f || aspect > 1.90f) return null
         return LocatedBadge(
             bitmap = Bitmap.createBitmap(cardCrop, left, top, bw, bh),
             left = left,
@@ -101,36 +145,50 @@ object SuitBadgeHeuristics {
         }
         if (ink < 10) return null
 
-        fun bandWidth(y0: Int, y1: Int): Float {
+        // Measure against the ink bbox so top padding doesn't fake a point
+        // and side padding doesn't fake a wide lobe.
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return null
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+
+        fun pipBandWidth(y0: Int, y1: Int): Float {
             var left = grid
             var right = -1
             for (y in y0 until y1.coerceAtMost(grid)) {
-                for (x in 0 until grid) {
+                for (x in inkMinX..inkMaxX) {
                     if (mask[y][x]) {
                         left = min(left, x)
                         right = max(right, x)
                     }
                 }
             }
-            return if (right >= left) (right - left + 1).toFloat() / grid else 0f
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
         }
 
-        fun bandInk(y0: Int, y1: Int): Int {
-            var count = 0
-            for (y in y0 until y1.coerceAtMost(grid)) {
-                for (x in 0 until grid) if (mask[y][x]) count++
-            }
-            return count
-        }
+        val tipY1 = inkMinY
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val midY0 = (inkMinY + (pipH * 0.32f).toInt()).coerceIn(0, grid - 1)
+        val midY1 = (inkMinY + (pipH * 0.68f).toInt()).coerceIn(midY0 + 1, grid)
+        val peakWidth = pipBandWidth(tipY1, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        val midWidth = pipBandWidth(midY0, midY1)
 
-        val tipWidth = bandWidth(0, (grid * 0.22f).toInt().coerceAtLeast(2))
-        val midWidth = bandWidth((grid * 0.30f).toInt(), (grid * 0.62f).toInt())
-        val topInk = bandInk(0, (grid * 0.28f).toInt().coerceAtLeast(3))
-        val midInk = bandInk((grid * 0.28f).toInt(), (grid * 0.70f).toInt())
-        val botInk = bandInk((grid * 0.70f).toInt(), grid)
-
-        // Horizontal lobe peaks near mid-height: clubs often show 2–3, spades 1–2.
-        val midY = (grid * 0.42f).toInt().coerceIn(2, grid - 3)
+        val midY = (inkMinY + (pipH * 0.45f).toInt()).coerceIn(2, grid - 3)
         val profile = FloatArray(grid)
         for (x in 0 until grid) {
             var sum = 0
@@ -139,58 +197,84 @@ object SuitBadgeHeuristics {
             }
             profile[x] = sum.toFloat()
         }
-        var peaks = 0
-        for (x in 1 until grid - 1) {
-            if (profile[x] >= 1.5f &&
-                profile[x] >= profile[x - 1] &&
-                profile[x] >= profile[x + 1]
-            ) {
-                peaks++
-            }
-        }
-
-        // Tip centeredness: spades concentrate ink near the center tip.
-        var tipMassX = 0f
-        var tipMass = 0
-        for (y in 0 until (grid * 0.24f).toInt().coerceAtLeast(2)) {
-            for (x in 0 until grid) {
-                if (mask[y][x]) {
-                    tipMassX += x
-                    tipMass++
+        val maxProfile = profile.maxOrNull() ?: 0f
+        var valleys = 0
+        if (maxProfile >= 1.5f) {
+            val hi = maxProfile * 0.50f
+            val lo = maxProfile * 0.15f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                val value = profile[x]
+                when {
+                    value >= hi -> {
+                        if (state == 2) valleys++
+                        state = 1
+                    }
+                    value <= lo && state == 1 -> state = 2
                 }
             }
         }
-        val tipCenter = if (tipMass > 0) abs((tipMassX / tipMass) - (grid - 1) * 0.5f) / grid else 1f
+
+        val upperMidY = (inkMinY + (pipH * 0.22f).toInt()).coerceIn(1, grid - 1)
+        val upperProfile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in inkMinY until upperMidY) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            upperProfile[x] = sum.toFloat()
+        }
+        val upperMax = upperProfile.maxOrNull() ?: 0f
+        var upperValleys = 0
+        var tipMass = 0f
+        var tipMoment = 0f
+        if (upperMax >= 1.5f) {
+            val hi = upperMax * 0.45f
+            val lo = upperMax * 0.12f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                val value = upperProfile[x]
+                tipMass += value
+                tipMoment += value * x
+                when {
+                    value >= hi -> {
+                        if (state == 2) upperValleys++
+                        state = 1
+                    }
+                    value <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+        val pipCx = (inkMinX + inkMaxX) * 0.5f
+        val tipOffset = if (tipMass > 0f) abs(tipMoment / tipMass - pipCx) / pipW else 1f
 
         var spadeScore = 0f
         var clubScore = 0f
 
-        // Pointy top vs rounded/wide top lobe.
-        if (tipWidth in 0.08f..0.42f && midWidth > tipWidth + 0.12f) spadeScore += 0.34f
-        if (tipWidth >= 0.38f) clubScore += 0.30f
-        if (tipWidth <= 0.30f && tipCenter < 0.16f) spadeScore += 0.22f
-        if (tipWidth >= 0.34f && tipCenter < 0.22f) clubScore += 0.12f
-
-        // Multi-lobe mid silhouette favors clubs.
+        // Relative to the pip: a spade point is a small fraction of body
+        // width. Smash spade shoulders are round, so do not treat a mid
+        // band as a club lobe.
         when {
-            peaks >= 3 -> clubScore += 0.28f
-            peaks == 2 -> clubScore += 0.10f
-            peaks <= 1 -> spadeScore += 0.16f
+            peakWidth <= 0.34f && shoulderWidth >= peakWidth + 0.12f -> spadeScore += 0.52f
+            peakWidth >= 0.42f -> clubScore += 0.36f
+        }
+        if (peakWidth <= 0.30f) spadeScore += 0.18f
+        if (upperValleys >= 1 && peakWidth >= 0.38f) clubScore += 0.34f
+        if (upperValleys == 0 && peakWidth <= 0.38f && tipOffset <= 0.18f) {
+            spadeScore += 0.22f
         }
 
-        // Relative ink mass: clubs push more ink into upper lobes.
-        val upper = (topInk + midInk).coerceAtLeast(1).toFloat()
-        val topShare = topInk / upper
-        if (topShare < 0.28f && midWidth > 0.45f) spadeScore += 0.12f
-        if (topShare >= 0.30f && tipWidth > 0.32f) clubScore += 0.14f
-        if (botInk > 0 && botInk < ink * 0.28f) {
-            // both have stems; slight preference already covered
+        when {
+            valleys >= 2 -> clubScore += 0.48f
+            valleys == 0 && peakWidth <= 0.40f -> spadeScore += 0.28f
+            valleys == 1 && peakWidth <= 0.34f -> spadeScore += 0.10f
         }
+        if (midWidth >= 0.78f && peakWidth <= 0.36f) spadeScore += 0.10f
 
         val best = max(spadeScore, clubScore)
         val margin = abs(spadeScore - clubScore)
-        if (best < 0.28f) return null
-        val suit = if (spadeScore >= clubScore) Suit.Spades else Suit.Clubs
+        if (best < 0.28f || margin < 0.08f) return null
+        val suit = if (spadeScore > clubScore) Suit.Spades else Suit.Clubs
         val confidence = (0.45f + best * 0.4f + margin * 0.35f).coerceIn(0.45f, 0.95f)
         return Guess(suit, confidence, margin)
     }
@@ -199,6 +283,146 @@ object SuitBadgeHeuristics {
         val located = locateBadge(cardCrop) ?: return null
         return try {
             blackSuitGuess(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    fun redSuitGuess(badge: Bitmap): Guess? {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return null
+
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        var ink = 0
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                val on = isInk(pixels[sy * w + sx])
+                mask[y][x] = on
+                if (on) ink++
+            }
+        }
+        if (ink < 10) return null
+
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return null
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+
+        val topY2 = (inkMinY + max(1, (pipH * 0.18f).toInt())).coerceAtMost(grid)
+        val upperY2 = (inkMinY + max(2, (pipH * 0.40f).toInt())).coerceAtMost(grid)
+        val midY0 = (inkMinY + (pipH * 0.32f).toInt()).coerceIn(0, grid - 1)
+        val midY1 = (inkMinY + (pipH * 0.68f).toInt()).coerceIn(midY0 + 1, grid)
+        val bottomY0 = (inkMinY + (pipH * 0.72f).toInt()).coerceIn(0, grid - 1)
+
+        val topWidth = pipBandWidth(inkMinY, topY2)
+        val upperWidth = pipBandWidth(inkMinY, upperY2)
+        val midWidth = pipBandWidth(midY0, midY1)
+        val bottomWidth = pipBandWidth(bottomY0, inkMaxY + 1)
+
+        val topMidY = (inkMinY + (pipH * 0.22f).toInt()).coerceIn(2, grid - 3)
+        val topProfile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in inkMinY until topMidY) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            topProfile[x] = sum.toFloat()
+        }
+        val topMax = topProfile.maxOrNull() ?: 0f
+        var topValleys = 0
+        if (topMax >= 1.5f) {
+            val hi = topMax * 0.45f
+            val lo = topMax * 0.12f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                val value = topProfile[x]
+                when {
+                    value >= hi -> {
+                        if (state == 2) topValleys++
+                        state = 1
+                    }
+                    value <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+
+        var heartScore = 0f
+        var diamondScore = 0f
+
+        val pointedTop = topWidth <= 0.46f
+        val wideLobes = topWidth >= 0.50f && upperWidth >= 0.70f
+        when {
+            topValleys >= 1 && wideLobes -> heartScore += 0.46f
+            topValleys >= 1 && !pointedTop -> heartScore += 0.28f
+            wideLobes && !pointedTop && upperWidth >= 0.78f -> heartScore += 0.10f
+        }
+        // Diamonds also taper at the bottom. Only treat a pointed base as a
+        // heart when the top is a cleft / two lobes, not a clipped diamond tip.
+        if (bottomWidth <= midWidth * 0.62f &&
+            upperWidth >= midWidth * 0.82f &&
+            (topValleys >= 1 || wideLobes)
+        ) {
+            heartScore += 0.18f
+        }
+
+        when {
+            midWidth >= topWidth + 0.12f && midWidth >= bottomWidth + 0.08f ->
+                diamondScore += 0.52f
+            pointedTop && bottomWidth <= 0.48f -> diamondScore += 0.28f
+        }
+        val aspect = pipW / pipH
+        if (aspect in 0.62f..1.22f && midWidth >= 0.50f && topWidth <= 0.48f) {
+            diamondScore += 0.16f
+        }
+        if (pointedTop && topValleys == 0) {
+            diamondScore += 0.12f
+        }
+
+        val best = max(heartScore, diamondScore)
+        val margin = abs(heartScore - diamondScore)
+        if (best < 0.26f || margin < 0.08f) return null
+        val suit = if (heartScore > diamondScore) Suit.Hearts else Suit.Diamonds
+        val confidence = (0.45f + best * 0.4f + margin * 0.35f).coerceIn(0.45f, 0.95f)
+        return Guess(suit, confidence, margin)
+    }
+
+    fun guessRedSuit(cardCrop: Bitmap): Guess? {
+        val located = locateBadge(cardCrop) ?: return null
+        return try {
+            redSuitGuess(located.bitmap)
         } finally {
             if (!located.bitmap.isRecycled) located.bitmap.recycle()
         }

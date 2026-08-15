@@ -16,7 +16,9 @@ data class DetectionResult(
     val locations: Map<PileRef, List<CardLocation>>,
     val confidence: Float,
     val diagnostics: List<String>,
-    val board: LocatedBoard?
+    val board: LocatedBoard?,
+    val recognizedSlots: List<RecognizedSlot> = emptyList(),
+    val livePlayScreen: Boolean = false
 )
 
 class GameStateDetector(
@@ -38,6 +40,7 @@ class GameStateDetector(
         diagnostics += "profile=${board.profile.name}"
 
         val locations = linkedMapOf<PileRef, List<CardLocation>>()
+        val recognizedSlots = mutableListOf<RecognizedSlot>()
         val foundations = MutableList(4) { emptyList<Card>() }
         val tableau = MutableList(7) { emptyList<Card>() }
 
@@ -51,6 +54,12 @@ class GameStateDetector(
         }
         locations[PileRef.Stock] = listOf(
             locator.toCardLocation(PileRef.Stock, 0, stockRegion)
+        )
+        recognizedSlots += recognizedSlot(
+            pile = PileRef.Stock,
+            index = 0,
+            bounds = stockRegion,
+            hit = stockHit
         )
         val stockCards = when {
             stockHit.isEmpty -> emptyList()
@@ -93,8 +102,15 @@ class GameStateDetector(
             legacyCard?.rank == Rank.King &&
                 (exactRankScores[Rank.Ten] ?: 0f) >= 0.90f
         val exactQueenOverride =
-            legacyCard?.rank == Rank.Ten &&
-                (exactRankScores[Rank.Queen] ?: 0f) >= 0.90f
+            (legacyCard?.rank == Rank.Ten || tightCard?.rank == Rank.Ten) &&
+                (
+                    tightCard?.rank == Rank.Queen ||
+                        (
+                            (exactRankScores[Rank.Queen] ?: 0f) >= 0.72f &&
+                                (exactRankScores[Rank.Queen] ?: 0f) >=
+                                (exactRankScores[Rank.Ten] ?: 0f) - 0.08f
+                            )
+                    )
         val exactEightSpadeOverride =
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Six &&
@@ -141,23 +157,74 @@ class GameStateDetector(
         } else {
             tightCard?.suit ?: baseCard?.suit
         }
-        val fusedCard = if (baseCard != null && correctedRank != null) {
+        val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {
             val candidate = baseCard.copy(
                 rank = correctedRank,
                 suit = correctedSuit ?: baseCard.suit
             )
-            resolveBlackSuit(bitmap, tightWasteRegion, candidate)
+            resolveCardSuitWithTrace(
+                bitmap,
+                tightWasteRegion,
+                candidate,
+                RecognitionTrace.EMPTY
+            )
         } else {
-            null
+            synthesizeWasteFromScores(
+                bitmap = bitmap,
+                legacyRegion = legacyWasteRegion,
+                tightRegion = tightWasteRegion,
+                legacyHit = legacyWasteHit,
+                tightHit = tightWasteHit,
+                rankScores = exactRankScores,
+                suitScores = exactSuitScores
+            )?.let { synthesized ->
+                resolveCardSuitWithTrace(
+                    bitmap,
+                    tightWasteRegion,
+                    synthesized,
+                    RecognitionTrace.EMPTY
+                )
+            } ?: (null to RecognitionTrace.EMPTY)
         }
         val wasteHit = if (fusedCard != null) {
+            val fromFusion = baseCard != null && correctedRank != null
             RecognitionHit(
                 card = fusedCard,
-                confidence = maxOf(legacyWasteHit.confidence, tightWasteHit.confidence),
+                confidence = maxOf(
+                    legacyWasteHit.confidence,
+                    tightWasteHit.confidence,
+                    exactRankScores[fusedCard.rank] ?: 0f
+                ).coerceAtLeast(0.55f),
                 isFaceDown = false,
                 isEmpty = false,
-                diagnostic = "fused-${fusedCard.rank.name}-${fusedCard.suit.name}",
-                inferredRed = fusedCard.suit.isRed
+                diagnostic = if (fromFusion) {
+                    "fused-${fusedCard.rank.name}-${fusedCard.suit.name}"
+                } else {
+                    "synthesized-${fusedCard.rank.name}-${fusedCard.suit.name}"
+                },
+                inferredRed = fusedCard.suit.isRed,
+                trace = if (fromFusion) {
+                    RecognitionTrace(
+                        rankSource = "waste-fusion",
+                        rankScore = exactRankScores[correctedRank] ?: legacyWasteHit.trace.rankScore,
+                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
+                        suitSource = "waste-fusion",
+                        suitScore = exactSuitBest?.value,
+                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores),
+                        postSteps = listOf(
+                            "waste-fusion:legacy=${legacyCard?.id},tight=${tightCard?.id}"
+                        )
+                    ).merge(legacyWasteHit.trace).merge(tightWasteHit.trace).merge(fusionPostTrace)
+                } else {
+                    RecognitionTrace(
+                        rankSource = "waste-scores",
+                        rankScore = exactRankScores[fusedCard.rank],
+                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
+                        suitSource = "waste-scores",
+                        suitScore = exactSuitScores[fusedCard.suit],
+                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores)
+                    ).merge(fusionPostTrace)
+                }
             )
         } else {
             legacyWasteHit
@@ -169,6 +236,13 @@ class GameStateDetector(
                 tightWasteHit.card.id != legacyWasteHit.card.id
         locations[PileRef.Waste] = listOf(
             locator.toCardLocation(PileRef.Waste, 0, wasteRegion)
+        )
+        recognizedSlots += recognizedSlot(
+            pile = PileRef.Waste,
+            index = 0,
+            bounds = wasteRegion,
+            hit = wasteHit,
+            cardOverride = wasteHit.card
         )
         val wasteCards = listOfNotNull(cardFromHit(wasteHit))
         diagnostics += "waste=${wasteHit.diagnostic}:${wasteHit.card}"
@@ -190,9 +264,17 @@ class GameStateDetector(
             locations[PileRef.Foundation(index)] = listOf(
                 locator.toCardLocation(PileRef.Foundation(index), 0, region)
             )
-            val foundationCard = cardFromHit(hit)?.let { card ->
-                resolveBlackSuit(bitmap, region, card)
-            }
+            val (foundationCard, trace) = cardFromHit(hit)?.let { card ->
+                resolveCardSuitWithTrace(bitmap, region, card, hit.trace)
+            } ?: (null to hit.trace)
+            recognizedSlots += recognizedSlot(
+                pile = PileRef.Foundation(index),
+                index = 0,
+                bounds = region,
+                hit = hit,
+                cardOverride = foundationCard,
+                trace = trace
+            )
             foundations[index] = listOfNotNull(foundationCard)
             diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard}"
         }
@@ -231,6 +313,15 @@ class GameStateDetector(
                             faceDownCount,
                             bounds
                         )
+                        recognizedSlots += RecognizedSlot(
+                            pile = PileRef.Tableau(col),
+                            index = faceDownCount,
+                            bounds = bounds,
+                            engine = SlotGuess(SlotKind.FaceDown),
+                            confidence = 0.85f,
+                            diagnostic = "face-down",
+                            inferred = false
+                        )
                         faceDownCount++
                     }
                     y += downStep
@@ -240,18 +331,19 @@ class GameStateDetector(
                 val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
                 var card = cardFromHit(hit) ?: Card(
                     Rank.Ace,
-                    when (inkRed) {
-                        true -> Suit.Hearts
-                        false -> Suit.Spades
-                        null -> Suit.Clubs
-                    },
+                    Suit.Clubs,
                     faceUp = true,
                     known = false
                 )
-                if (inkRed != null && card.suit.isRed != inkRed) {
-                    card = card.copy(suit = if (inkRed) Suit.Hearts else Suit.Spades)
-                }
-                card = resolveBlackSuit(bitmap, faceRegion, card)
+                var slotTrace = hit.trace
+                val (resolvedCard, resolvedTrace) = resolveCardSuitWithTrace(
+                    bitmap,
+                    faceRegion,
+                    card,
+                    slotTrace
+                )
+                card = resolvedCard
+                slotTrace = resolvedTrace
 
                 // Reconstruct the overlapped face-up run geometrically. Sampling
                 // colored header strips missed leading cards in long cascades;
@@ -290,6 +382,15 @@ class GameStateDetector(
                         PileRef.Tableau(col),
                         cards.lastIndex,
                         bounds
+                    )
+                    recognizedSlots += RecognizedSlot(
+                        pile = PileRef.Tableau(col),
+                        index = cards.lastIndex,
+                        bounds = bounds,
+                        engine = SlotGuess(SlotKind.FaceDown),
+                        confidence = 0.80f,
+                        diagnostic = "face-down-boundary",
+                        inferred = false
                     )
                     faceDownCount++
                     firstFaceTop += downStep
@@ -364,7 +465,8 @@ class GameStateDetector(
                         rank = if (known) Rank.fromValue(inferredValue) else Rank.Ace,
                         suit = if (inferredRed) Suit.Hearts else Suit.Spades,
                         faceUp = true,
-                        known = known
+                        known = known,
+                        inferred = true
                     )
                     val top = firstFaceTop + exposedIndex * faceUpStep
                     val bounds = BoardRegion(
@@ -379,10 +481,43 @@ class GameStateDetector(
                         cards.lastIndex,
                         bounds
                     )
+                    recognizedSlots += RecognizedSlot(
+                        pile = PileRef.Tableau(col),
+                        index = cards.lastIndex,
+                        bounds = bounds,
+                        engine = slotGuessFromCard(inferred),
+                        confidence = if (known) 0.55f else 0.20f,
+                        diagnostic = "inferred-cascade",
+                        inferred = true
+                    )
                 }
                 cards += card
                 locs += locator.toCardLocation(PileRef.Tableau(col), cards.lastIndex, faceRegion)
+                recognizedSlots += recognizedSlot(
+                    pile = PileRef.Tableau(col),
+                    index = cards.lastIndex,
+                    bounds = faceRegion,
+                    hit = hit,
+                    cardOverride = card,
+                    trace = slotTrace
+                )
                 if (!card.known) diagnostics += "tableau$col[top]=${hit.diagnostic}"
+            } else {
+                val emptyBounds = BoardRegion(
+                    columnRegion.left,
+                    columnRegion.top,
+                    columnRegion.right,
+                    (columnRegion.top + cardHeight).coerceAtMost(columnRegion.bottom)
+                )
+                recognizedSlots += RecognizedSlot(
+                    pile = PileRef.Tableau(col),
+                    index = 0,
+                    bounds = emptyBounds,
+                    engine = SlotGuess(SlotKind.Empty),
+                    confidence = 0.80f,
+                    diagnostic = "empty-column",
+                    inferred = false
+                )
             }
             tableau[col] = cards
             locations[PileRef.Tableau(col)] = locs
@@ -408,13 +543,24 @@ class GameStateDetector(
         val avg = confidences.average().toFloat()
         val totalCards = tableau.sumOf { it.size } + foundations.sumOf { it.size } +
             wasteCards.size + stockCards.size
+        val livePlayScreen = isLivePlayScreen(
+            bitmap = bitmap,
+            board = board,
+            tableau = tableau,
+            foundations = foundations,
+            waste = wasteCards,
+            stock = stockCards
+        )
+        diagnostics += "livePlayScreen=$livePlayScreen"
         if (totalCards == 0) {
             return DetectionResult(
                 state = null,
                 locations = locations,
                 confidence = avg,
                 diagnostics = diagnostics + "empty-board",
-                board = board
+                board = board,
+                recognizedSlots = recognizedSlots,
+                livePlayScreen = false
             )
         }
 
@@ -423,7 +569,7 @@ class GameStateDetector(
             wasteCards.count { it.known }
         diagnostics += "knownFaceUp=$knownFaceUp"
 
-        val state = scrubWeakBlackFoundationSuits(
+        val scrubbed = scrubWeakBlackFoundationSuits(
             bitmap,
             locations,
             GameState(
@@ -433,14 +579,64 @@ class GameStateDetector(
                 waste = wasteCards
             )
         )
+        val state = DeckConstraintPass.apply(
+            bitmap = bitmap,
+            recognizer = recognizer,
+            state = scrubbed,
+            recognizedSlots = recognizedSlots
+        )
 
         return DetectionResult(
             state = state,
             locations = locations,
             confidence = avg,
             diagnostics = diagnostics,
-            board = board
+            board = board,
+            recognizedSlots = recognizedSlots,
+            livePlayScreen = livePlayScreen
         )
+    }
+
+    /**
+     * True when the frame looks like an in-progress Smash deal: tableau cards
+     * plus teal backs / white faces in the playfield. Menus, shops, and the
+     * assistant UI fail this gate so the overlay arrow stays hidden.
+     */
+    private fun isLivePlayScreen(
+        bitmap: Bitmap,
+        board: LocatedBoard,
+        tableau: List<List<Card>>,
+        foundations: List<List<Card>>,
+        waste: List<Card>,
+        stock: List<Card>
+    ): Boolean {
+        val occupiedCols = tableau.count { it.isNotEmpty() }
+        val tableauCards = tableau.sumOf { it.size }
+        val faceDown = tableau.sumOf { col -> col.count { !it.faceUp } }
+        val faceUpVisible = tableau.sumOf { col -> col.count { it.faceUp } } +
+            waste.size +
+            foundations.count { it.isNotEmpty() }
+        val enoughCards =
+            (occupiedCols >= 2 && tableauCards >= 4) ||
+                (occupiedCols >= 1 && faceUpVisible >= 4) ||
+                (faceDown >= 3 && occupiedCols >= 2) ||
+                (stock.isNotEmpty() && tableauCards >= 6)
+
+        val cols = locator.tableauColumnRegions(board)
+        val tableauBand = BoardRegion(
+            left = cols.first().left,
+            top = cols.first().top,
+            right = cols.last().right,
+            bottom = cols.last().bottom
+        )
+        val band = SmashColorAnalyzer.analyze(bitmap, tableauBand)
+        val stockStats = SmashColorAnalyzer.analyze(bitmap, locator.stockRegion(board))
+        val smashColor =
+            band.tealRatio >= 0.025f ||
+                stockStats.tealRatio >= 0.12f ||
+                band.whiteRatio >= 0.07f
+
+        return enoughCards && smashColor
     }
 
     /**
@@ -489,6 +685,64 @@ class GameStateDetector(
             right = cardRight,
             bottom = full.bottom
         )
+    }
+
+    /**
+     * When color gates reject a fanned waste crop, template scores on the tight
+     * card bounds can still identify the playable top card (e.g. 10H onto JC).
+     */
+    private fun synthesizeWasteFromScores(
+        bitmap: Bitmap,
+        legacyRegion: BoardRegion,
+        tightRegion: BoardRegion,
+        legacyHit: RecognitionHit,
+        tightHit: RecognitionHit,
+        rankScores: Map<Rank, Float>,
+        suitScores: Map<Suit, Float>
+    ): Card? {
+        if (legacyHit.card != null || tightHit.card != null) return null
+        val legacyStats = SmashColorAnalyzer.analyze(bitmap, legacyRegion)
+        val tightStats = SmashColorAnalyzer.analyze(bitmap, tightRegion)
+        val hasFace = SmashColorAnalyzer.looksFaceUp(legacyStats) ||
+            SmashColorAnalyzer.looksFaceUp(tightStats) ||
+            legacyStats.whiteRatio > 0.08f ||
+            tightStats.whiteRatio > 0.08f
+        if (!hasFace) return null
+
+        val ranked = rankScores.entries.sortedByDescending { it.value }
+        val rank = ranked.firstOrNull()
+            ?.takeIf { it.value >= 0.58f }
+            ?.takeIf { first ->
+                val second = ranked.getOrNull(1)?.value ?: 0f
+                first.value - second >= 0.04f || first.value >= 0.68f
+            }
+            ?.key ?: return null
+
+        val red = when {
+            tightStats.redInkRatio > tightStats.blackInkRatio + 0.008f -> true
+            tightStats.blackInkRatio > tightStats.redInkRatio + 0.008f -> false
+            legacyStats.redInkRatio > legacyStats.blackInkRatio + 0.008f -> true
+            legacyStats.blackInkRatio > legacyStats.redInkRatio + 0.008f -> false
+            else -> null
+        }
+        val suitCandidates = when (red) {
+            true -> listOf(Suit.Hearts, Suit.Diamonds)
+            false -> listOf(Suit.Clubs, Suit.Spades)
+            null -> Suit.entries.toList()
+        }
+        val suited = suitCandidates.mapNotNull { suit ->
+            suitScores[suit]?.let { suit to it }
+        }.sortedByDescending { it.second }
+        val suitPick = suited.firstOrNull()
+            ?.takeIf { (suit, score) ->
+                score >= 0.42f &&
+                    (red == null || suit.isRed == red) &&
+                    (suited.getOrNull(1)?.second?.let { second -> score - second >= 0.03f } != false ||
+                        score >= 0.62f)
+            }
+            ?.first ?: return null
+
+        return Card(rank, suitPick, faceUp = true, known = true)
     }
 
     /**
@@ -600,6 +854,30 @@ class GameStateDetector(
             }
             if (!placesOnBlackFoundation) return cards
             val bounds = locations[pile]?.lastOrNull()?.bounds ?: return cards
+            val cropLeft = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+            val cropTop = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+            val cropRight = bounds.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+            val cropBottom = bounds.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+            if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+                val crop = Bitmap.createBitmap(
+                    bitmap,
+                    cropLeft,
+                    cropTop,
+                    cropRight - cropLeft,
+                    cropBottom - cropTop
+                )
+                try {
+                    val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
+                    if (shape != null &&
+                        shape.suit == card.suit &&
+                        shape.margin >= 0.10f
+                    ) {
+                        return cards
+                    }
+                } finally {
+                    crop.recycle()
+                }
+            }
             val scores = recognizer.suitTemplateScores(
                 bitmap,
                 bounds,
@@ -608,7 +886,7 @@ class GameStateDetector(
             val club = scores[Suit.Clubs] ?: 0f
             val spade = scores[Suit.Spades] ?: 0f
             val margin = kotlin.math.abs(club - spade)
-            val leader = if (spade >= club) Suit.Spades else Suit.Clubs
+            val leader = if (club >= spade) Suit.Clubs else Suit.Spades
             val bestScore = maxOf(club, spade)
             // Match resolveBlackSuit confidence: only suppress when we would not
             // have committed this suit in the first place.
@@ -627,30 +905,27 @@ class GameStateDetector(
                     card.rank == Rank.Two &&
                     card.canPlaceOnFoundation(top)
             }
-            if (aceFoundation) {
-                val cropLeft = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
-                val cropTop = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
-                val cropRight = bounds.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
-                val cropBottom = bounds.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
-                if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
-                    val crop = Bitmap.createBitmap(
-                        bitmap,
-                        cropLeft,
-                        cropTop,
-                        cropRight - cropLeft,
-                        cropBottom - cropTop
-                    )
-                    try {
-                        val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
-                        if (shape != null &&
-                            shape.suit != card.suit &&
-                            shape.margin >= 0.06f
-                        ) {
-                            return cards.dropLast(1) + card.copy(suitAmbiguous = true)
-                        }
-                    } finally {
-                        crop.recycle()
+            if (aceFoundation &&
+                cropRight - cropLeft >= 8 &&
+                cropBottom - cropTop >= 8
+            ) {
+                val crop = Bitmap.createBitmap(
+                    bitmap,
+                    cropLeft,
+                    cropTop,
+                    cropRight - cropLeft,
+                    cropBottom - cropTop
+                )
+                try {
+                    val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
+                    if (shape != null &&
+                        shape.suit != card.suit &&
+                        shape.margin >= 0.06f
+                    ) {
+                        return cards.dropLast(1) + card.copy(suitAmbiguous = true)
                     }
+                } finally {
+                    crop.recycle()
                 }
             }
             return cards
@@ -664,12 +939,153 @@ class GameStateDetector(
         return state.copy(tableau = tableau, waste = waste)
     }
 
+    private fun resolveCardSuitWithTrace(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card,
+        trace: RecognitionTrace
+    ): Pair<Card, RecognitionTrace> {
+        if (!card.known) return card to trace
+        val beforeSuit = card.suit
+        val beforeAmbiguous = card.suitAmbiguous
+        val resolved = if (card.suit.isRed) {
+            resolveRedSuit(bitmap, region, card)
+        } else {
+            resolveBlackSuit(bitmap, region, card)
+        }
+        val post = when {
+            resolved.suit != beforeSuit ->
+                "post-${if (beforeSuit.isRed) "red" else "black"}-suit:$beforeSuit->${resolved.suit}"
+            resolved.suitAmbiguous && !beforeAmbiguous ->
+                "post-${if (beforeSuit.isRed) "red" else "black"}-suit:marked-ambiguous"
+            !resolved.suitAmbiguous && beforeAmbiguous ->
+                "post-${if (beforeSuit.isRed) "red" else "black"}-suit:cleared-ambiguous"
+            else -> null
+        }
+        return resolved to (post?.let { trace.withPost(it) } ?: trace)
+    }
+
+    private fun resolveRedSuit(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        card: Card
+    ): Card {
+        if (!card.known || !card.suit.isRed) return card
+        val cropLeft = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val cropTop = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val cropRight = region.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+        val cropBottom = region.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+        val shape = if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+            val crop = Bitmap.createBitmap(
+                bitmap,
+                cropLeft,
+                cropTop,
+                cropRight - cropLeft,
+                cropBottom - cropTop
+            )
+            try {
+                SuitBadgeHeuristics.guessRedSuit(crop)
+            } finally {
+                crop.recycle()
+            }
+        } else {
+            null
+        }
+        val suitScores = recognizer.suitTemplateScores(
+            bitmap,
+            region,
+            setOf(Suit.Hearts, Suit.Diamonds)
+        )
+        val heartScore = suitScores[Suit.Hearts] ?: 0f
+        val diamondScore = suitScores[Suit.Diamonds] ?: 0f
+        val margin = kotlin.math.abs(heartScore - diamondScore)
+        val templateLeader = when {
+            diamondScore > heartScore + 0.025f -> Suit.Diamonds
+            heartScore > diamondScore + 0.025f -> Suit.Hearts
+            else -> null
+        }
+        val bestScore = maxOf(heartScore, diamondScore)
+        val templateConfident = templateLeader != null &&
+            (margin >= 0.035f || (margin >= 0.022f && bestScore >= 0.78f))
+        val shapeConfident = shape != null && shape.margin >= 0.08f
+        val shapeSuit = shape?.suit
+        val shapeMargin = shape?.margin ?: 0f
+        val diamondLeads = diamondScore > heartScore + 0.035f
+        val heartLeads = heartScore > diamondScore + 0.035f
+        val resolved = when {
+            shapeSuit != null && templateLeader == shapeSuit ->
+                shapeSuit
+            templateConfident && templateLeader != null -> {
+                if (shapeSuit != null &&
+                    shapeSuit != templateLeader &&
+                    shapeMargin >= 0.18f &&
+                    (
+                        (shapeSuit == Suit.Hearts && heartLeads) ||
+                            (shapeSuit == Suit.Diamonds && diamondLeads)
+                        )
+                ) {
+                    shapeSuit
+                } else {
+                    templateLeader
+                }
+            }
+            templateLeader != null && margin >= 0.022f && bestScore >= 0.72f ->
+                templateLeader
+            templateLeader != null && margin >= 0.028f ->
+                templateLeader
+            shapeConfident &&
+                shapeSuit == Suit.Diamonds &&
+                shapeMargin >= 0.12f &&
+                diamondLeads ->
+                Suit.Diamonds
+            shapeConfident &&
+                shapeSuit == Suit.Hearts &&
+                shapeMargin >= 0.14f &&
+                heartLeads ->
+                Suit.Hearts
+            else -> {
+                val fallback = when {
+                    diamondLeads -> Suit.Diamonds
+                    heartLeads -> Suit.Hearts
+                    templateLeader != null && margin >= 0.018f && bestScore >= 0.68f -> templateLeader
+                    templateLeader != null -> templateLeader
+                    else -> card.suit
+                }
+                return card.copy(
+                    suit = fallback,
+                    suitAmbiguous = margin < 0.04f && shapeSuit == null
+                )
+            }
+        }
+        return card.copy(suit = resolved, suitAmbiguous = false)
+    }
+
     private fun resolveBlackSuit(
         bitmap: Bitmap,
         region: BoardRegion,
         card: Card
     ): Card {
         if (!card.known || card.suit.isRed) return card
+        val cropLeft = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val cropTop = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val cropRight = region.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+        val cropBottom = region.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+        val shape = if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+            val crop = Bitmap.createBitmap(
+                bitmap,
+                cropLeft,
+                cropTop,
+                cropRight - cropLeft,
+                cropBottom - cropTop
+            )
+            try {
+                SuitBadgeHeuristics.guessBlackSuit(crop)
+            } finally {
+                crop.recycle()
+            }
+        } else {
+            null
+        }
         val suitScores = recognizer.suitTemplateScores(
             bitmap,
             region,
@@ -678,16 +1094,85 @@ class GameStateDetector(
         val clubScore = suitScores[Suit.Clubs] ?: 0f
         val spadeScore = suitScores[Suit.Spades] ?: 0f
         val margin = kotlin.math.abs(clubScore - spadeScore)
-        val leader = if (spadeScore >= clubScore) Suit.Spades else Suit.Clubs
-        val bestScore = maxOf(clubScore, spadeScore)
-        // Require either a clear margin or a strong absolute winner. Tiny
-        // 0.02–0.03 leads are common club/spade noise on Smash badges.
-        if (margin >= 0.050f || (margin >= 0.025f && bestScore >= 0.84f)) {
-            return card.copy(suit = leader, suitAmbiguous = false)
+        val templateLeader = when {
+            spadeScore > clubScore + 0.035f -> Suit.Spades
+            clubScore > spadeScore + 0.035f -> Suit.Clubs
+            else -> null
         }
-        // Near-tie: keep color playable, but never send this card to foundation.
-        return card.copy(suitAmbiguous = true)
+        val bestScore = maxOf(clubScore, spadeScore)
+        val templateConfident = templateLeader != null &&
+            (margin >= 0.050f || (margin >= 0.030f && bestScore >= 0.84f))
+        val shapeConfident = shape != null && shape.margin >= 0.08f
+        val shapeSuit = shape?.suit
+        val shapeMargin = shape?.margin ?: 0f
+        val spadeLeads = spadeScore > clubScore + 0.035f
+        val clubLeads = clubScore > spadeScore + 0.035f
+        val resolved = when {
+            shapeSuit != null && templateLeader == shapeSuit ->
+                shapeSuit
+            templateConfident && templateLeader != null -> {
+                if (shapeSuit != null &&
+                    shapeSuit != templateLeader &&
+                    shapeMargin >= 0.16f &&
+                    (
+                        (shapeSuit == Suit.Spades && spadeLeads) ||
+                            (shapeSuit == Suit.Clubs && clubLeads)
+                        )
+                ) {
+                    shapeSuit
+                } else {
+                    templateLeader
+                }
+            }
+            templateLeader != null && margin >= 0.024f && bestScore >= 0.76f ->
+                templateLeader
+            templateLeader != null && margin >= 0.030f ->
+                templateLeader
+            shapeConfident &&
+                shapeSuit == Suit.Spades &&
+                shapeMargin >= 0.12f &&
+                spadeLeads ->
+                Suit.Spades
+            shapeConfident &&
+                shapeSuit == Suit.Clubs &&
+                shapeMargin >= 0.12f &&
+                clubLeads ->
+                Suit.Clubs
+            else -> {
+                val fallback = when {
+                    spadeLeads -> Suit.Spades
+                    clubLeads -> Suit.Clubs
+                    templateLeader != null && margin >= 0.020f && bestScore >= 0.72f -> templateLeader
+                    templateLeader != null -> templateLeader
+                    else -> card.suit
+                }
+                return card.copy(
+                    suit = fallback,
+                    suitAmbiguous = margin < 0.045f && shapeSuit == null
+                )
+            }
+        }
+        return card.copy(suit = resolved, suitAmbiguous = false)
     }
+
+    private fun recognizedSlot(
+        pile: PileRef,
+        index: Int,
+        bounds: BoardRegion,
+        hit: RecognitionHit,
+        cardOverride: Card? = null,
+        trace: RecognitionTrace = hit.trace,
+        inferred: Boolean = false
+    ): RecognizedSlot = RecognizedSlot(
+        pile = pile,
+        index = index,
+        bounds = bounds,
+        engine = slotGuessFromHit(hit, cardOverride),
+        confidence = hit.confidence,
+        diagnostic = hit.diagnostic,
+        trace = trace,
+        inferred = inferred
+    )
 
     private fun cardFromHit(hit: RecognitionHit): Card? {
         if (hit.isEmpty || hit.isFaceDown) return null
@@ -695,7 +1180,7 @@ class GameStateDetector(
         // Face-up occupancy without a confident rank/suit match.
         val suit = when (hit.inferredRed) {
             true -> Suit.Hearts
-            false -> Suit.Spades
+            false -> Suit.Clubs
             null -> Suit.Clubs
         }
         return Card(Rank.Ace, suit, faceUp = true, known = false)

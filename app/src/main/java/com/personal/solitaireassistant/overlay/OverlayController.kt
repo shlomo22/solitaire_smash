@@ -119,24 +119,42 @@ class MoveOverlayView @JvmOverloads constructor(
 
 class OverlayController(
     private val context: Context,
-    private val onCancelHint: () -> Unit = {}
+    private val onCancelHint: () -> Unit = {},
+    private val onLabelBoard: () -> Unit = {}
 ) {
     private val windowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var arrowView: MoveOverlayView? = null
     private var cancelButton: TextView? = null
+    private var labelButton: TextView? = null
     private var colorArgb: Int = 0xE6000000.toInt()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingBlink: Runnable? = null
+    @Volatile
+    private var reviewMode = false
 
     fun canDrawOverlays(): Boolean =
         Settings.canDrawOverlays(context)
 
+    fun setReviewMode(active: Boolean) = runOnMain {
+        reviewMode = active
+        if (active) {
+            hideOverlayChrome()
+        } else if (arrowView != null) {
+            showLabelButton()
+        }
+    }
+
     fun showIdle() = runOnMain {
         if (!canDrawOverlays()) return@runOnMain
+        if (reviewMode) {
+            hideOverlayChrome()
+            return@runOnMain
+        }
         ensureArrowView()
         arrowView?.clearArrow()
         hideCancelButton()
+        showLabelButton()
     }
 
     fun setColor(argb: Int) = runOnMain {
@@ -146,18 +164,28 @@ class OverlayController(
 
     fun showMove(from: BoardRegion, to: BoardRegion) = runOnMain {
         if (!canDrawOverlays()) return@runOnMain
+        if (reviewMode) {
+            hideOverlayChrome()
+            return@runOnMain
+        }
         cancelBlink()
         ensureArrowView()
         arrowView?.showArrow(from, to)
         showCancelButton()
+        showLabelButton()
     }
 
     fun blinkMove(from: BoardRegion, to: BoardRegion) = runOnMain {
         if (!canDrawOverlays()) return@runOnMain
+        if (reviewMode) {
+            hideOverlayChrome()
+            return@runOnMain
+        }
         cancelBlink()
         ensureArrowView()
         arrowView?.clearArrow()
         showCancelButton()
+        showLabelButton()
         val showAgain = Runnable {
             pendingBlink = null
             arrowView?.showArrow(from, to)
@@ -170,6 +198,14 @@ class OverlayController(
         cancelBlink()
         arrowView?.clearArrow()
         hideCancelButton()
+        if (reviewMode) hideLabelButton()
+    }
+
+    private fun hideOverlayChrome() {
+        cancelBlink()
+        arrowView?.clearArrow()
+        hideCancelButton()
+        hideLabelButton()
     }
 
     fun hide() = runOnMain {
@@ -178,6 +214,8 @@ class OverlayController(
         arrowView = null
         removeView(cancelButton)
         cancelButton = null
+        removeView(labelButton)
+        labelButton = null
     }
 
     /** Overlay views must only be mutated on the main thread. */
@@ -222,6 +260,31 @@ class OverlayController(
         cancelButton?.visibility = View.GONE
     }
 
+    private fun showLabelButton() {
+        if (reviewMode) return
+        if (labelButton == null) {
+            labelButton = TextView(context).apply {
+                text = context.getString(com.personal.solitaireassistant.R.string.overlay_label_board)
+                setTextColor(0xFFFFFFFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(dp(18), dp(10), dp(18), dp(10))
+                background = roundedBackground(0xCC1B5E20.toInt())
+                alpha = 0.92f
+                isClickable = true
+                isFocusable = false
+                setOnClickListener { onLabelBoard() }
+            }
+            windowManager.addView(labelButton, labelLayoutParams())
+        }
+        labelButton?.visibility = View.VISIBLE
+    }
+
+    private fun hideLabelButton() {
+        labelButton?.visibility = View.GONE
+    }
+
     private fun overlayLayoutParams(): WindowManager.LayoutParams {
         val type = overlayWindowType()
         return WindowManager.LayoutParams(
@@ -255,6 +318,23 @@ class OverlayController(
         }
     }
 
+    private fun labelLayoutParams(): WindowManager.LayoutParams {
+        val type = overlayWindowType()
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            x = dp(20)
+            y = dp(92)
+            title = "SolitaireLabelOverlay"
+        }
+    }
+
     private fun overlayWindowType(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -274,12 +354,13 @@ class OverlayController(
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
 
-    private fun roundedBackground() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-        cornerRadius = dp(18).toFloat()
-        setColor(0xCC4A148C.toInt())
-        setStroke(dp(1), 0x88FFFFFF.toInt())
-    }
+    private fun roundedBackground(color: Int = 0xCC4A148C.toInt()) =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(18).toFloat()
+            setColor(color)
+            setStroke(dp(1), 0x88FFFFFF.toInt())
+        }
 
     private fun cancelBlink() {
         pendingBlink?.let(mainHandler::removeCallbacks)
