@@ -9,6 +9,7 @@ import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 data class DetectionResult(
@@ -870,7 +871,7 @@ class GameStateDetector(
                     val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
                     if (shape != null &&
                         shape.suit == card.suit &&
-                        shape.margin >= 0.10f
+                        shape.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN
                     ) {
                         return cards
                     }
@@ -999,6 +1000,11 @@ class GameStateDetector(
         val heartScore = suitScores[Suit.Hearts] ?: 0f
         val diamondScore = suitScores[Suit.Diamonds] ?: 0f
         val margin = kotlin.math.abs(heartScore - diamondScore)
+        val pairwiseLead = when {
+            heartScore >= 0.45f && diamondScore >= 0.45f && margin >= CardRecognizer.RED_SUIT_MARGIN ->
+                if (heartScore > diamondScore) Suit.Hearts else Suit.Diamonds
+            else -> null
+        }
         val templateLeader = when {
             diamondScore > heartScore + 0.025f -> Suit.Diamonds
             heartScore > diamondScore + 0.025f -> Suit.Hearts
@@ -1008,10 +1014,31 @@ class GameStateDetector(
         val templateConfident = templateLeader != null &&
             (margin >= 0.035f || (margin >= 0.022f && bestScore >= 0.78f))
         val shapeConfident = shape != null && shape.margin >= 0.08f
+        val shapeStrong = shape != null && shape.margin >= 0.12f
         val shapeSuit = shape?.suit
         val shapeMargin = shape?.margin ?: 0f
         val diamondLeads = diamondScore > heartScore + 0.035f
         val heartLeads = heartScore > diamondScore + 0.035f
+        if (shapeStrong && shapeSuit != null && margin < CardRecognizer.RED_SUIT_MARGIN) {
+            return card.copy(
+                suit = shapeSuit,
+                suitAmbiguous = shapeMargin < 0.14f
+            )
+        }
+        if (margin < CardRecognizer.RED_SUIT_MARGIN &&
+            maxOf(heartScore, diamondScore) >= 0.72f &&
+            shapeStrong &&
+            shapeSuit != null &&
+            (
+                (shapeSuit == Suit.Hearts && heartScore + 0.08f >= diamondScore) ||
+                    (shapeSuit == Suit.Diamonds && diamondScore + 0.08f >= heartScore)
+                )
+        ) {
+            return card.copy(
+                suit = shapeSuit,
+                suitAmbiguous = shapeMargin < 0.14f
+            )
+        }
         val resolved = when {
             shapeSuit != null && templateLeader == shapeSuit ->
                 shapeSuit
@@ -1029,6 +1056,8 @@ class GameStateDetector(
                     templateLeader
                 }
             }
+            pairwiseLead != null && templateLeader == pairwiseLead ->
+                pairwiseLead
             templateLeader != null && margin >= 0.022f && bestScore >= 0.72f ->
                 templateLeader
             templateLeader != null && margin >= 0.028f ->
@@ -1043,17 +1072,22 @@ class GameStateDetector(
                 shapeMargin >= 0.14f &&
                 heartLeads ->
                 Suit.Hearts
+            shapeStrong && shapeSuit != null ->
+                shapeSuit
             else -> {
                 val fallback = when {
                     diamondLeads -> Suit.Diamonds
                     heartLeads -> Suit.Hearts
+                    pairwiseLead != null -> pairwiseLead
                     templateLeader != null && margin >= 0.018f && bestScore >= 0.68f -> templateLeader
                     templateLeader != null -> templateLeader
                     else -> card.suit
                 }
+                val ambiguous = margin < CardRecognizer.RED_SUIT_MARGIN ||
+                    (shapeSuit != null && shapeSuit != fallback && shapeMargin >= 0.12f)
                 return card.copy(
                     suit = fallback,
-                    suitAmbiguous = margin < 0.04f && shapeSuit == null
+                    suitAmbiguous = (ambiguous && shapeSuit == null) || margin < 0.035f
                 )
             }
         }
@@ -1066,54 +1100,92 @@ class GameStateDetector(
         card: Card
     ): Card {
         if (!card.known || card.suit.isRed) return card
+        val scores = recognizer.blackSuitTemplateScores(bitmap, region)
+        val clubScore = scores.fullClub
+        val spadeScore = scores.fullSpade
+        val margin = scores.fullMargin
         val cropLeft = region.left.toInt().coerceIn(0, bitmap.width - 1)
         val cropTop = region.top.toInt().coerceIn(0, bitmap.height - 1)
         val cropRight = region.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
         val cropBottom = region.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
-        val shape = if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
-            val crop = Bitmap.createBitmap(
+        val cardCrop = if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+            Bitmap.createBitmap(
                 bitmap,
                 cropLeft,
                 cropTop,
                 cropRight - cropLeft,
                 cropBottom - cropTop
             )
-            try {
-                SuitBadgeHeuristics.guessBlackSuit(crop)
-            } finally {
-                crop.recycle()
-            }
         } else {
             null
         }
+        try {
+            val tiebreakShape = cardCrop?.let {
+                SuitBadgeHeuristics.guessBlackSuit(it, CardRecognizer.TOP_BLACK_SHAPE_VETO_MARGIN)
+            }
+            val shape = tiebreakShape?.takeIf { it.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN }
+            if (margin < CardRecognizer.BLACK_SUIT_TOP_TIEBREAK_MAX) {
+                val (leader, ambiguous) = recognizer.resolveBlackSuitLeader(
+                    scores,
+                    cardCrop,
+                    tiebreakShape
+                )
+                if (leader != null) {
+                    return card.copy(
+                        suit = leader,
+                        suitAmbiguous = ambiguous
+                    )
+                }
+            }
+            return resolveBlackSuitLegacy(
+                card,
+                clubScore,
+                spadeScore,
+                bitmap,
+                region,
+                shape
+            )
+        } finally {
+            cardCrop?.recycle()
+        }
+    }
+
+    private fun resolveBlackSuitLegacy(
+        card: Card,
+        clubScore: Float,
+        spadeScore: Float,
+        bitmap: Bitmap,
+        region: BoardRegion,
+        shape: SuitBadgeHeuristics.Guess?
+    ): Card {
         val suitScores = recognizer.suitTemplateScores(
             bitmap,
             region,
             setOf(Suit.Clubs, Suit.Spades)
         )
-        val clubScore = suitScores[Suit.Clubs] ?: 0f
-        val spadeScore = suitScores[Suit.Spades] ?: 0f
-        val margin = kotlin.math.abs(clubScore - spadeScore)
+        val clubScoreFromMap = suitScores[Suit.Clubs] ?: clubScore
+        val spadeScoreFromMap = suitScores[Suit.Spades] ?: spadeScore
+        val marginFromMap = kotlin.math.abs(clubScoreFromMap - spadeScoreFromMap)
         val templateLeader = when {
-            spadeScore > clubScore + 0.035f -> Suit.Spades
-            clubScore > spadeScore + 0.035f -> Suit.Clubs
+            spadeScoreFromMap > clubScoreFromMap + 0.035f -> Suit.Spades
+            clubScoreFromMap > spadeScoreFromMap + 0.035f -> Suit.Clubs
             else -> null
         }
-        val bestScore = maxOf(clubScore, spadeScore)
+        val bestScore = maxOf(clubScoreFromMap, spadeScoreFromMap)
         val templateConfident = templateLeader != null &&
-            (margin >= 0.050f || (margin >= 0.030f && bestScore >= 0.84f))
-        val shapeConfident = shape != null && shape.margin >= 0.08f
+            (marginFromMap >= 0.050f || (marginFromMap >= 0.030f && bestScore >= 0.84f))
+        val shapeConfident = shape != null && shape.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN
         val shapeSuit = shape?.suit
         val shapeMargin = shape?.margin ?: 0f
-        val spadeLeads = spadeScore > clubScore + 0.035f
-        val clubLeads = clubScore > spadeScore + 0.035f
+        val spadeLeads = spadeScoreFromMap > clubScoreFromMap + 0.035f
+        val clubLeads = clubScoreFromMap > spadeScoreFromMap + 0.035f
         val resolved = when {
             shapeSuit != null && templateLeader == shapeSuit ->
                 shapeSuit
             templateConfident && templateLeader != null -> {
                 if (shapeSuit != null &&
                     shapeSuit != templateLeader &&
-                    shapeMargin >= 0.16f &&
+                    shapeMargin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN &&
                     (
                         (shapeSuit == Suit.Spades && spadeLeads) ||
                             (shapeSuit == Suit.Clubs && clubLeads)
@@ -1124,31 +1196,31 @@ class GameStateDetector(
                     templateLeader
                 }
             }
-            templateLeader != null && margin >= 0.024f && bestScore >= 0.76f ->
+            templateLeader != null && marginFromMap >= 0.024f && bestScore >= 0.76f ->
                 templateLeader
-            templateLeader != null && margin >= 0.030f ->
+            templateLeader != null && marginFromMap >= 0.030f ->
                 templateLeader
             shapeConfident &&
                 shapeSuit == Suit.Spades &&
-                shapeMargin >= 0.12f &&
+                shapeMargin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN &&
                 spadeLeads ->
                 Suit.Spades
             shapeConfident &&
                 shapeSuit == Suit.Clubs &&
-                shapeMargin >= 0.12f &&
+                shapeMargin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN &&
                 clubLeads ->
                 Suit.Clubs
             else -> {
                 val fallback = when {
                     spadeLeads -> Suit.Spades
                     clubLeads -> Suit.Clubs
-                    templateLeader != null && margin >= 0.020f && bestScore >= 0.72f -> templateLeader
+                    templateLeader != null && marginFromMap >= 0.020f && bestScore >= 0.72f -> templateLeader
                     templateLeader != null -> templateLeader
                     else -> card.suit
                 }
                 return card.copy(
                     suit = fallback,
-                    suitAmbiguous = margin < 0.045f && shapeSuit == null
+                    suitAmbiguous = marginFromMap < CardRecognizer.BLACK_SUIT_MARGIN && shapeSuit == null
                 )
             }
         }

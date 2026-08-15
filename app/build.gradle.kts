@@ -88,3 +88,10 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
+
+tasks.withType<Test>().configureEach {
+    systemProperty(
+        "refreshSuitTemplates",
+        findProperty("refreshSuitTemplates")?.toString() ?: "false"
+    )
+}

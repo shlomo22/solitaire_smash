@@ -2,6 +2,7 @@ package com.personal.solitaireassistant.vision
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.personal.solitaireassistant.game.Suit
 import kotlin.math.hypot
 
 data class GoldenEvalReport(
@@ -13,6 +14,8 @@ data class GoldenEvalReport(
     val occupancyErrors: Int,
     val missingSlots: Int,
     val confusions: List<Pair<String, Int>>,
+    val redSuitConfusions: List<Pair<String, Int>>,
+    val blackSuitConfusions: List<Pair<String, Int>>,
     val mismatches: List<String>
 ) {
     val accuracy: Float
@@ -28,6 +31,18 @@ data class GoldenEvalReport(
         if (confusions.isNotEmpty()) {
             lines += "Confusions:"
             confusions.take(8).forEach { (pair, count) ->
+                lines += "  $pair ($count)"
+            }
+        }
+        if (redSuitConfusions.isNotEmpty()) {
+            lines += "Red suit confusions (H↔D):"
+            redSuitConfusions.forEach { (pair, count) ->
+                lines += "  $pair ($count)"
+            }
+        }
+        if (blackSuitConfusions.isNotEmpty()) {
+            lines += "Black suit confusions (C↔S):"
+            blackSuitConfusions.forEach { (pair, count) ->
                 lines += "  $pair ($count)"
             }
         }
@@ -63,6 +78,8 @@ object GoldenTruthEvaluator {
         var occupancyErrors = 0
         var missingSlots = 0
         val confusionMap = linkedMapOf<String, Int>()
+        val redSuitConfusionMap = linkedMapOf<String, Int>()
+        val blackSuitConfusionMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
         val samples = store.listSamples()
 
@@ -82,6 +99,12 @@ object GoldenTruthEvaluator {
                     onConfusion = { key ->
                         confusionMap[key] = (confusionMap[key] ?: 0) + 1
                     },
+                    onRedSuitConfusion = { key ->
+                        redSuitConfusionMap[key] = (redSuitConfusionMap[key] ?: 0) + 1
+                    },
+                    onBlackSuitConfusion = { key ->
+                        blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
+                    },
                     onMismatch = { mismatches += it }
                 )
             } finally {
@@ -98,14 +121,12 @@ object GoldenTruthEvaluator {
             occupancyErrors = occupancyErrors,
             missingSlots = missingSlots,
             confusionMap = confusionMap,
+            redSuitConfusionMap = redSuitConfusionMap,
+            blackSuitConfusionMap = blackSuitConfusionMap,
             mismatches = mismatches
         )
     }
 
-    /**
-     * Same report as [evaluate], for fixtures already loaded in memory
-     * (Robolectric / desktop classpath, no device filesDir).
-     */
     fun evaluateLoaded(
         samples: List<Pair<GoldenSample, Bitmap>>,
         detector: GameStateDetector
@@ -117,6 +138,8 @@ object GoldenTruthEvaluator {
         var occupancyErrors = 0
         var missingSlots = 0
         val confusionMap = linkedMapOf<String, Int>()
+        val redSuitConfusionMap = linkedMapOf<String, Int>()
+        val blackSuitConfusionMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
         samples.forEach { (sample, bitmap) ->
             compareSample(
@@ -132,6 +155,12 @@ object GoldenTruthEvaluator {
                 onConfusion = { key ->
                     confusionMap[key] = (confusionMap[key] ?: 0) + 1
                 },
+                onRedSuitConfusion = { key ->
+                    redSuitConfusionMap[key] = (redSuitConfusionMap[key] ?: 0) + 1
+                },
+                onBlackSuitConfusion = { key ->
+                    blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
+                },
                 onMismatch = { mismatches += it }
             )
         }
@@ -144,6 +173,8 @@ object GoldenTruthEvaluator {
             occupancyErrors = occupancyErrors,
             missingSlots = missingSlots,
             confusionMap = confusionMap,
+            redSuitConfusionMap = redSuitConfusionMap,
+            blackSuitConfusionMap = blackSuitConfusionMap,
             mismatches = mismatches
         )
     }
@@ -157,9 +188,17 @@ object GoldenTruthEvaluator {
         occupancyErrors: Int,
         missingSlots: Int,
         confusionMap: Map<String, Int>,
+        redSuitConfusionMap: Map<String, Int>,
+        blackSuitConfusionMap: Map<String, Int>,
         mismatches: List<String>
     ): GoldenEvalReport {
         val confusions = confusionMap.entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
+        val redSuitConfusions = redSuitConfusionMap.entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
+        val blackSuitConfusions = blackSuitConfusionMap.entries
             .sortedByDescending { it.value }
             .map { it.key to it.value }
         return GoldenEvalReport(
@@ -171,6 +210,8 @@ object GoldenTruthEvaluator {
             occupancyErrors = occupancyErrors,
             missingSlots = missingSlots,
             confusions = confusions,
+            redSuitConfusions = redSuitConfusions,
+            blackSuitConfusions = blackSuitConfusions,
             mismatches = mismatches
         )
     }
@@ -186,6 +227,8 @@ object GoldenTruthEvaluator {
         onOccupancy: () -> Unit = {},
         onMissing: () -> Unit = {},
         onConfusion: (String) -> Unit = {},
+        onRedSuitConfusion: (String) -> Unit = {},
+        onBlackSuitConfusion: (String) -> Unit = {},
         onMismatch: (String) -> Unit = {}
     ) {
         val detection = detector.detect(bitmap)
@@ -222,7 +265,26 @@ object GoldenTruthEvaluator {
             if (expected.suit != null && actual.suit != expected.suit) {
                 ok = false
                 onSuit()
-                onConfusion("${expected.suit.name} → ${actual.suit?.name ?: "?"}")
+                val confusionKey = "${expected.suit.name} → ${actual.suit?.name ?: "?"}"
+                onConfusion(confusionKey)
+                if (expected.suit!!.isRed &&
+                    actual.suit != null &&
+                    (
+                        (expected.suit == Suit.Hearts && actual.suit == Suit.Diamonds) ||
+                            (expected.suit == Suit.Diamonds && actual.suit == Suit.Hearts)
+                        )
+                ) {
+                    onRedSuitConfusion(confusionKey)
+                }
+                if (!expected.suit!!.isRed &&
+                    actual.suit != null &&
+                    (
+                        (expected.suit == Suit.Clubs && actual.suit == Suit.Spades) ||
+                            (expected.suit == Suit.Spades && actual.suit == Suit.Clubs)
+                        )
+                ) {
+                    onBlackSuitConfusion(confusionKey)
+                }
             }
             if (ok) {
                 onMatch()

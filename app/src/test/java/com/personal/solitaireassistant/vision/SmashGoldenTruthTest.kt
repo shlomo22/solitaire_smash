@@ -98,6 +98,49 @@ class SmashGoldenTruthTest {
     }
 
     @Test
+    fun goldenRedSuitsMatchLabeledHeartsAndDiamonds() {
+        val loaded = loadGoldenFixtures()
+        if (loaded.isEmpty()) return
+        val detector = GameStateDetector(context, minConfidence = 0.55f)
+        val failures = mutableListOf<String>()
+        var redSlots = 0
+        var redHits = 0
+        try {
+            loaded.forEach { (sample, bitmap) ->
+                val detection = detector.detect(bitmap)
+                sample.slots.filter { slot ->
+                    !slot.inferred &&
+                        slot.truth.kind == SlotKind.FaceUp &&
+                        slot.truth.suit != null &&
+                        slot.truth.suit!!.isRed
+                }.forEach { truthSlot ->
+                    redSlots++
+                    val detected = GoldenTruthEvaluator.findMatchingSlot(
+                        detection.recognizedSlots,
+                        truthSlot
+                    )
+                    val actual = detected?.engine
+                    if (actual?.suit == truthSlot.truth.suit) {
+                        redHits++
+                    } else {
+                        failures +=
+                            "${sample.id} ${truthSlot.pile} ${truthSlot.truth.shortLabel()} vs " +
+                                (actual?.shortLabel() ?: "missing")
+                    }
+                }
+            }
+        } finally {
+            detector.release()
+            loaded.forEach { (_, bitmap) -> bitmap.recycle() }
+        }
+        println("red-suit $redHits/$redSlots")
+        assertTrue(
+            "red-suit $redHits/$redSlots\n${failures.joinToString("\n")}",
+            failures.isEmpty()
+        )
+    }
+
+    @Test
     fun goldenBlackSuitsMatchLabeledClubsAndSpades() {
         val loaded = loadGoldenFixtures()
         if (loaded.isEmpty()) return

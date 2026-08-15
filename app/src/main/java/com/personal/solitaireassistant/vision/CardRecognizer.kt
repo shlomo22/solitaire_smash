@@ -19,6 +19,16 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+data class BlackSuitTemplateScores(
+    val fullClub: Float,
+    val fullSpade: Float,
+    val topClub: Float,
+    val topSpade: Float
+) {
+    val fullMargin: Float get() = abs(fullClub - fullSpade)
+    val topMargin: Float get() = abs(topClub - topSpade)
+}
+
 data class RecognitionHit(
     val card: Card?,
     val confidence: Float,
@@ -40,7 +50,7 @@ class CardRecognizer(
     private val bitmapRankTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
     private val bitmapSuitTemplates = mutableMapOf<Suit, MutableList<LongArray>>()
     private val rankTemplates = mutableMapOf<Rank, Mat>()
-    private val suitTemplates = mutableMapOf<Suit, Mat>()
+    private val suitTemplates = mutableMapOf<Suit, MutableList<Mat>>()
     private var emptyTemplate: Mat? = null
     private var faceDownTemplate: Mat? = null
     private var loaded = false
@@ -112,9 +122,19 @@ class CardRecognizer(
                 }
             }
             Suit.entries.forEach { suit ->
-                loadGray("templates/suit_${suit.name.lowercase()}.png")?.let {
-                    suitTemplates[suit] = it
-                }
+                val prefix = "suit_${suit.name.lowercase()}"
+                val mats = mutableListOf<Mat>()
+                context.assets.list("templates").orEmpty()
+                    .filter { name ->
+                        name == "$prefix.png" ||
+                            (name.startsWith("${prefix}_alt") && name.endsWith(".png"))
+                    }
+                    .sortedWith(compareBy({ it != "$prefix.png" }, { it }))
+                    .take(MAX_BITMAP_TEMPLATES_PER_SUIT)
+                    .forEach { name ->
+                        loadGray("templates/$name")?.let { mats += it }
+                    }
+                if (mats.isNotEmpty()) suitTemplates[suit] = mats
             }
             emptyTemplate = loadGray("templates/empty_slot.png")
             faceDownTemplate = loadGray("templates/face_down.png")
@@ -288,7 +308,9 @@ class CardRecognizer(
                 ?.takeIf { it.second >= 0.45f }
             val shapeBlack = if (inkRed == false && crop != null) {
                 SuitBadgeHeuristics.guessBlackSuit(crop)
-                    ?.takeIf { it.margin >= 0.10f && it.confidence >= 0.52f }
+                    ?.takeIf {
+                        it.margin >= BLACK_SHAPE_MIN_MARGIN && it.confidence >= 0.52f
+                    }
             } else {
                 null
             }
@@ -441,11 +463,19 @@ class CardRecognizer(
             val sourceMasks = suitBadgeMasks(cardCrop, preferLocatedBadge = true)
             suits.mapNotNull { suit ->
                 bitmapSuitTemplates[suit]?.let { templates ->
-                    suit to templates.maxOf { template ->
-                        sourceMasks.maxOf { source -> maskScore(source, template) }
-                    }
+                    suit to maxSuitTemplateScore(sourceMasks, templates, topHalf = false)
                 }
             }.toMap()
+        } finally {
+            cardCrop.recycle()
+        }
+    }
+
+    fun blackSuitTemplateScores(bitmap: Bitmap, region: BoardRegion): BlackSuitTemplateScores {
+        ensureLoaded()
+        val cardCrop = crop(bitmap, region) ?: return BlackSuitTemplateScores(0f, 0f, 0f, 0f)
+        return try {
+            blackSuitScoresFromCrop(cardCrop)
         } finally {
             cardCrop.recycle()
         }
@@ -465,7 +495,7 @@ class CardRecognizer(
 
     fun release() {
         rankTemplates.values.forEach { it.release() }
-        suitTemplates.values.forEach { it.release() }
+        suitTemplates.values.flatten().forEach { it.release() }
         emptyTemplate?.release()
         faceDownTemplate?.release()
         bitmapRankTemplates.clear()
@@ -569,7 +599,7 @@ class CardRecognizer(
         }
         if (inkRed == false) {
             SuitBadgeHeuristics.guessBlackSuit(crop)?.let { shape ->
-                if (shape.margin >= 0.10f && shape.confidence >= 0.52f) {
+                if (shape.margin >= BLACK_SHAPE_MIN_MARGIN && shape.confidence >= 0.52f) {
                     return shape.suit to RecognitionTrace(
                         suitSource = "suit-shape-black",
                         suitScore = shape.confidence,
@@ -593,7 +623,12 @@ class CardRecognizer(
         if (templateSuit != null && inkRed != null) {
             val candidates = Suit.entries.filter { it.isRed == inkRed }
             val filtered = candidates.mapNotNull { suit ->
-                suitTemplates[suit]?.let { suit to matchTemplate(crop, it, badgeOnly = true) }
+                suitTemplates[suit]?.let { templates ->
+                    val score = templates.maxOf { template ->
+                        matchTemplate(crop, template, badgeOnly = true, suitPip = true)
+                    }
+                    suit to score
+                }
             }.maxByOrNull { it.second }
             if (filtered != null && filtered.second >= 0.45f) {
                 return filtered.first to RecognitionTrace(
@@ -650,10 +685,24 @@ class CardRecognizer(
             }
         }
         if (isRed == false) {
+            val topClub = topBlackScore(sourceMasks, Suit.Clubs)
+            val topSpade = topBlackScore(sourceMasks, Suit.Spades)
+            val fullMargin = kotlin.math.abs(clubScore - spadeScore)
+            if (fullMargin < BLACK_SUIT_TOP_TIEBREAK_MAX) {
+                val tiebreakShape = SuitBadgeHeuristics.guessBlackSuit(
+                    crop,
+                    TOP_BLACK_SHAPE_VETO_MARGIN
+                )
+                val scores = BlackSuitTemplateScores(clubScore, spadeScore, topClub, topSpade)
+                val (leader, ambiguous) = resolveThinBlackLeader(scores, crop, tiebreakShape)
+                if (leader == null) return null
+                val leaderScore = if (leader == Suit.Spades) topSpade else topClub
+                return leader to leaderScore
+            }
             val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
-            val templateMargin = kotlin.math.abs(clubScore - spadeScore)
-            if (shape != null && shape.margin >= 0.08f &&
-                (templateMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
+            if (shape != null &&
+                shape.margin >= BLACK_SHAPE_MIN_MARGIN &&
+                (fullMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
             ) {
                 best = shape.suit to max(clubScore, spadeScore) + 0.03f
                 second = min(clubScore, spadeScore)
@@ -667,20 +716,25 @@ class CardRecognizer(
                 heartScore > diamondScore + 0.02f -> Suit.Hearts
                 else -> null
             }
-            if (shape != null &&
-                shape.margin >= 0.12f &&
-                (
-                    shape.suit == templateLead ||
-                        (
-                            shape.suit == Suit.Diamonds &&
-                                templateLead == Suit.Hearts &&
-                                shape.margin >= 0.16f &&
-                                templateMargin < RED_SUIT_MARGIN
-                            )
-                    )
-            ) {
-                best = shape.suit to max(heartScore, diamondScore) + 0.03f
-                second = min(heartScore, diamondScore)
+            if (templateMargin < RED_SUIT_MARGIN) {
+                if (shape != null && shape.margin >= 0.12f) {
+                    return shape.suit to max(heartScore, diamondScore) + 0.04f
+                }
+                return null
+            }
+            if (shape != null && shape.margin >= 0.12f) {
+                val preferShape = when {
+                    shape.suit == templateLead -> true
+                    shape.suit == Suit.Diamonds &&
+                        templateLead == Suit.Hearts &&
+                        shape.margin >= 0.16f &&
+                        templateMargin < RED_SUIT_MARGIN * 1.25f -> true
+                    else -> false
+                }
+                if (preferShape) {
+                    best = shape.suit to max(heartScore, diamondScore) + 0.04f
+                    second = min(heartScore, diamondScore)
+                }
             }
         }
         val top = best ?: return null
@@ -695,6 +749,8 @@ class CardRecognizer(
             true -> 0.66f
             null -> 0.68f
         }
+        if (isRed == true && top.second - second < requiredMargin) return null
+        if (isRed == false && top.second - second < requiredMargin) return null
         if (top.second - second < requiredMargin && top.second < confidenceFloor) return null
         return top
     }
@@ -760,19 +816,19 @@ class CardRecognizer(
     /** Pair of resolved suit and whether the guess is low-confidence. */
     private fun ambiguousBlackSuit(crop: Bitmap): Pair<Suit, Boolean> {
         val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
-        if (shape != null && shape.margin >= 0.08f) {
-            return shape.suit to (shape.margin < 0.12f)
+        if (shape != null && shape.margin >= BLACK_SHAPE_MIN_MARGIN) {
+            return shape.suit to (shape.margin < 0.45f)
         }
-        val (clubScore, spadeScore) = blackBitmapScores(crop)
-        val margin = kotlin.math.abs(clubScore - spadeScore)
-        if (max(clubScore, spadeScore) >= 0.40f && margin >= 0.02f) {
-            val suit = if (spadeScore > clubScore) Suit.Spades else Suit.Clubs
-            return suit to (margin < BLACK_SUIT_MARGIN)
+        val tiebreakShape = SuitBadgeHeuristics.guessBlackSuit(crop, TOP_BLACK_SHAPE_VETO_MARGIN)
+        val scores = blackSuitScoresFromCrop(crop)
+        val (leader, ambiguous) = resolveBlackSuitLeader(scores, crop, tiebreakShape)
+        if (leader != null) {
+            return leader to ambiguous
         }
         val loose = bestBitmapSuitLoose(crop, red = false)
         if (loose != null) return loose to true
         val fallback = shape?.suit
-            ?: if (spadeScore >= clubScore) Suit.Spades else Suit.Clubs
+            ?: if (scores.fullSpade >= scores.fullClub) Suit.Spades else Suit.Clubs
         return fallback to true
     }
 
@@ -798,21 +854,142 @@ class CardRecognizer(
     }
 
     private fun blackBitmapScores(crop: Bitmap): Pair<Float, Float> {
-        if (bitmapSuitTemplates.isEmpty()) return 0f to 0f
+        val scores = blackSuitScoresFromCrop(crop)
+        return scores.fullClub to scores.fullSpade
+    }
+
+    private fun blackSuitScoresFromCrop(crop: Bitmap): BlackSuitTemplateScores {
+        if (bitmapSuitTemplates.isEmpty()) {
+            return BlackSuitTemplateScores(0f, 0f, 0f, 0f)
+        }
         val sourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
-        var clubScore = 0f
-        var spadeScore = 0f
-        bitmapSuitTemplates[Suit.Clubs]?.let { templates ->
-            clubScore = templates.maxOf { template ->
-                sourceMasks.maxOf { source -> maskScore(source, template) }
+        val fullClub = maxSuitTemplateScore(sourceMasks, Suit.Clubs, topHalf = false)
+        val fullSpade = maxSuitTemplateScore(sourceMasks, Suit.Spades, topHalf = false)
+        val topClub = maxSuitTemplateScore(sourceMasks, Suit.Clubs, topHalf = true)
+        val topSpade = maxSuitTemplateScore(sourceMasks, Suit.Spades, topHalf = true)
+        return BlackSuitTemplateScores(fullClub, fullSpade, topClub, topSpade)
+    }
+
+    private fun maxSuitTemplateScore(
+        sourceMasks: List<LongArray>,
+        suit: Suit,
+        topHalf: Boolean
+    ): Float {
+        val templates = bitmapSuitTemplates[suit] ?: return 0f
+        return maxSuitTemplateScore(sourceMasks, templates, topHalf)
+    }
+
+    private fun maxSuitTemplateScore(
+        sourceMasks: List<LongArray>,
+        templates: List<LongArray>,
+        topHalf: Boolean
+    ): Float {
+        if (templates.isEmpty()) return 0f
+        return templates.maxOf { template ->
+            val templateMask = if (topHalf) {
+                SuitBadgeHeuristics.topHalfInkMask(template, TOP_BLACK_FRACTION)
+            } else {
+                template
+            }
+            sourceMasks.maxOf { source ->
+                val sourceMask = if (topHalf) {
+                    SuitBadgeHeuristics.topHalfInkMask(source, TOP_BLACK_FRACTION)
+                } else {
+                    source
+                }
+                maskScore(sourceMask, templateMask)
             }
         }
-        bitmapSuitTemplates[Suit.Spades]?.let { templates ->
-            spadeScore = templates.maxOf { template ->
-                sourceMasks.maxOf { source -> maskScore(source, template) }
-            }
+    }
+
+    private fun topBlackScore(sourceMasks: List<LongArray>, suit: Suit): Float =
+        maxSuitTemplateScore(sourceMasks, suit, topHalf = true)
+
+    /** Returns leader suit and whether the read should stay ambiguous. */
+    fun resolveBlackSuitLeader(
+        scores: BlackSuitTemplateScores,
+        crop: Bitmap? = null,
+        tiebreakShape: SuitBadgeHeuristics.Guess? = null
+    ): Pair<Suit?, Boolean> {
+        if (max(scores.fullClub, scores.fullSpade) < 0.40f &&
+            max(scores.topClub, scores.topSpade) < 0.40f
+        ) {
+            return null to true
         }
-        return clubScore to spadeScore
+        if (scores.fullMargin >= BLACK_SUIT_TOP_TIEBREAK_MAX) {
+            val suit = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
+            return suit to false
+        }
+        return resolveThinBlackLeader(scores, crop, tiebreakShape)
+    }
+
+    private fun resolveThinBlackLeader(
+        scores: BlackSuitTemplateScores,
+        crop: Bitmap?,
+        tiebreakShape: SuitBadgeHeuristics.Guess?
+    ): Pair<Suit?, Boolean> {
+        if (scores.topMargin < TOP_BLACK_SUIT_MARGIN) {
+            if (tiebreakShape != null && tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN) {
+                if (tiebreakShape.suit == Suit.Clubs &&
+                    crop != null &&
+                    spadeShapeBlocksClubVeto(crop)
+                ) {
+                    return null to true
+                }
+                return tiebreakShape.suit to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
+            }
+            return null to true
+        }
+        val topLeader = if (scores.topSpade > scores.topClub) Suit.Spades else Suit.Clubs
+        if (topLeader == Suit.Spades &&
+            tiebreakShape?.suit == Suit.Clubs &&
+            tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN
+        ) {
+            if (crop != null && SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop)) {
+                return Suit.Clubs to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
+            }
+            val widePeakOnly = tiebreakShape.margin < 0.38f
+            if (widePeakOnly && !widePeakClubShapeVetoApplies(scores)) {
+                return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
+            }
+            if (crop != null &&
+                spadeShapeBlocksClubVeto(crop) &&
+                !widePeakClubShapeVetoApplies(scores)
+            ) {
+                return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
+            }
+            return Suit.Clubs to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
+        }
+        return topLeader to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
+    }
+
+    /** Blocks club shape veto on spade tips (incl. wide peak + narrow shoulders). */
+    private fun spadeShapeBlocksClubVeto(crop: Bitmap): Boolean {
+        if (SuitBadgeHeuristics.blackSuitShoulderSpadeTip(crop)) return true
+        return SuitBadgeHeuristics.blackSuitNarrowShoulderSpadePeak(crop)
+    }
+
+    /**
+     * Wide-peak shape alone is unreliable; only veto spade templates when club
+     * templates are competitive and the margin pattern matches known club failures.
+     */
+    private fun widePeakClubTemplatesCompetitive(scores: BlackSuitTemplateScores): Boolean {
+        return scores.fullClub >= 0.858f ||
+            (scores.fullClub >= 0.845f && scores.fullMargin < 0.038f)
+    }
+
+    private fun widePeakClubShapeVetoApplies(scores: BlackSuitTemplateScores): Boolean {
+        if (!widePeakClubTemplatesCompetitive(scores)) return false
+        if (scores.topMargin >= 0.100f) return true
+        if (scores.fullMargin < 0.038f && scores.topMargin < 0.048f) return true
+        if (scores.fullMargin < 0.048f &&
+            scores.topMargin >= 0.075f &&
+            scores.topMargin < 0.100f &&
+            scores.fullClub >= 0.859f
+        ) {
+            return true
+        }
+        return false
     }
 
     private fun redBitmapScores(crop: Bitmap): Pair<Float, Float> {
@@ -1058,8 +1235,10 @@ class CardRecognizer(
     private fun bestSuit(crop: Bitmap): Pair<Suit, Float>? {
         if (suitTemplates.isEmpty()) return null
         var best: Pair<Suit, Float>? = null
-        for ((suit, template) in suitTemplates) {
-            val score = matchTemplate(crop, template, badgeOnly = true, suitPip = true)
+        for ((suit, templates) in suitTemplates) {
+            val score = templates.maxOf { template ->
+                matchTemplate(crop, template, badgeOnly = true, suitPip = true)
+            }
             if (best == null || score > best.second) best = suit to score
         }
         return best
@@ -1187,8 +1366,15 @@ class CardRecognizer(
     companion object {
         private const val TAG = "CardRecognizer"
         private const val MAX_BITMAP_TEMPLATES_PER_RANK = 10
-        private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 5
-        private const val BLACK_SUIT_MARGIN = 0.045f
-        private const val RED_SUIT_MARGIN = 0.040f
+        private const val MAX_BITMAP_TEMPLATES_PER_SUIT = 8
+        const val BLACK_SUIT_MARGIN = 0.045f
+        /** Full-badge margin at or below this → defer to top-half tiebreaker. */
+        const val BLACK_SUIT_TOP_TIEBREAK_MAX = 0.055f
+        const val BLACK_SHAPE_MIN_MARGIN = 0.40f
+        const val TOP_BLACK_FRACTION = 0.45f
+        const val TOP_BLACK_SUIT_MARGIN = 0.04f
+        /** Shape margin to override a thin spade template win on club badges. */
+        const val TOP_BLACK_SHAPE_VETO_MARGIN = 0.28f
+        const val RED_SUIT_MARGIN = 0.040f
     }
 }

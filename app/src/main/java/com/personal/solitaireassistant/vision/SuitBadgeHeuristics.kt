@@ -124,7 +124,11 @@ object SuitBadgeHeuristics {
         )
     }
 
-    fun blackSuitGuess(badge: Bitmap): Guess? {
+    fun blackSuitGuess(
+        badge: Bitmap,
+        minMargin: Float = 0.40f,
+        allowWidePeakClubRule: Boolean = true
+    ): Guess? {
         val w = badge.width
         val h = badge.height
         if (w < 8 || h < 8) return null
@@ -256,9 +260,16 @@ object SuitBadgeHeuristics {
         // band as a club lobe.
         when {
             peakWidth <= 0.34f && shoulderWidth >= peakWidth + 0.12f -> spadeScore += 0.52f
-            peakWidth >= 0.42f -> clubScore += 0.36f
+            allowWidePeakClubRule && peakWidth >= 0.42f -> clubScore += 0.36f
         }
         if (peakWidth <= 0.30f) spadeScore += 0.18f
+        if (!allowWidePeakClubRule &&
+            peakWidth >= 0.38f &&
+            shoulderWidth < peakWidth + 0.14f &&
+            upperValleys == 0
+        ) {
+            spadeScore += 0.34f
+        }
         if (upperValleys >= 1 && peakWidth >= 0.38f) clubScore += 0.34f
         if (upperValleys == 0 && peakWidth <= 0.38f && tipOffset <= 0.18f) {
             spadeScore += 0.22f
@@ -273,16 +284,431 @@ object SuitBadgeHeuristics {
 
         val best = max(spadeScore, clubScore)
         val margin = abs(spadeScore - clubScore)
-        if (best < 0.28f || margin < 0.08f) return null
+        // peakWidth>=0.42 alone yields Clubs@0.36 on most badges — not discriminative.
+        if (best < 0.28f || margin < minMargin) return null
         val suit = if (spadeScore > clubScore) Suit.Spades else Suit.Clubs
         val confidence = (0.45f + best * 0.4f + margin * 0.35f).coerceIn(0.45f, 0.95f)
         return Guess(suit, confidence, margin)
     }
 
-    fun guessBlackSuit(cardCrop: Bitmap): Guess? {
+    /** True when the badge top reads as a spade tip (narrow shoulders, no lobes). */
+    fun blackSuitShoulderSpadeTip(cardCrop: Bitmap): Boolean {
+        val located = locateBadge(cardCrop) ?: return false
+        return try {
+            blackSuitShoulderSpadeTipBadge(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitShoulderSpadeTipBadge(badge: Bitmap): Boolean {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return false
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        var ink = 0
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                val on = isInk(pixels[sy * w + sx])
+                mask[y][x] = on
+                if (on) ink++
+            }
+        }
+        if (ink < 10) return false
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return false
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val peakWidth = pipBandWidth(inkMinY, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        val upperMidY = (inkMinY + (pipH * 0.22f).toInt()).coerceIn(1, grid - 1)
+        val upperProfile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in inkMinY until upperMidY) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            upperProfile[x] = sum.toFloat()
+        }
+        val upperMax = upperProfile.maxOrNull() ?: 0f
+        var upperValleys = 0
+        if (upperMax >= 1.5f) {
+            val hi = upperMax * 0.45f
+            val lo = upperMax * 0.12f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                when {
+                    upperProfile[x] >= hi -> {
+                        if (state == 2) upperValleys++
+                        state = 1
+                    }
+                    upperProfile[x] <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+        val midY = (inkMinY + (pipH * 0.45f).toInt()).coerceIn(2, grid - 3)
+        val profile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in (midY - 2)..(midY + 2)) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            profile[x] = sum.toFloat()
+        }
+        val maxProfile = profile.maxOrNull() ?: 0f
+        var valleys = 0
+        if (maxProfile >= 1.5f) {
+            val hi = maxProfile * 0.50f
+            val lo = maxProfile * 0.15f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                when {
+                    profile[x] >= hi -> {
+                        if (state == 2) valleys++
+                        state = 1
+                    }
+                    profile[x] <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+        return (peakWidth >= 0.38f &&
+            shoulderWidth < peakWidth + 0.14f &&
+            upperValleys == 0 &&
+            valleys < 2) ||
+            (peakWidth <= 0.40f && valleys == 0 && upperValleys == 0)
+    }
+
+    /** True when the badge top shows club lobes (twin valleys), not just a wide peak. */
+    fun blackSuitClubLobeEvidence(cardCrop: Bitmap): Boolean {
+        val located = locateBadge(cardCrop) ?: return false
+        return try {
+            val (upperValleys, valleys) = blackSuitValleyFeatures(located.bitmap)
+            upperValleys >= 1 || valleys >= 2
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitValleyFeatures(badge: Bitmap): Pair<Int, Int> {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return 0 to 0
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        var ink = 0
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                if (isInk(pixels[sy * w + sx])) {
+                    mask[y][x] = true
+                    ink++
+                }
+            }
+        }
+        if (ink < 10) return 0 to 0
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return 0 to 0
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        val upperMidY = (inkMinY + (pipH * 0.22f).toInt()).coerceIn(1, grid - 1)
+        val upperProfile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in inkMinY until upperMidY) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            upperProfile[x] = sum.toFloat()
+        }
+        val upperMax = upperProfile.maxOrNull() ?: 0f
+        var upperValleys = 0
+        if (upperMax >= 1.5f) {
+            val hi = upperMax * 0.45f
+            val lo = upperMax * 0.12f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                when {
+                    upperProfile[x] >= hi -> {
+                        if (state == 2) upperValleys++
+                        state = 1
+                    }
+                    upperProfile[x] <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+        val midY = (inkMinY + (pipH * 0.45f).toInt()).coerceIn(2, grid - 3)
+        val profile = FloatArray(grid)
+        for (x in 0 until grid) {
+            var sum = 0
+            for (y in (midY - 2)..(midY + 2)) {
+                if (y in 0 until grid && mask[y][x]) sum++
+            }
+            profile[x] = sum.toFloat()
+        }
+        val maxProfile = profile.maxOrNull() ?: 0f
+        var valleys = 0
+        if (maxProfile >= 1.5f) {
+            val hi = maxProfile * 0.50f
+            val lo = maxProfile * 0.15f
+            var state = 0
+            for (x in inkMinX..inkMaxX) {
+                when {
+                    profile[x] >= hi -> {
+                        if (state == 2) valleys++
+                        state = 1
+                    }
+                    profile[x] <= lo && state == 1 -> state = 2
+                }
+            }
+        }
+        return upperValleys to valleys
+    }
+
+    /** Wide peak plus wide shoulders — club lobes, not a spade tip. */
+    fun blackSuitWideClubTop(cardCrop: Bitmap): Boolean {
+        val located = locateBadge(cardCrop) ?: return false
+        return try {
+            blackSuitWideClubTopBadge(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitWideClubTopBadge(badge: Bitmap): Boolean {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return false
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                mask[y][x] = isInk(pixels[sy * w + sx])
+            }
+        }
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return false
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val peakWidth = pipBandWidth(inkMinY, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        return peakWidth >= 0.42f && shoulderWidth >= 0.75f
+    }
+
+    /** Wide peak but narrow shoulders — spade shoulder, not club lobes. */
+    fun blackSuitNarrowShoulderSpadePeak(cardCrop: Bitmap): Boolean {
+        val located = locateBadge(cardCrop) ?: return false
+        return try {
+            blackSuitNarrowShoulderSpadePeakBadge(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitNarrowShoulderSpadePeakBadge(badge: Bitmap): Boolean {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return false
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                mask[y][x] = isInk(pixels[sy * w + sx])
+            }
+        }
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return false
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val peakWidth = pipBandWidth(inkMinY, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
+        return peakWidth >= 0.42f &&
+            shoulderWidth < 0.75f &&
+            upperValleys == 0 &&
+            valleys == 0
+    }
+
+    fun blackSuitShapeMetrics(cardCrop: Bitmap): String {
+        val located = locateBadge(cardCrop) ?: return "no-badge"
+        return try {
+            blackSuitShapeMetricsBadge(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitShapeMetricsBadge(badge: Bitmap): String {
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return "tiny"
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                mask[y][x] = isInk(pixels[sy * w + sx])
+            }
+        }
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return "no-ink"
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val peakWidth = pipBandWidth(inkMinY, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
+        return "peak=%.2f shoulder=%.2f uV=$upperValleys v=$valleys".format(peakWidth, shoulderWidth)
+    }
+
+    fun guessBlackSuit(
+        cardCrop: Bitmap,
+        minMargin: Float = 0.40f,
+        allowWidePeakClubRule: Boolean = true
+    ): Guess? {
         val located = locateBadge(cardCrop) ?: return null
         return try {
-            blackSuitGuess(located.bitmap)
+            blackSuitGuess(located.bitmap, minMargin, allowWidePeakClubRule)
         } finally {
             if (!located.bitmap.isRecycled) located.bitmap.recycle()
         }
@@ -428,6 +854,30 @@ object SuitBadgeHeuristics {
         }
     }
 
+    /**
+     * Keeps only the top [topFraction] of ink-bbox rows in a 48×48 mask.
+     * Spade tips vs club lobes differ mainly in this band; the lower stem is shared.
+     */
+    fun topHalfInkMask(
+        mask: LongArray,
+        topFraction: Float = 0.45f,
+        gridSize: Int = INK_MASK_GRID
+    ): LongArray {
+        if (mask.size != gridSize) return mask.copyOf()
+        var inkMinY = gridSize
+        var inkMaxY = -1
+        for (y in 0 until gridSize) {
+            if (mask[y] != 0L) {
+                inkMinY = min(inkMinY, y)
+                inkMaxY = max(inkMaxY, y)
+            }
+        }
+        if (inkMaxY < inkMinY) return LongArray(gridSize)
+        val pipH = inkMaxY - inkMinY + 1
+        val cutoffY = (inkMinY + topFraction * pipH).toInt().coerceIn(inkMinY, gridSize - 1)
+        return LongArray(gridSize) { y -> if (y <= cutoffY) mask[y] else 0L }
+    }
+
     private fun isInk(color: Int): Boolean {
         val r = (color shr 16) and 0xFF
         val g = (color shr 8) and 0xFF
@@ -437,4 +887,6 @@ object SuitBadgeHeuristics {
             SmashColorAnalyzer.isBlackInk(r, g, b) ||
             luma < 135
     }
+
+    const val INK_MASK_GRID = 48
 }

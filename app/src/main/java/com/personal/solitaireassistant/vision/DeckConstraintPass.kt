@@ -116,7 +116,14 @@ object DeckConstraintPass {
                 suitScore(firstScores, first.card.suit) + suitScore(secondScores, second.card.suit)
             val swapped =
                 suitScore(firstScores, firstAlt) + suitScore(secondScores, secondAlt)
-            if (swapped <= direct + 0.06f) return@forEach
+            val swapThreshold = if (first.card.suit.isRed) RED_SUIT_SWAP_THRESHOLD else BLACK_SUIT_SWAP_THRESHOLD
+            if (swapped <= direct + swapThreshold) return@forEach
+            if (first.card.suit.isRed && !redSwapShapeAgrees(bitmap, first.bounds, second.bounds, firstAlt, secondAlt)) {
+                return@forEach
+            }
+            if (!first.card.suit.isRed && !blackSwapShapeAgrees(bitmap, first.bounds, second.bounds, firstAlt, secondAlt)) {
+                return@forEach
+            }
 
             first.card = first.card.copy(suit = firstAlt, suitAmbiguous = false)
             second.card = second.card.copy(suit = secondAlt, suitAmbiguous = false)
@@ -132,6 +139,66 @@ object DeckConstraintPass {
 
     private fun suitScore(scores: Map<Suit, Float>, suit: Suit): Float =
         scores[suit] ?: 0f
+
+    private fun redSwapShapeAgrees(
+        bitmap: Bitmap,
+        firstBounds: BoardRegion,
+        secondBounds: BoardRegion,
+        firstAlt: Suit,
+        secondAlt: Suit
+    ): Boolean {
+        val firstShape = redShapeGuess(bitmap, firstBounds)?.suit
+        val secondShape = redShapeGuess(bitmap, secondBounds)?.suit
+        if (firstShape == null && secondShape == null) return true
+        if (firstShape != null && firstShape != firstAlt) return false
+        if (secondShape != null && secondShape != secondAlt) return false
+        return true
+    }
+
+    private fun redShapeGuess(bitmap: Bitmap, bounds: BoardRegion): SuitBadgeHeuristics.Guess? {
+        val left = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = bounds.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = bounds.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return null
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            SuitBadgeHeuristics.guessRedSuit(crop)?.takeIf { it.margin >= 0.12f }
+        } finally {
+            crop.recycle()
+        }
+    }
+
+    private fun blackSwapShapeAgrees(
+        bitmap: Bitmap,
+        firstBounds: BoardRegion,
+        secondBounds: BoardRegion,
+        firstAlt: Suit,
+        secondAlt: Suit
+    ): Boolean {
+        val firstShape = blackShapeGuess(bitmap, firstBounds)?.suit
+        val secondShape = blackShapeGuess(bitmap, secondBounds)?.suit
+        if (firstShape == null && secondShape == null) return true
+        if (firstShape != null && firstShape != firstAlt) return false
+        if (secondShape != null && secondShape != secondAlt) return false
+        return true
+    }
+
+    private fun blackShapeGuess(bitmap: Bitmap, bounds: BoardRegion): SuitBadgeHeuristics.Guess? {
+        val left = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = bounds.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = bounds.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return null
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            SuitBadgeHeuristics.guessBlackSuit(crop)?.takeIf {
+                it.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN
+            }
+        } finally {
+            crop.recycle()
+        }
+    }
 
     private fun resolveDuplicateCardIds(
         bitmap: Bitmap,
@@ -235,4 +302,7 @@ object DeckConstraintPass {
             else -> Unit
         }
     }
+
+    private const val RED_SUIT_SWAP_THRESHOLD = 0.10f
+    private const val BLACK_SUIT_SWAP_THRESHOLD = 0.10f
 }
