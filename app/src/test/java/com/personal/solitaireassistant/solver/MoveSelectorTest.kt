@@ -171,6 +171,62 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun prefersHighScoreRevealEvenWhenAvoidStatesWouldBlock() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Nine, Suit.Clubs, false), c(Rank.Eight, Suit.Hearts)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+        val afterReveal = requireNotNull(
+            com.personal.solitaireassistant.game.KlondikeRules.apply(
+                state,
+                Move.TableauToTableau(fromColumn = 0, startIndex = 1, toColumn = 1)
+            )
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state, avoidStates = listOf(afterReveal)))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 0, startIndex = 1, toColumn = 1),
+            best.move
+        )
+    }
+
+    @Test
+    fun prefersProductiveRevealEvenWhenResultIsInAvoidStates() {
+        val beforeReveal = GameState(
+            tableau = listOf(
+                emptyList(), emptyList(),
+                listOf(c(Rank.Nine, Suit.Clubs, false), c(Rank.Nine, Suit.Clubs)),
+                emptyList(),
+                listOf(c(Rank.Seven, Suit.Spades, false), c(Rank.Eight, Suit.Diamonds)),
+                emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = emptyList()
+        )
+        val afterReveal = requireNotNull(
+            com.personal.solitaireassistant.game.KlondikeRules.apply(
+                beforeReveal,
+                Move.TableauToTableau(fromColumn = 4, startIndex = 1, toColumn = 2)
+            )
+        )
+
+        val best = requireNotNull(
+            MoveSelector.bestMove(beforeReveal, avoidStates = listOf(afterReveal))
+        )
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 4, startIndex = 1, toColumn = 2),
+            best.move
+        )
+    }
+
+    @Test
     fun prefersDirectWasteStackOverTableauShuffle() {
         val state = GameState(
             tableau = listOf(

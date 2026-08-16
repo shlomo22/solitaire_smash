@@ -368,6 +368,6 @@ class OverlayController(
     }
 
     companion object {
-        private const val BLINK_OFF_MS = 160L
+        private const val BLINK_OFF_MS = 80L
     }
 }

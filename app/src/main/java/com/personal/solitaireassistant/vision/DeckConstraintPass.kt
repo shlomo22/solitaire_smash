@@ -214,7 +214,8 @@ object DeckConstraintPass {
                     recognizer = recognizer,
                     entry = entry,
                     usedIds = used,
-                    preferSameRank = true
+                    preferSameRank = true,
+                    requireShapeAgreement = entry.pile is PileRef.Foundation
                 ) ?: entry.card.copy(suitAmbiguous = true)
                 used.remove(oldId)
                 used.add(replacement.id)
@@ -229,7 +230,8 @@ object DeckConstraintPass {
         entry: Entry,
         usedIds: Set<String>,
         preferSameRank: Boolean,
-        forceSuit: Suit? = null
+        forceSuit: Suit? = null,
+        requireShapeAgreement: Boolean = false
     ): Card? {
         val rank = entry.card.rank
         val candidates = mutableListOf<Card>()
@@ -258,16 +260,24 @@ object DeckConstraintPass {
             suitScore + entry.confidence * 0.05f
         } ?: return null
         val altScore = scores[pick.suit] ?: 0f
-        return when {
+        val minGain = if (requireShapeAgreement) 0.10f else 0.04f
+        val chosen = when {
             candidates.size == 1 &&
                 entry.confidence >= 0.70f &&
                 currentScore >= altScore + 0.08f &&
                 currentScore >= 0.58f -> null
             candidates.size == 1 -> pick
-            altScore >= currentScore + 0.04f -> pick
-            altScore >= 0.52f && altScore >= currentScore + 0.035f -> pick
+            altScore >= currentScore + minGain -> pick
+            !requireShapeAgreement &&
+                altScore >= 0.52f &&
+                altScore >= currentScore + 0.035f -> pick
             else -> null
+        } ?: return null
+        if (requireShapeAgreement && !entry.card.suit.isRed) {
+            val shape = blackShapeGuess(bitmap, entry.bounds)?.suit
+            if (shape != null && shape != chosen.suit) return null
         }
+        return chosen
     }
 
     private fun getCard(

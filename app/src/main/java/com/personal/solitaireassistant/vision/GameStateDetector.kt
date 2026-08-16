@@ -92,7 +92,25 @@ class GameStateDetector(
         // the wide/closed center-glyph shape.
         val legacyCard = legacyWasteHit.card
         val tightCard = tightWasteHit.card
-        val baseCard = legacyCard ?: tightCard
+        val wasteCandidatesDisagree =
+            tightCard != null &&
+                legacyCard != null &&
+                tightCard.id != legacyCard.id
+        val baseCard = when {
+            wasteCandidatesDisagree -> {
+                fun candidateScore(card: Card): Float {
+                    val rankScore = exactRankScores[card.rank] ?: 0f
+                    val suitScore = exactSuitScores[card.suit] ?: 0f
+                    return rankScore + suitScore
+                }
+                if (candidateScore(tightCard) >= candidateScore(legacyCard)) {
+                    tightCard
+                } else {
+                    legacyCard
+                }
+            }
+            else -> legacyCard ?: tightCard
+        }
         val rankedExactSuits = exactSuitScores.entries.sortedByDescending { it.value }
         val exactSuitBest = rankedExactSuits.firstOrNull()
         val exactSuitSecond = rankedExactSuits.getOrNull(1)?.value ?: 0f
@@ -145,6 +163,20 @@ class GameStateDetector(
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Six &&
                 tightCard.suit != legacyCard.suit -> Rank.Six
+            legacyCard?.rank == Rank.Jack &&
+                tightCard?.rank == Rank.Four &&
+                legacyWasteHit.confidence >= 0.68f -> Rank.Jack
+            legacyCard?.rank == Rank.Six &&
+                tightCard?.rank == Rank.Four &&
+                legacyWasteHit.confidence >= 0.68f -> Rank.Six
+            legacyCard != null &&
+                tightCard != null &&
+                legacyCard.rank != tightCard.rank &&
+                legacyWasteHit.confidence >= 0.70f &&
+                legacyWasteHit.confidence >= tightWasteHit.confidence &&
+                (exactRankScores[legacyCard.rank] ?: legacyWasteHit.confidence) >=
+                (exactRankScores[tightCard.rank] ?: tightWasteHit.confidence) - 0.12f ->
+                legacyCard.rank
             else -> baseCard?.rank
         }
         val correctedSuit = if ((exactTenOverride ||
@@ -231,10 +263,6 @@ class GameStateDetector(
             legacyWasteHit
         }
         val wasteRegion = if (fusedCard != null) tightWasteRegion else legacyWasteRegion
-        val wasteCandidatesDisagree =
-            tightWasteHit.card != null &&
-                legacyWasteHit.card != null &&
-                tightWasteHit.card.id != legacyWasteHit.card.id
         locations[PileRef.Waste] = listOf(
             locator.toCardLocation(PileRef.Waste, 0, wasteRegion)
         )

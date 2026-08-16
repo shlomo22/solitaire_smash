@@ -12,26 +12,46 @@ import com.personal.solitaireassistant.game.ScoredMove
  * Deterministic tie-breaking by move label.
  */
 object MoveSelector {
-    fun bestMove(
+    /** Productive moves at or above this score bypass [avoidStates] draw fallback. */
+    const val PRODUCTIVE_MOVE_MIN_SCORE = 80.0
+
+    fun rankedMoves(
         state: GameState,
-        avoidStates: Collection<GameState> = emptyList(),
-        rejectedFingerprints: Set<String> = emptySet()
-    ): ScoredMove? {
+        rejectedFingerprints: Set<String> = emptySet(),
+        moveFilter: (Move) -> Boolean = { true }
+    ): List<ScoredMove> {
         val rejectedCardMoves = rejectedFingerprints.filterNot {
             MoveFingerprint.isStockFallback(it)
         }.toSet()
-        val ranked = scoreAll(state)
+        return scoreAll(state)
             .filter { MoveFingerprint.of(state, it.move) !in rejectedCardMoves }
+            .filter { moveFilter(it.move) }
             .sortedWith(
                 compareBy<ScoredMove> { it.score }
                     .thenBy { it.move.label }
                     .reversed()
             )
+    }
+
+    fun bestMove(
+        state: GameState,
+        avoidStates: Collection<GameState> = emptyList(),
+        rejectedFingerprints: Set<String> = emptySet(),
+        moveFilter: (Move) -> Boolean = { true }
+    ): ScoredMove? {
+        val ranked = rankedMoves(state, rejectedFingerprints, moveFilter)
         if (avoidStates.isEmpty()) return ranked.firstOrNull()
 
-        return ranked.firstOrNull { candidate ->
+        ranked.firstOrNull { candidate ->
             val next = KlondikeRules.apply(state, candidate.move) ?: return@firstOrNull false
             next !in avoidStates
+        }?.let { return it }
+
+        // Productive tableau/waste/foundation moves should not lose to drawing
+        // just because the resulting state was seen a frame or two ago.
+        return ranked.firstOrNull { candidate ->
+            candidate.score >= PRODUCTIVE_MOVE_MIN_SCORE &&
+                !MoveFingerprint.isStockFallback(MoveFingerprint.of(state, candidate.move))
         } ?: ranked.firstOrNull { it.move is Move.DrawStock || it.move is Move.RecycleWaste }
     }
 

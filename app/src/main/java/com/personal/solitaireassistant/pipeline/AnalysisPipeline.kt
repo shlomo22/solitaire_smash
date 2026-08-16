@@ -10,7 +10,10 @@ import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.Move
 import com.personal.solitaireassistant.game.PileRef
+import com.personal.solitaireassistant.game.Rank
+import com.personal.solitaireassistant.game.ScoredMove
 import com.personal.solitaireassistant.game.SuggestedMove
+import com.personal.solitaireassistant.game.Suit
 import com.personal.solitaireassistant.overlay.OverlayController
 import com.personal.solitaireassistant.settings.AssistantSettings
 import com.personal.solitaireassistant.settings.RejectedMoveStore
@@ -18,6 +21,8 @@ import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.GameStateDetector
+import com.personal.solitaireassistant.vision.RecognizedSlot
+import com.personal.solitaireassistant.vision.SlotKind
 import com.personal.solitaireassistant.vision.recognitionTraceLines
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -67,6 +72,7 @@ class AnalysisPipeline(
             val started = System.currentTimeMillis()
             val fingerprint = boardFingerprint(bitmap)
             val cached = fingerprint == lastFrameFingerprint
+            val boardVisuallyChanged = !cached
             val detection = if (cached) {
                 lastDetection ?: detector.detect(bitmap)
             } else {
@@ -77,10 +83,19 @@ class AnalysisPipeline(
             }
             synchronized(snapshotLock) {
                 lastDetection = detection
-                retainFrameLocked(bitmap)
+                // Snapshot for golden review only needs updating when the board changed.
+                if (boardVisuallyChanged) {
+                    retainFrameLocked(bitmap)
+                }
             }
             val elapsed = System.currentTimeMillis() - started
-            handleDetection(detection, elapsed, bitmap.width, bitmap.height)
+            handleDetection(
+                detectionRaw = detection,
+                elapsedMs = elapsed,
+                frameW = bitmap.width,
+                frameH = bitmap.height,
+                boardVisuallyChanged = boardVisuallyChanged
+            )
         } catch (t: Throwable) {
             Log.e(TAG, "Analysis failed", t)
             fileLogger.append("ERROR ${t.javaClass.simpleName}: ${t.message}")
@@ -208,7 +223,8 @@ class AnalysisPipeline(
         detectionRaw: DetectionResult,
         elapsedMs: Long,
         frameW: Int,
-        frameH: Int
+        frameH: Int,
+        boardVisuallyChanged: Boolean
     ) {
         val rawState = detectionRaw.state
         if (!detectionRaw.livePlayScreen) {
@@ -290,9 +306,16 @@ class AnalysisPipeline(
         }
 
         val knownFaceUp = countKnownFaceUp(state)
+        val minConf = settingsRef.get().minMatchConfidence
         val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
+        // After a move the screen changes immediately — don't wait for a second
+        // matching frame before updating the arrow.
+        val fastUpdateAfterMove =
+            boardVisuallyChanged &&
+                detection.confidence >= minConf &&
+                knownFaceUp >= 2
 
-        if (stableHits < 2 && !reliableFirstHit) {
+        if (stableHits < 2 && !reliableFirstHit && !fastUpdateAfterMove) {
             statusSink("Stabilizing detection… conf=${"%.2f".format(detection.confidence)}")
             lastSuggestion?.let { restore ->
                 if (restore.from != null && restore.to != null) {
@@ -313,7 +336,8 @@ class AnalysisPipeline(
             knownFaceUp = knownFaceUp,
             elapsedMs = elapsedMs,
             frameW = frameW,
-            frameH = frameH
+            frameH = frameH,
+            boardVisuallyChanged = boardVisuallyChanged
         )
     }
 
@@ -323,12 +347,18 @@ class AnalysisPipeline(
         knownFaceUp: Int,
         elapsedMs: Long,
         frameW: Int,
-        frameH: Int
+        frameH: Int,
+        boardVisuallyChanged: Boolean = false
     ) {
         val state = detection.state ?: return
         val avoidStates = recentStates.dropLast(1)
         val rejected = rejectedMoveStore.all() + sessionRejected
-        val best = MoveSelector.bestMove(state, avoidStates, rejected)
+        val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
+            isFoundationMoveTrusted(move, state, detection)
+        }
+        val best = MoveSelector.bestMove(state, avoidStates, rejected) { move ->
+            isFoundationMoveTrusted(move, state, detection)
+        }
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
@@ -402,7 +432,8 @@ class AnalysisPipeline(
         }
 
         val suggested = SuggestedMove(best, from, to)
-        val shouldBlink = lastSuggestionSignature != null &&
+        val shouldBlink = !boardVisuallyChanged &&
+            lastSuggestionSignature != null &&
             lastSuggestionSignature != signature &&
             visuallySameArrow(lastSuggestion, suggested)
         lastSuggestion = suggested
@@ -430,7 +461,8 @@ class AnalysisPipeline(
             to = to,
             knownFaceUp = knownFaceUp,
             score = best.score,
-            rationale = best.rationale
+            rationale = best.rationale,
+            runnerUps = ranked.filter { it.move != best.move }.take(3)
         )
     }
 
@@ -446,7 +478,8 @@ class AnalysisPipeline(
         to: BoardRegion?,
         knownFaceUp: Int,
         score: Double? = null,
-        rationale: String? = null
+        rationale: String? = null,
+        runnerUps: List<ScoredMove> = emptyList()
     ) {
         val key = buildString {
             append(outcome)
@@ -472,6 +505,15 @@ class AnalysisPipeline(
                 appendLine("OUTCOME=$outcome status=$status")
                 appendLine("  frame=${frameW}x$frameH elapsed=${elapsedMs}ms conf=${"%.2f".format(detection.confidence)} knownFaceUp=$knownFaceUp")
                 appendLine("  move=${move?.label ?: "-"} score=${score?.let { "%.1f".format(it) } ?: "-"} rationale=${rationale ?: "-"}")
+                if (runnerUps.isNotEmpty()) {
+                    appendLine("  runner-up:")
+                    runnerUps.forEachIndexed { index, alt ->
+                        appendLine(
+                            "    ${index + 1}. ${alt.move.label} " +
+                                "score=${"%.1f".format(alt.score)} (${alt.rationale})"
+                        )
+                    }
+                }
                 appendLine("  $fromTxt $toTxt")
                 appendLine("  signature=$lastSignature")
                 detection.diagnostics.forEach { d -> appendLine("  diag: $d") }
@@ -564,6 +606,73 @@ class AnalysisPipeline(
     }
 
     /**
+     * Block foundation arrows when suit reads are ambiguous or were corrected by
+     * deck-constraint partner swaps (the main source of illegal 4S→3C-style hints).
+     */
+    private fun isFoundationMoveTrusted(
+        move: Move,
+        state: GameState,
+        detection: DetectionResult
+    ): Boolean {
+        val foundationIndex = when (move) {
+            is Move.TableauToFoundation -> move.toFoundation
+            is Move.WasteToFoundation -> move.toFoundation
+            else -> return true
+        }
+        val movingCard = when (move) {
+            is Move.TableauToFoundation ->
+                state.tableau.getOrNull(move.fromColumn)?.lastOrNull()
+            is Move.WasteToFoundation -> state.wasteTop()
+            else -> return true
+        } ?: return false
+        if (movingCard.suitAmbiguous) return false
+
+        val foundationTop = state.foundations.getOrNull(foundationIndex)?.lastOrNull()
+        if (foundationTop?.suitAmbiguous == true) return false
+
+        val movingPile = when (move) {
+            is Move.TableauToFoundation -> PileRef.Tableau(move.fromColumn)
+            is Move.WasteToFoundation -> PileRef.Waste
+            else -> return true
+        }
+        if (slotHasPartnerSuitDeckConstraintSwap(detection.recognizedSlots, movingPile)) {
+            return false
+        }
+        if (foundationTop != null &&
+            slotHasPartnerSuitDeckConstraintSwap(
+                detection.recognizedSlots,
+                PileRef.Foundation(foundationIndex)
+            )
+        ) {
+            return false
+        }
+        return true
+    }
+
+    private fun slotHasPartnerSuitDeckConstraintSwap(
+        slots: List<RecognizedSlot>,
+        pile: PileRef
+    ): Boolean = slots.any { slot ->
+        slot.pile == pile &&
+            slot.engine.kind == SlotKind.FaceUp &&
+            slot.trace.postSteps.any(::isPartnerSuitDeckConstraintStep)
+    }
+
+    private fun isPartnerSuitDeckConstraintStep(step: String): Boolean {
+        if (!step.startsWith("deck-constraint:")) return false
+        val body = step.removePrefix("deck-constraint:")
+        val before = body.substringBefore("->")
+        val after = body.substringAfter("->", missingDelimiterValue = "")
+        if (after.isEmpty() || before.length < 2 || after.length < 2) return false
+        val beforeSuit = before.last()
+        val afterSuit = after.last()
+        return (beforeSuit == 'C' && afterSuit == 'S') ||
+            (beforeSuit == 'S' && afterSuit == 'C') ||
+            (beforeSuit == 'H' && afterSuit == 'D') ||
+            (beforeSuit == 'D' && afterSuit == 'H')
+    }
+
+    /**
      * Prefer a previously confident black suit when the current frame is ambiguous
      * for the same rank in the same pile. Prevents Clubs↔Spades flicker.
      */
@@ -573,12 +682,28 @@ class AnalysisPipeline(
     ): GameState {
         if (previous == null) return current
 
+        val confidentBlackByRank = buildMap<Rank, Suit> {
+            previous.allFaceUpCards().forEach { card ->
+                if (card.known && !card.suit.isRed && !card.suitAmbiguous && !card.inferred) {
+                    if (!containsKey(card.rank)) put(card.rank, card.suit)
+                }
+            }
+        }
+
         fun stabilizeCard(now: Card, before: Card?): Card {
             if (!now.known || now.suit.isRed || !now.suitAmbiguous) return now
-            if (before == null || !before.known || before.suit.isRed) return now
-            if (before.rank != now.rank) return now
-            if (before.suitAmbiguous) return now
-            return now.copy(suit = before.suit, suitAmbiguous = false)
+            if (before != null &&
+                before.known &&
+                !before.suit.isRed &&
+                before.rank == now.rank &&
+                !before.suitAmbiguous
+            ) {
+                return now.copy(suit = before.suit, suitAmbiguous = false)
+            }
+            confidentBlackByRank[now.rank]?.let { suit ->
+                return now.copy(suit = suit, suitAmbiguous = false)
+            }
+            return now
         }
 
         val tableau = current.tableau.mapIndexed { col, cards ->
@@ -607,6 +732,12 @@ class AnalysisPipeline(
             foundations = foundations,
             waste = waste
         )
+    }
+
+    private fun GameState.allFaceUpCards(): Sequence<Card> = sequence {
+        foundations.forEach { pile -> pile.filter { it.faceUp }.forEach { yield(it) } }
+        waste.filter { it.faceUp }.forEach { yield(it) }
+        tableau.forEach { column -> column.filter { it.faceUp }.forEach { yield(it) } }
     }
 
     companion object {
