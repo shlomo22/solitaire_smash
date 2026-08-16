@@ -20,3 +20,4 @@ class PreferencesInstrumentedTest {
         assertTrue(settings.captureIntervalMs in 250L..3000L)
     }
 }
+
