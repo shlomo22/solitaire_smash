@@ -246,4 +246,152 @@ class MoveSelectorTest {
                 (best.move as Move.WasteToTableau).toColumn == 0
         )
     }
+
+    @Test
+    fun prefersRevealInDeeperColumn() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Seven, Suit.Spades, false), c(Rank.Eight, Suit.Hearts)),
+                listOf(
+                    c(Rank.Seven, Suit.Clubs, false),
+                    c(Rank.Six, Suit.Hearts, false),
+                    c(Rank.Eight, Suit.Spades)
+                ),
+                listOf(c(Rank.Nine, Suit.Diamonds)),
+                listOf(c(Rank.Nine, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 1, startIndex = 2, toColumn = 2),
+            best.move
+        )
+    }
+
+    @Test
+    fun defersAceToFoundationWhenTableauUseful() {
+        val withSequence = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Ace, Suit.Hearts)),
+                listOf(c(Rank.Two, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val alone = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Ace, Suit.Hearts)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val withSequenceScore = MoveSelector.scoreAll(withSequence)
+            .first { it.move is Move.TableauToFoundation }
+            .score
+        val aloneScore = MoveSelector.scoreAll(alone)
+            .first { it.move is Move.TableauToFoundation }
+            .score
+
+        assertTrue(withSequenceScore < aloneScore)
+    }
+
+    @Test
+    fun prefersKingWithLargerHiddenFamily() {
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                listOf(c(Rank.King, Suit.Spades)),
+                listOf(
+                    c(Rank.Queen, Suit.Hearts, false),
+                    c(Rank.Jack, Suit.Clubs, false),
+                    c(Rank.Ten, Suit.Diamonds, false),
+                    c(Rank.King, Suit.Hearts)
+                ),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                listOf(c(Rank.Five, Suit.Spades)),
+                listOf(c(Rank.Seven, Suit.Clubs)),
+                listOf(c(Rank.Seven, Suit.Spades))
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 2, startIndex = 3, toColumn = 0),
+            best.move
+        )
+    }
+
+    @Test
+    fun defersDrawWhenWasteUnlocksTableau() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Jack, Suit.Clubs)),
+                listOf(c(Rank.Nine, Suit.Hearts), c(Rank.Eight, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.Ace, Suit.Clubs, false)),
+            waste = listOf(c(Rank.Ten, Suit.Hearts))
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(Move.WasteToTableau(toColumn = 0), best.move)
+    }
+
+    @Test
+    fun recyclePenaltyIncreasesWithRecyclesUsed() {
+        val state = GameState(
+            tableau = List(7) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = listOf(c(Rank.King, Suit.Spades)),
+            recyclesUsed = 2
+        )
+
+        val recycleScore = MoveSelector.scoreAll(state)
+            .first { it.move == Move.RecycleWaste }
+            .score
+        val freshState = state.copy(recyclesUsed = 0)
+        val freshRecycleScore = MoveSelector.scoreAll(freshState)
+            .first { it.move == Move.RecycleWaste }
+            .score
+
+        assertTrue(recycleScore < freshRecycleScore)
+    }
+
+    @Test
+    fun penalizesMovingExtraCardsOnReveal() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(
+                    c(Rank.Nine, Suit.Clubs, false),
+                    c(Rank.Ten, Suit.Hearts),
+                    c(Rank.Nine, Suit.Spades),
+                    c(Rank.Eight, Suit.Diamonds)
+                ),
+                listOf(c(Rank.Jack, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val fullRun = MoveSelector.scoreAll(state)
+            .first { it.move == Move.TableauToTableau(fromColumn = 0, startIndex = 1, toColumn = 1) }
+        assertTrue(fullRun.rationale.contains("minimal-move"))
+    }
 }

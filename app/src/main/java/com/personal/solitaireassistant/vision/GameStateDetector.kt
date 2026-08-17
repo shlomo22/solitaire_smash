@@ -516,9 +516,11 @@ class GameStateDetector(
                             leadingHeaderStats.redInkRatio * 1.20f -> false
                         else -> leadingHit.inferredRed ?: leadingCard?.suit?.isRed
                     }
+                    val fractionalFaceUp = faceUpDistance - faceUpDistance.toInt()
                     if (leadingRed != null &&
                         leadingRed != expectedLeadingRed &&
-                        card.rank.value + faceUpCount <= Rank.King.value
+                        card.rank.value + faceUpCount <= Rank.King.value &&
+                        (faceUpCount <= 1 || faceUpCount >= 4 || fractionalFaceUp >= 0.55f)
                     ) {
                         faceUpCount++
                     }
@@ -917,7 +919,7 @@ class GameStateDetector(
 
     /**
      * Black-suit near-ties that happen to match a foundation look "legal" but
-     * are the main source of Clubs↔Spades false arrows. Demote those sources
+     * are the main source of ClubsΓåöSpades false arrows. Demote those sources
      * to suitAmbiguous so foundation moves are suppressed.
      */
     private fun scrubWeakBlackFoundationSuits(
@@ -980,7 +982,7 @@ class GameStateDetector(
             if (!confident) {
                 return cards.dropLast(1) + card.copy(suitAmbiguous = true)
             }
-            // Extra guard for 2→A foundation: club/spade swaps here are the
+            // Extra guard for 2ΓåÆA foundation: club/spade swaps here are the
             // most common illegal arrows. Require shape not to strongly disagree.
             val aceFoundation = state.foundations.any { pileCards ->
                 val top = pileCards.lastOrNull() ?: return@any false

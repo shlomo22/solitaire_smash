@@ -31,6 +31,9 @@ data class GameState(
     fun hiddenTableauCount(): Int =
         tableau.sumOf { column -> column.count { !it.faceUp } }
 
+    fun hiddenInColumn(col: Int): Int =
+        tableau[col].count { !it.faceUp }
+
     fun foundationCount(): Int = foundations.sumOf { it.size }
 
     companion object {
