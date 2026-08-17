@@ -291,6 +291,119 @@ object SuitBadgeHeuristics {
         return Guess(suit, confidence, margin)
     }
 
+    /**
+     * Strong club silhouette: twin lobes or wide club top. Used to veto spade
+     * template wins — never overrides templates toward Spades on its own.
+     */
+    fun blackSuitClubShapeOverride(cardCrop: Bitmap): Guess? {
+        val located = locateBadge(cardCrop) ?: return null
+        return try {
+            val badge = located.bitmap
+            val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
+            val clubLobes = upperValleys >= 1 || valleys >= 2
+            val wideClubTop = blackSuitWideClubTopBadge(badge)
+            when {
+                clubLobes || wideClubTop -> Guess(Suit.Clubs, 0.88f, 0.50f)
+                else -> null
+            }
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    /** @deprecated Prefer [blackSuitClubShapeOverride] + template leaders; kept for tests. */
+    fun blackSuitShapePriority(cardCrop: Bitmap): Guess? {
+        val located = locateBadge(cardCrop) ?: return null
+        return try {
+            blackSuitClubShapeOverrideBadge(located.bitmap)
+                ?: blackSuitStrictSpadeTipBadge(located.bitmap)?.let {
+                    Guess(Suit.Spades, 0.88f, 0.50f)
+                }
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitClubShapeOverrideBadge(badge: Bitmap): Guess? {
+        val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
+        val clubLobes = upperValleys >= 1 || valleys >= 2
+        val wideClubTop = blackSuitWideClubTopBadge(badge)
+        return if (clubLobes || wideClubTop) Guess(Suit.Clubs, 0.88f, 0.50f) else null
+    }
+
+    /** Strict spade tip: narrow peak with widening shoulders, not a club top lobe. */
+    fun blackSuitStrictSpadeTip(cardCrop: Bitmap): Boolean {
+        val located = locateBadge(cardCrop) ?: return false
+        return try {
+            blackSuitStrictSpadeTipBadge(located.bitmap)
+        } finally {
+            if (!located.bitmap.isRecycled) located.bitmap.recycle()
+        }
+    }
+
+    private fun blackSuitStrictSpadeTipBadge(badge: Bitmap): Boolean {
+        if (blackSuitWideClubTopBadge(badge)) return false
+        if (blackSuitNarrowShoulderSpadePeakBadge(badge)) return true
+        val w = badge.width
+        val h = badge.height
+        if (w < 8 || h < 8) return false
+        val grid = 24
+        val pixels = IntArray(w * h)
+        badge.getPixels(pixels, 0, w, 0, 0, w, h)
+        val mask = Array(grid) { BooleanArray(grid) }
+        var ink = 0
+        for (y in 0 until grid) {
+            val sy = (((y + 0.5f) * h) / grid).toInt().coerceIn(0, h - 1)
+            for (x in 0 until grid) {
+                val sx = (((x + 0.5f) * w) / grid).toInt().coerceIn(0, w - 1)
+                if (isInk(pixels[sy * w + sx])) {
+                    mask[y][x] = true
+                    ink++
+                }
+            }
+        }
+        if (ink < 10) return false
+        var inkMinX = grid
+        var inkMaxX = -1
+        var inkMinY = grid
+        var inkMaxY = -1
+        for (y in 0 until grid) {
+            for (x in 0 until grid) {
+                if (mask[y][x]) {
+                    inkMinX = min(inkMinX, x)
+                    inkMaxX = max(inkMaxX, x)
+                    inkMinY = min(inkMinY, y)
+                    inkMaxY = max(inkMaxY, y)
+                }
+            }
+        }
+        if (inkMaxX < inkMinX || inkMaxY < inkMinY) return false
+        val pipW = (inkMaxX - inkMinX + 1).toFloat()
+        val pipH = (inkMaxY - inkMinY + 1).toFloat()
+        fun pipBandWidth(y0: Int, y1: Int): Float {
+            var left = grid
+            var right = -1
+            for (y in y0 until y1.coerceAtMost(grid)) {
+                for (x in inkMinX..inkMaxX) {
+                    if (mask[y][x]) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+            }
+            return if (right >= left) (right - left + 1).toFloat() / pipW else 0f
+        }
+        val tipY2 = (inkMinY + max(1, (pipH * 0.12f).toInt())).coerceAtMost(grid)
+        val shoulderY2 = (inkMinY + max(2, (pipH * 0.38f).toInt())).coerceAtMost(grid)
+        val peakWidth = pipBandWidth(inkMinY, tipY2)
+        val shoulderWidth = pipBandWidth(tipY2, shoulderY2)
+        val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
+        return peakWidth <= 0.32f &&
+            shoulderWidth >= peakWidth + 0.12f &&
+            upperValleys == 0 &&
+            valleys == 0
+    }
+
     /** True when the badge top reads as a spade tip (narrow shoulders, no lobes). */
     fun blackSuitShoulderSpadeTip(cardCrop: Bitmap): Boolean {
         val located = locateBadge(cardCrop) ?: return false
@@ -408,14 +521,23 @@ object SuitBadgeHeuristics {
             shoulderWidth < peakWidth + 0.14f &&
             upperValleys == 0 &&
             valleys < 2) ||
-            (peakWidth <= 0.40f && valleys == 0 && upperValleys == 0)
+            (peakWidth <= 0.32f &&
+                shoulderWidth >= peakWidth + 0.12f &&
+                valleys == 0 &&
+                upperValleys == 0)
     }
 
     /** True when the badge top shows club lobes (twin valleys), not just a wide peak. */
     fun blackSuitClubLobeEvidence(cardCrop: Bitmap): Boolean {
         val located = locateBadge(cardCrop) ?: return false
         return try {
-            val (upperValleys, valleys) = blackSuitValleyFeatures(located.bitmap)
+            val badge = located.bitmap
+            if (blackSuitShoulderSpadeTipBadge(badge) ||
+                blackSuitNarrowShoulderSpadePeakBadge(badge)
+            ) {
+                return false
+            }
+            val (upperValleys, valleys) = blackSuitValleyFeatures(badge)
             upperValleys >= 1 || valleys >= 2
         } finally {
             if (!located.bitmap.isRecycled) located.bitmap.recycle()

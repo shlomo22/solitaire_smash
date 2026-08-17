@@ -109,6 +109,27 @@ class TopHalfBlackSuitTest {
                 "${sample.id} ${slot.pile} topMargin=${scores.topMargin} fullMargin=${scores.fullMargin}",
                 scores.topMargin > scores.fullMargin
             )
+            val cropLeft = slot.bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+            val cropTop = slot.bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+            val cropRight = slot.bounds.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+            val cropBottom = slot.bounds.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+            val leaderCrop = android.graphics.Bitmap.createBitmap(
+                bitmap,
+                cropLeft,
+                cropTop,
+                cropRight - cropLeft,
+                cropBottom - cropTop
+            )
+            val leader = try {
+                recognizer.resolveBlackSuitLeader(scores, leaderCrop, null).first
+            } finally {
+                leaderCrop.recycle()
+            }
+            assertEquals(
+                "${sample.id} ${slot.pile} should stay spades on sharp tip",
+                Suit.Spades,
+                leader
+            )
         } finally {
             recognizer.release()
             bitmap.recycle()

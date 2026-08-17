@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.personal.solitaireassistant.game.Suit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,6 +29,22 @@ class SuitBadgeHeuristicsTest {
         val guess = SuitBadgeHeuristics.redSuitGuess(badge)
         assertNotNull(guess)
         assertEquals(Suit.Hearts, guess!!.suit)
+        badge.recycle()
+    }
+
+    @Test
+    fun blackSuitStrictSpadeTipReadsSpadePoint() {
+        val badge = spadeBadge()
+        assertTrue(SuitBadgeHeuristics.blackSuitStrictSpadeTip(badge))
+        badge.recycle()
+    }
+
+    @Test
+    fun blackSuitClubShapeOverrideReadsClubLobes() {
+        val badge = clubBadge()
+        val override = SuitBadgeHeuristics.blackSuitClubShapeOverride(badge)
+        assertNotNull(override)
+        assertEquals(Suit.Clubs, override!!.suit)
         badge.recycle()
     }
 

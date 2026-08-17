@@ -149,19 +149,26 @@ class GameStateDetector(
         val authoritativeExactSuit = exactSuitBest
             ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
             ?.key
-        val exactTenOverride =
-            legacyCard?.rank == Rank.King &&
-                (exactRankScores[Rank.Ten] ?: 0f) >= 0.90f
-        val exactQueenOverride =
-            (legacyCard?.rank == Rank.Ten || tightCard?.rank == Rank.Ten) &&
-                (
-                    tightCard?.rank == Rank.Queen ||
-                        (
-                            (exactRankScores[Rank.Queen] ?: 0f) >= 0.72f &&
-                                (exactRankScores[Rank.Queen] ?: 0f) >=
-                                (exactRankScores[Rank.Ten] ?: 0f) - 0.08f
-                            )
-                    )
+        val wasteInkGuess = inkGuessFromRegion(bitmap, tightWasteRegion)
+        val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
+        val wasteKingOverride = WasteRankCorrections.correctKingTenOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
+        val wasteFiveJackOverride = WasteRankCorrections.correctFiveJack(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
         val exactEightSpadeOverride =
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Six &&
@@ -173,11 +180,20 @@ class GameStateDetector(
                 (exactSuitScores[Suit.Diamonds] ?: 0f) >= 0.90f &&
                 (exactSuitScores[Suit.Diamonds] ?: 0f) >
                 (exactSuitScores[Suit.Hearts] ?: 0f) + 0.05f
+        val wasteThreeOverride = WasteRankCorrections.correctJackThree(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
         val correctedRank = when {
-            exactTenOverride -> Rank.Ten
-            exactQueenOverride -> Rank.Queen
+            wasteQueenOverride != null -> wasteQueenOverride
+            wasteKingOverride != null -> wasteKingOverride
             exactEightSpadeOverride -> Rank.Eight
             exactFourOverride -> Rank.Four
+            wasteFiveJackOverride != null -> wasteFiveJackOverride
+            wasteThreeOverride != null -> wasteThreeOverride
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Jack &&
                 (exactRankScores[Rank.Jack] ?: 0f) >
@@ -211,8 +227,7 @@ class GameStateDetector(
                 legacyCard.rank
             else -> baseCard?.rank
         }
-        val correctedSuit = if ((exactTenOverride ||
-                exactQueenOverride ||
+        val correctedSuit = if ((wasteQueenOverride != null || wasteKingOverride != null ||
                 exactEightSpadeOverride) &&
             authoritativeExactSuit != null
         ) {
@@ -424,6 +439,8 @@ class GameStateDetector(
                 // while alternating color.
                 val faceUpStep = cardHeight * board.profile.faceUpOverlap
                 var firstFaceTop = columnRegion.top + faceDownCount * downStep
+                var leadingHit: RecognitionHit? = null
+                var leadingCard: Card? = null
                 // A narrow teal header can be diluted by a white border and miss
                 // the primary face-down test. Do not infer a face-up card there.
                 while (firstFaceTop + downStep * 0.25f < faceRegion.top) {
@@ -484,7 +501,7 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
-                    val leadingHit = recognizeCached(
+                    val leadingHitResult = recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
@@ -492,7 +509,8 @@ class GameStateDetector(
                         cache = newSlotCache,
                         exactCardBounds = true
                     )
-                    val leadingCard = leadingHit.card
+                    leadingHit = leadingHitResult
+                    leadingCard = leadingHitResult.card
                     val leadingHeaderStats = SmashColorAnalyzer.analyze(
                         bitmap,
                         BoardRegion(
@@ -514,7 +532,7 @@ class GameStateDetector(
                             leadingHeaderStats.blackInkRatio * 1.20f -> true
                         leadingHeaderStats.blackInkRatio >
                             leadingHeaderStats.redInkRatio * 1.20f -> false
-                        else -> leadingHit.inferredRed ?: leadingCard?.suit?.isRed
+                        else -> leadingHit?.inferredRed ?: leadingCard?.suit?.isRed
                     }
                     val fractionalFaceUp = faceUpDistance - faceUpDistance.toInt()
                     if (leadingRed != null &&
@@ -524,10 +542,11 @@ class GameStateDetector(
                     ) {
                         faceUpCount++
                     }
-                    if (leadingCard?.known == true &&
-                        leadingCard.rank.value >= card.rank.value
+                    val resolvedLeading = leadingCard
+                    if (resolvedLeading?.known == true &&
+                        resolvedLeading.rank.value >= card.rank.value
                     ) {
-                        val rankCount = leadingCard.rank.value - card.rank.value + 1
+                        val rankCount = resolvedLeading.rank.value - card.rank.value + 1
                         val countDifference = rankCount - faceUpCount
                         if (rankCount in 1..Rank.entries.size &&
                             countDifference == 2
@@ -536,21 +555,11 @@ class GameStateDetector(
                         }
                     }
                 }
-                repeat(faceUpCount - 1) { exposedIndex ->
+                for (exposedIndex in 0 until faceUpCount - 1) {
                     val distanceFromBottom = faceUpCount - 1 - exposedIndex
-                    val inferredValue = card.rank.value + distanceFromBottom
-                    val inferredRed = if (distanceFromBottom % 2 == 0) {
-                        card.suit.isRed
-                    } else {
-                        !card.suit.isRed
-                    }
-                    val known = card.known && inferredValue <= Rank.King.value
-                    val inferred = Card(
-                        rank = if (known) Rank.fromValue(inferredValue) else Rank.Ace,
-                        suit = if (inferredRed) Suit.Hearts else Suit.Spades,
-                        faceUp = true,
-                        known = known,
-                        inferred = true
+                    val geometricFallback = TableauCascadeSupport.geometricCascadeCard(
+                        bottomCard = card,
+                        distanceFromBottom = distanceFromBottom
                     )
                     val top = firstFaceTop + exposedIndex * faceUpStep
                     val bounds = BoardRegion(
@@ -559,21 +568,67 @@ class GameStateDetector(
                         columnRegion.right,
                         (top + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
-                    cards += inferred
+                    val precomputedHit = if (exposedIndex == 0) leadingHit else null
+                    val slotHit = precomputedHit ?: recognizeCached(
+                        bitmap = bitmap,
+                        pile = PileRef.Tableau(col),
+                        index = 300 + col * 16 + exposedIndex,
+                        region = bounds,
+                        cache = newSlotCache,
+                        exactCardBounds = true
+                    )
+                    val slotCard = cardFromHit(slotHit) ?: slotHit.card
+                    val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
+                        if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
+                            val (resolved, trace) = resolveCardSuitWithTrace(
+                                bitmap,
+                                bounds,
+                                requireNotNull(slotCard),
+                                slotHit.trace
+                            )
+                            ResolvedCascadeSlot(
+                                card = resolved.copy(inferred = false),
+                                trace = trace,
+                                diagnostic = slotHit.diagnostic,
+                                confidence = slotHit.confidence,
+                                inferred = false
+                            )
+                        } else {
+                            ResolvedCascadeSlot(
+                                card = geometricFallback,
+                                trace = RecognitionTrace.EMPTY,
+                                diagnostic = "inferred-cascade",
+                                confidence = if (geometricFallback.known) 0.55f else 0.20f,
+                                inferred = true
+                            )
+                        }
+                    cards += cascadeCard
                     locs += locator.toCardLocation(
                         PileRef.Tableau(col),
                         cards.lastIndex,
                         bounds
                     )
-                    recognizedSlots += RecognizedSlot(
-                        pile = PileRef.Tableau(col),
-                        index = cards.lastIndex,
-                        bounds = bounds,
-                        engine = slotGuessFromCard(inferred),
-                        confidence = if (known) 0.55f else 0.20f,
-                        diagnostic = "inferred-cascade",
-                        inferred = true
-                    )
+                    recognizedSlots += if (cascadeInferred) {
+                        RecognizedSlot(
+                            pile = PileRef.Tableau(col),
+                            index = cards.lastIndex,
+                            bounds = bounds,
+                            engine = slotGuessFromCard(cascadeCard),
+                            confidence = cascadeConfidence,
+                            diagnostic = cascadeDiagnostic,
+                            inferred = true
+                        )
+                    } else {
+                        recognizedSlot(
+                            pile = PileRef.Tableau(col),
+                            index = cards.lastIndex,
+                            bounds = bounds,
+                            hit = slotHit,
+                            cardOverride = cascadeCard,
+                            trace = cascadeTrace,
+                            inferred = false
+                        )
+                    }
                 }
                 cards += card
                 locs += locator.toCardLocation(PileRef.Tableau(col), cards.lastIndex, faceRegion)
@@ -585,6 +640,16 @@ class GameStateDetector(
                     cardOverride = card,
                     trace = slotTrace
                 )
+                val firstFaceUpIndex = cards.indexOfFirst { it.faceUp }
+                if (firstFaceUpIndex >= 0) {
+                    val promoted = TableauCascadeSupport.promoteTrustedRun(
+                        cards.drop(firstFaceUpIndex)
+                    )
+                    if (promoted != cards.drop(firstFaceUpIndex)) {
+                        repeat(cards.size - firstFaceUpIndex) { cards.removeAt(cards.lastIndex) }
+                        cards.addAll(promoted)
+                    }
+                }
                 if (!card.known) diagnostics += "tableau$col[top]=${hit.diagnostic}"
             } else {
                 val emptyBounds = BoardRegion(
@@ -729,6 +794,23 @@ class GameStateDetector(
      * Finds the right edge of the front waste card. The fan grows rightward,
      * so a fixed crop alternates between the second and third card.
      */
+    private fun inkGuessFromRegion(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): RankInkHeuristics.Guess? {
+        val left = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = region.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return null
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            RankInkHeuristics.guess(crop)
+        } finally {
+            crop.recycle()
+        }
+    }
+
     private fun locateWasteTopRegion(
         bitmap: Bitmap,
         board: LocatedBoard
@@ -1217,41 +1299,66 @@ class GameStateDetector(
                 SuitBadgeHeuristics.guessBlackSuit(it, CardRecognizer.TOP_BLACK_SHAPE_VETO_MARGIN)
             }
             val shape = tiebreakShape?.takeIf { it.margin >= CardRecognizer.BLACK_SHAPE_MIN_MARGIN }
-            if (margin < CardRecognizer.BLACK_SUIT_TOP_TIEBREAK_MAX) {
+            val fullLeader = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
+            val topLeader = if (scores.topSpade > scores.topClub) Suit.Spades else Suit.Clubs
+            var preferTopHalf = fullLeader != topLeader &&
+                scores.topMargin > scores.fullMargin &&
+                scores.topMargin >= CardRecognizer.TOP_BLACK_SUIT_MARGIN
+            if (preferTopHalf &&
+                fullLeader == Suit.Spades &&
+                topLeader == Suit.Clubs &&
+                cardCrop != null &&
+                recognizer.shouldVetoTopHalfForSpadeTip(scores, cardCrop, fullLeader, topLeader)
+            ) {
+                preferTopHalf = false
+            }
+            val resolved = if (margin < CardRecognizer.BLACK_SUIT_TOP_TIEBREAK_MAX || preferTopHalf) {
                 val (leader, ambiguous) = recognizer.resolveBlackSuitLeader(
                     scores,
                     cardCrop,
                     tiebreakShape
                 )
                 if (leader != null) {
-                    val recovered = recognizer.recoverLowConfidenceSpade(
-                        leader = leader,
-                        clubScore = clubScore,
-                        spadeScore = spadeScore,
-                        margin = margin,
-                        crop = cardCrop,
-                        rank = card.rank
-                    )
-                    if (recovered != null) {
-                        return card.copy(
-                            suit = recovered.first,
-                            suitAmbiguous = recovered.second
-                        )
-                    }
-                    return card.copy(
-                        suit = leader,
-                        suitAmbiguous = ambiguous
+                    card.copy(suit = leader, suitAmbiguous = ambiguous)
+                } else {
+                    resolveBlackSuitLegacy(
+                        card,
+                        clubScore,
+                        spadeScore,
+                        bitmap,
+                        region,
+                        shape
                     )
                 }
+            } else {
+                resolveBlackSuitLegacy(
+                    card,
+                    clubScore,
+                    spadeScore,
+                    bitmap,
+                    region,
+                    shape
+                )
             }
-            return resolveBlackSuitLegacy(
-                card,
-                clubScore,
-                spadeScore,
-                bitmap,
-                region,
-                shape
+            val recovered = recognizer.recoverLowConfidenceSpade(
+                leader = resolved.suit,
+                clubScore = clubScore,
+                spadeScore = spadeScore,
+                margin = margin,
+                crop = cardCrop,
+                rank = card.rank,
+                topClubScore = scores.topClub,
+                topSpadeScore = scores.topSpade,
+                topMargin = scores.topMargin
             )
+            return if (recovered != null) {
+                resolved.copy(
+                    suit = recovered.first,
+                    suitAmbiguous = recovered.second
+                )
+            } else {
+                resolved
+            }
         } finally {
             cardCrop?.recycle()
         }
@@ -1424,3 +1531,11 @@ class GameStateDetector(
         private const val pileFingerprintSeed = -0x6c62272e07bb0142L
     }
 }
+
+private data class ResolvedCascadeSlot(
+    val card: Card,
+    val trace: RecognitionTrace,
+    val diagnostic: String,
+    val confidence: Float,
+    val inferred: Boolean
+)

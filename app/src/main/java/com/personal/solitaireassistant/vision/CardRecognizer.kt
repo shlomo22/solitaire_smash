@@ -941,11 +941,16 @@ class CardRecognizer(
         ) {
             return null to true
         }
-        if (scores.fullMargin >= BLACK_SUIT_TOP_TIEBREAK_MAX) {
-            val suit = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
-            return suit to false
+        val fullLeader = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
+        val topLeader = if (scores.topSpade > scores.topClub) Suit.Spades else Suit.Clubs
+        val preferTopHalf = fullLeader != topLeader &&
+            scores.topMargin > scores.fullMargin &&
+            scores.topMargin >= TOP_BLACK_SUIT_MARGIN &&
+            !shouldVetoTopHalfForSpadeTip(scores, crop, fullLeader, topLeader)
+        if (preferTopHalf || scores.fullMargin < BLACK_SUIT_TOP_TIEBREAK_MAX) {
+            return resolveThinBlackLeader(scores, crop, tiebreakShape)
         }
-        return resolveThinBlackLeader(scores, crop, tiebreakShape)
+        return fullLeader to false
     }
 
     private fun resolveThinBlackLeader(
@@ -986,7 +991,28 @@ class CardRecognizer(
             }
             return Suit.Clubs to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
         }
+        if (topLeader == Suit.Clubs &&
+            crop != null &&
+            spadeShapeBlocksClubVeto(crop) &&
+            !SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop) &&
+            scores.topSpade + 0.02f >= scores.topClub
+        ) {
+            return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
+        }
         return topLeader to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
+    }
+
+    /** Keep full spades when top-half clubs only win on a spade-tip badge. */
+    fun shouldVetoTopHalfForSpadeTip(
+        scores: BlackSuitTemplateScores,
+        crop: Bitmap?,
+        fullLeader: Suit,
+        topLeader: Suit
+    ): Boolean {
+        if (fullLeader != Suit.Spades || topLeader != Suit.Clubs || crop == null) return false
+        if (!spadeShapeBlocksClubVeto(crop)) return false
+        if (SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop)) return false
+        return scores.topSpade + 0.02f >= scores.topClub
     }
 
     /** Blocks club shape veto on spade tips (incl. wide peak + narrow shoulders). */
@@ -1028,11 +1054,29 @@ class CardRecognizer(
         spadeScore: Float,
         margin: Float,
         crop: Bitmap?,
-        rank: Rank? = null
+        rank: Rank? = null,
+        topClubScore: Float = 0f,
+        topSpadeScore: Float = 0f,
+        topMargin: Float = 0f
     ): Pair<Suit, Boolean>? {
         if (leader != Suit.Clubs || crop == null) return null
+        if (SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop)) return null
+        if (SuitBadgeHeuristics.blackSuitWideClubTop(crop)) return null
+
+        if (spadeShapeBlocksClubVeto(crop)) {
+            val clubLeadsFull = clubScore > spadeScore + 0.035f
+            val clubLeadsTop = topMargin >= TOP_BLACK_SUIT_MARGIN &&
+                topClubScore > topSpadeScore + 0.035f
+            val spadeCompetitive = spadeScore + 0.02f >= clubScore ||
+                topSpadeScore + 0.02f >= topClubScore
+            if (spadeCompetitive && !(clubLeadsFull && clubLeadsTop && margin >= 0.05f)) {
+                return Suit.Spades to (margin < 0.05f || topMargin < TOP_BLACK_SUIT_MARGIN * 1.5f)
+            }
+        }
+
         if (margin >= 0.025f || max(clubScore, spadeScore) >= 0.80f) return null
         if (clubScore > spadeScore + 0.020f && rank != Rank.Four) return null
+        if (!spadeShapeBlocksClubVeto(crop)) return null
         val noWidePeak = SuitBadgeHeuristics.guessBlackSuit(
             crop,
             minMargin = 0.22f,
