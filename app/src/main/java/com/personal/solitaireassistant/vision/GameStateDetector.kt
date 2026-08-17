@@ -28,10 +28,22 @@ class GameStateDetector(
 ) {
     private val locator = BoardLocator()
     private val recognizer = CardRecognizer(context, minConfidence)
+    private var slotHitCache = mutableMapOf<SlotKey, CachedSlotHit>()
+
+    private data class SlotKey(val pile: PileRef, val index: Int)
+    private data class CachedSlotHit(
+        val fingerprint: Long,
+        val bounds: BoardRegion,
+        val hit: RecognitionHit
+    )
 
     @Suppress("UNUSED_PARAMETER")
     fun updateMinConfidence(value: Float) {
         // Recognizer is constructed with a threshold; pipeline passes settings for future rebuilds.
+    }
+
+    fun clearSlotCache() {
+        slotHitCache.clear()
     }
 
     fun detect(bitmap: Bitmap): DetectionResult {
@@ -39,6 +51,7 @@ class GameStateDetector(
         val diagnostics = mutableListOf<String>()
         diagnostics += "boardConfidence=${"%.2f".format(board.confidence)}"
         diagnostics += "profile=${board.profile.name}"
+        val newSlotCache = mutableMapOf<SlotKey, CachedSlotHit>()
 
         val locations = linkedMapOf<PileRef, List<CardLocation>>()
         val recognizedSlots = mutableListOf<RecognizedSlot>()
@@ -69,23 +82,42 @@ class GameStateDetector(
         diagnostics += "stock=${stockHit.diagnostic}"
 
         val tightWasteRegion = locateWasteTopRegion(bitmap, board)
-        val tightWasteHit = recognizer.recognize(
-            bitmap,
-            tightWasteRegion,
+        val tightWasteHit = recognizeCached(
+            bitmap = bitmap,
+            pile = PileRef.Waste,
+            index = 0,
+            region = tightWasteRegion,
+            cache = newSlotCache,
             exactCardBounds = true
         )
         val legacyWasteRegion = locator.wasteTopRegion(board)
-        val legacyWasteHit = recognizer.recognize(bitmap, legacyWasteRegion)
-        val exactRankScores = recognizer.exactRankTemplateScores(
-            bitmap,
-            tightWasteRegion,
-            Rank.entries.toSet()
-        )
-        val exactSuitScores = recognizer.suitTemplateScores(
-            bitmap,
-            tightWasteRegion,
-            Suit.entries.toSet()
-        )
+        val needsLegacyFusion =
+            tightWasteHit.card == null ||
+                tightWasteHit.confidence < 0.68f ||
+                tightWasteHit.card?.suitAmbiguous == true
+        val legacyWasteHit = if (needsLegacyFusion) {
+            recognizeCached(
+                bitmap = bitmap,
+                pile = PileRef.Waste,
+                index = 1,
+                region = legacyWasteRegion,
+                cache = newSlotCache
+            )
+        } else {
+            tightWasteHit
+        }
+        val exactRankScores = tightWasteHit.rankScores
+            ?: recognizer.exactRankTemplateScores(
+                bitmap,
+                tightWasteRegion,
+                Rank.entries.toSet()
+            )
+        val exactSuitScores = tightWasteHit.suitScores
+            ?: recognizer.suitTemplateScores(
+                bitmap,
+                tightWasteRegion,
+                Suit.entries.toSet()
+            )
         // The legacy crop has the most rank training data, while the complete
         // tight crop is the only one that reliably contains the suit badge.
         // Fuse them, correcting the two common clipped-glyph confusions with
@@ -289,7 +321,13 @@ class GameStateDetector(
         }
 
         locator.foundationRegions(board).forEachIndexed { index, region ->
-            val hit = recognizer.recognize(bitmap, region)
+            val hit = recognizeCached(
+                bitmap = bitmap,
+                pile = PileRef.Foundation(index),
+                index = 0,
+                region = region,
+                cache = newSlotCache
+            )
             locations[PileRef.Foundation(index)] = listOf(
                 locator.toCardLocation(PileRef.Foundation(index), 0, region)
             )
@@ -356,7 +394,13 @@ class GameStateDetector(
                     y += downStep
                 }
 
-                val hit = recognizer.recognize(bitmap, faceRegion)
+                val hit = recognizeCached(
+                    bitmap = bitmap,
+                    pile = PileRef.Tableau(col),
+                    index = 0,
+                    region = faceRegion,
+                    cache = newSlotCache
+                )
                 val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
                 var card = cardFromHit(hit) ?: Card(
                     Rank.Ace,
@@ -399,7 +443,13 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
-                    val boundaryHit = recognizer.recognize(bitmap, bounds)
+                    val boundaryHit = recognizeCached(
+                        bitmap = bitmap,
+                        pile = PileRef.Tableau(col),
+                        index = 100 + faceDownCount,
+                        region = bounds,
+                        cache = newSlotCache
+                    )
                     if (boundaryStats.whiteRatio > 0.12f &&
                         !boundaryHit.isFaceDown &&
                         !boundaryHit.isEmpty
@@ -434,9 +484,12 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
-                    val leadingHit = recognizer.recognize(
-                        bitmap,
-                        leadingRegion,
+                    val leadingHit = recognizeCached(
+                        bitmap = bitmap,
+                        pile = PileRef.Tableau(col),
+                        index = 200,
+                        region = leadingRegion,
+                        cache = newSlotCache,
                         exactCardBounds = true
                     )
                     val leadingCard = leadingHit.card
@@ -582,6 +635,7 @@ class GameStateDetector(
         )
         diagnostics += "livePlayScreen=$livePlayScreen"
         if (totalCards == 0) {
+            slotHitCache = newSlotCache
             return DetectionResult(
                 state = null,
                 locations = locations,
@@ -615,6 +669,7 @@ class GameStateDetector(
             recognizedSlots = recognizedSlots
         )
 
+        slotHitCache = newSlotCache
         return DetectionResult(
             state = state,
             locations = locations,
@@ -975,6 +1030,14 @@ class GameStateDetector(
         trace: RecognitionTrace
     ): Pair<Card, RecognitionTrace> {
         if (!card.known) return card to trace
+        if (!card.suitAmbiguous &&
+            trace.suitScore != null &&
+            trace.suitScore >= 0.72f &&
+            trace.suitSource != null &&
+            !trace.suitSource.startsWith("suit-ambiguous")
+        ) {
+            return card to trace
+        }
         val beforeSuit = card.suit
         val beforeAmbiguous = card.suitAmbiguous
         val resolved = if (card.suit.isRed) {
@@ -1269,6 +1332,61 @@ class GameStateDetector(
         return card.copy(suit = resolved, suitAmbiguous = false)
     }
 
+    private fun recognizeCached(
+        bitmap: Bitmap,
+        pile: PileRef,
+        index: Int,
+        region: BoardRegion,
+        cache: MutableMap<SlotKey, CachedSlotHit>,
+        exactCardBounds: Boolean = false
+    ): RecognitionHit {
+        val key = SlotKey(pile, index)
+        val fingerprint = regionFingerprint(bitmap, region)
+        slotHitCache[key]?.let { previous ->
+            if (previous.fingerprint == fingerprint && regionsSimilar(previous.bounds, region)) {
+                cache[key] = previous
+                return previous.hit
+            }
+        }
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds)
+        val entry = CachedSlotHit(fingerprint, region, hit)
+        cache[key] = entry
+        return hit
+    }
+
+    private fun regionFingerprint(bitmap: Bitmap, region: BoardRegion): Long {
+        val left = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = region.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        val cols = ((right - left) / 12).coerceIn(4, 16)
+        val rows = ((bottom - top) / 12).coerceIn(4, 16)
+        var hash = pileFingerprintSeed
+        val stepX = ((right - left) / cols).coerceAtLeast(1)
+        val stepY = ((bottom - top) / rows).coerceAtLeast(1)
+        var y = top
+        while (y < bottom) {
+            var x = left
+            while (x < right) {
+                val color = bitmap.getPixel(x, y)
+                val quantized =
+                    (((color shr 19) and 0x1F) shl 10) or
+                        (((color shr 11) and 0x1F) shl 5) or
+                        ((color shr 3) and 0x1F)
+                hash = (hash xor quantized.toLong()) * 0x100000001b3L
+                x += stepX
+            }
+            y += stepY
+        }
+        return hash
+    }
+
+    private fun regionsSimilar(a: BoardRegion, b: BoardRegion): Boolean =
+        kotlin.math.abs(a.left - b.left) < 6f &&
+            kotlin.math.abs(a.top - b.top) < 6f &&
+            kotlin.math.abs(a.right - b.right) < 6f &&
+            kotlin.math.abs(a.bottom - b.bottom) < 6f
+
     private fun recognizedSlot(
         pile: PileRef,
         index: Int,
@@ -1298,5 +1416,9 @@ class GameStateDetector(
             null -> Suit.Clubs
         }
         return Card(Rank.Ace, suit, faceUp = true, known = false)
+    }
+
+    companion object {
+        private const val pileFingerprintSeed = -0x6c62272e07bb0142L
     }
 }

@@ -38,8 +38,17 @@ object MoveSelector {
         avoidStates: Collection<GameState> = emptyList(),
         rejectedFingerprints: Set<String> = emptySet(),
         moveFilter: (Move) -> Boolean = { true }
+    ): ScoredMove? = pickBestFromRanked(
+        ranked = rankedMoves(state, rejectedFingerprints, moveFilter),
+        state = state,
+        avoidStates = avoidStates
+    )
+
+    fun pickBestFromRanked(
+        ranked: List<ScoredMove>,
+        state: GameState,
+        avoidStates: Collection<GameState> = emptyList()
     ): ScoredMove? {
-        val ranked = rankedMoves(state, rejectedFingerprints, moveFilter)
         if (avoidStates.isEmpty()) return ranked.firstOrNull()
 
         ranked.firstOrNull { candidate ->

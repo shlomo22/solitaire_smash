@@ -21,9 +21,14 @@ import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.GameStateDetector
+import com.personal.solitaireassistant.vision.GoldenSample
 import com.personal.solitaireassistant.vision.RecognizedSlot
+import com.personal.solitaireassistant.vision.RejectedSnapshotStore
+import com.personal.solitaireassistant.vision.RejectionMeta
 import com.personal.solitaireassistant.vision.SlotKind
 import com.personal.solitaireassistant.vision.recognitionTraceLines
+import com.personal.solitaireassistant.vision.toGoldenSlot
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -35,6 +40,8 @@ class AnalysisPipeline(
     private val detector = GameStateDetector(appContext)
     private val fileLogger = AnalysisFileLogger(appContext)
     private val rejectedMoveStore = RejectedMoveStore(appContext)
+    private val rejectedSnapshotStore = RejectedSnapshotStore(appContext)
+    private val rejectionExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0
@@ -50,8 +57,14 @@ class AnalysisPipeline(
     private val snapshotLock = Any()
     private var lastStableState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
+    private val pendingFrame = AtomicReference<PendingFrame?>(null)
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
+
+    private data class PendingFrame(
+        val bitmap: Bitmap,
+        val settings: AssistantSettings
+    )
 
     fun updateSettings(settings: AssistantSettings) {
         settingsRef.set(settings)
@@ -60,42 +73,22 @@ class AnalysisPipeline(
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
         settingsRef.set(settings)
         if (!busy.compareAndSet(false, true)) {
+            val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            if (copy != null) {
+                pendingFrame.getAndSet(PendingFrame(copy, settings))?.bitmap?.recycle()
+            }
             return
         }
         try {
-            if (!sessionStarted) {
-                sessionStarted = true
-                fileLogger.sessionStart("${bitmap.width}x${bitmap.height}")
-            }
-            // Keep prior arrow while analyzing to avoid constant flash.
-
-            val started = System.currentTimeMillis()
-            val fingerprint = boardFingerprint(bitmap)
-            val cached = fingerprint == lastFrameFingerprint
-            val boardVisuallyChanged = !cached
-            val detection = if (cached) {
-                lastDetection ?: detector.detect(bitmap)
-            } else {
-                detector.detect(bitmap)
-            }
-            if (!cached || lastDetection == null) {
-                lastFrameFingerprint = fingerprint
-            }
-            synchronized(snapshotLock) {
-                lastDetection = detection
-                // Snapshot for golden review only needs updating when the board changed.
-                if (boardVisuallyChanged) {
-                    retainFrameLocked(bitmap)
+            processFrame(bitmap, settings)
+            while (true) {
+                val pending = pendingFrame.getAndSet(null) ?: break
+                try {
+                    processFrame(pending.bitmap, pending.settings)
+                } finally {
+                    pending.bitmap.recycle()
                 }
             }
-            val elapsed = System.currentTimeMillis() - started
-            handleDetection(
-                detectionRaw = detection,
-                elapsedMs = elapsed,
-                frameW = bitmap.width,
-                frameH = bitmap.height,
-                boardVisuallyChanged = boardVisuallyChanged
-            )
         } catch (t: Throwable) {
             Log.e(TAG, "Analysis failed", t)
             fileLogger.append("ERROR ${t.javaClass.simpleName}: ${t.message}")
@@ -104,6 +97,43 @@ class AnalysisPipeline(
         } finally {
             busy.set(false)
         }
+    }
+
+    private fun processFrame(bitmap: Bitmap, settings: AssistantSettings) {
+        settingsRef.set(settings)
+        if (!sessionStarted) {
+            sessionStarted = true
+            fileLogger.sessionStart("${bitmap.width}x${bitmap.height}")
+        }
+        // Keep prior arrow while analyzing to avoid constant flash.
+
+        val started = System.currentTimeMillis()
+        val fingerprint = boardFingerprint(bitmap)
+        val cached = fingerprint == lastFrameFingerprint
+        val boardVisuallyChanged = !cached
+        val detection = if (cached) {
+            lastDetection ?: detector.detect(bitmap)
+        } else {
+            detector.detect(bitmap)
+        }
+        if (!cached || lastDetection == null) {
+            lastFrameFingerprint = fingerprint
+        }
+        synchronized(snapshotLock) {
+            lastDetection = detection
+            // Snapshot for golden review only needs updating when the board changed.
+            if (boardVisuallyChanged) {
+                retainFrameLocked(bitmap)
+            }
+        }
+        val elapsed = System.currentTimeMillis() - started
+        handleDetection(
+            detectionRaw = detection,
+            elapsedMs = elapsed,
+            frameW = bitmap.width,
+            frameH = bitmap.height,
+            boardVisuallyChanged = boardVisuallyChanged
+        )
     }
 
     fun clear() {
@@ -122,21 +152,25 @@ class AnalysisPipeline(
             lastFrameBitmap = null
         }
         lastStableState = null
+        pendingFrame.getAndSet(null)?.bitmap?.recycle()
+        detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
         fileLogger.append("=== pipeline cleared ===")
     }
 
+    private fun peekCurrentFrame(): PendingSnapshot? = synchronized(snapshotLock) {
+        val frame = lastFrameBitmap?.takeIf { !it.isRecycled } ?: return@synchronized null
+        val detection = lastDetection ?: return@synchronized null
+        val copy = frame.copy(Bitmap.Config.ARGB_8888, false) ?: return@synchronized null
+        PendingSnapshot(
+            bitmap = copy,
+            slots = detection.recognizedSlots,
+            diagnostics = detection.diagnostics
+        )
+    }
+
     fun createSnapshot(): PendingSnapshot? {
-        val snapshot = synchronized(snapshotLock) {
-            val frame = lastFrameBitmap?.takeIf { !it.isRecycled } ?: return@synchronized null
-            val detection = lastDetection ?: return@synchronized null
-            val copy = frame.copy(Bitmap.Config.ARGB_8888, false) ?: return@synchronized null
-            PendingSnapshot(
-                bitmap = copy,
-                slots = detection.recognizedSlots,
-                diagnostics = detection.diagnostics
-            )
-        } ?: return null
+        val snapshot = peekCurrentFrame() ?: return null
         overlayController.hideArrowTemporarily()
         return snapshot
     }
@@ -159,6 +193,7 @@ class AnalysisPipeline(
     fun cancelCurrentHint() {
         val state = lastStableState ?: return
         val suggestion = lastSuggestion ?: return
+        val frameSnapshot = peekCurrentFrame()
         val fingerprint = MoveFingerprint.of(state, suggestion.scored.move)
         // Never remember stock draw/recycle as rejected — that leaves the user
         // with no arrow when every card hint has already been cancelled.
@@ -171,6 +206,9 @@ class AnalysisPipeline(
             statusSink("Rejected hint — showing next move")
         } else {
             statusSink("Stock hint kept available")
+        }
+        frameSnapshot?.let { snap ->
+            saveRejectionSnapshotAsync(snap, suggestion, fingerprint)
         }
         val detection = lastDetection
         if (detection?.state != null && lastSignature != null) {
@@ -189,19 +227,85 @@ class AnalysisPipeline(
         }
     }
 
+    private fun saveRejectionSnapshotAsync(
+        snapshot: PendingSnapshot,
+        suggestion: SuggestedMove,
+        fingerprint: String
+    ) {
+        val id = rejectedSnapshotStore.nextId()
+        val sample = GoldenSample(
+            id = id,
+            frameWidth = snapshot.bitmap.width,
+            frameHeight = snapshot.bitmap.height,
+            slots = snapshot.slots.map { it.toGoldenSlot() }
+        )
+        val meta = RejectionMeta(
+            moveLabel = suggestion.scored.move.label,
+            fingerprint = fingerprint,
+            from = suggestion.from,
+            to = suggestion.to
+        )
+        rejectionExecutor.execute {
+            try {
+                rejectedSnapshotStore.save(snapshot.bitmap, sample, meta)
+                fileLogger.append(
+                    "REJECTION_SNAPSHOT id=$id path=${rejectedSnapshotStore.dir().absolutePath}"
+                )
+                statusSink("Saved rejection snapshot $id")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed saving rejection snapshot", e)
+                fileLogger.append("REJECTION_SNAPSHOT_FAILED id=$id error=${e.message}")
+            } finally {
+                snapshot.bitmap.recycle()
+            }
+        }
+    }
+
     private fun countKnownFaceUp(state: GameState): Int =
         state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
             state.waste.count { it.known } +
             state.foundations.sumOf { pile -> pile.count { it.known } }
 
     private fun boardFingerprint(bitmap: Bitmap): Long {
-        val left = 0
-        val right = bitmap.width
-        val top = (bitmap.height * 0.20f).toInt()
-        val bottom = (bitmap.height * 0.68f).toInt()
-        val stepX = (bitmap.width / 54).coerceAtLeast(1)
-        val stepY = ((bottom - top) / 60).coerceAtLeast(1)
-        var hash = -0x340d631b7bdddcdbL
+        var hash = fingerprintRegion(
+            bitmap = bitmap,
+            left = 0,
+            right = bitmap.width,
+            top = (bitmap.height * 0.20f).toInt(),
+            bottom = (bitmap.height * 0.68f).toInt(),
+            cols = 54,
+            rows = 60,
+            seed = -0x340d631b7bdddcdbL
+        )
+        // Stock/waste churn a lot on each move; sample the top bar separately so
+        // draw/recycle moves are not missed by the main tableau fingerprint.
+        hash = fingerprintRegion(
+            bitmap = bitmap,
+            left = 0,
+            right = bitmap.width,
+            top = (bitmap.height * 0.06f).toInt(),
+            bottom = (bitmap.height * 0.22f).toInt(),
+            cols = 40,
+            rows = 10,
+            seed = hash
+        )
+        return hash
+    }
+
+    private fun fingerprintRegion(
+        bitmap: Bitmap,
+        left: Int,
+        right: Int,
+        top: Int,
+        bottom: Int,
+        cols: Int,
+        rows: Int,
+        seed: Long
+    ): Long {
+        if (bottom <= top || right <= left) return seed
+        val stepX = ((right - left) / cols).coerceAtLeast(1)
+        val stepY = ((bottom - top) / rows).coerceAtLeast(1)
+        var hash = seed
         var y = top
         while (y < bottom) {
             var x = left
@@ -308,19 +412,44 @@ class AnalysisPipeline(
         val knownFaceUp = countKnownFaceUp(state)
         val minConf = settingsRef.get().minMatchConfidence
         val reliableFirstHit = detection.confidence >= 0.82f && knownFaceUp >= 4
+        val stateChangedSinceSuggestion =
+            lastSuggestionSignature != null && signature != lastSuggestionSignature
         // After a move the screen changes immediately — don't wait for a second
         // matching frame before updating the arrow.
         val fastUpdateAfterMove =
             boardVisuallyChanged &&
-                detection.confidence >= minConf &&
-                knownFaceUp >= 2
+                knownFaceUp >= 2 &&
+                detection.confidence >= (minConf - 0.15f).coerceAtLeast(0.52f)
 
         if (stableHits < 2 && !reliableFirstHit && !fastUpdateAfterMove) {
             statusSink("Stabilizing detection… conf=${"%.2f".format(detection.confidence)}")
-            lastSuggestion?.let { restore ->
-                if (restore.from != null && restore.to != null) {
-                    overlayController.showMove(restore.from, restore.to)
+            val sameBoardAsLastSuggestion =
+                lastSuggestionSignature != null && signature == lastSuggestionSignature
+            if (sameBoardAsLastSuggestion) {
+                lastSuggestion?.let { restore ->
+                    if (restore.from != null && restore.to != null) {
+                        overlayController.showMove(restore.from, restore.to)
+                    }
                 }
+            } else if (boardVisuallyChanged && knownFaceUp >= 2 && detection.confidence >= 0.48f) {
+                // Visual change detected but confidence is still settling — prefer a
+                // best-effort new arrow over keeping the previous move visible.
+                lastStableState = state
+                if (recentStates.lastOrNull() != state) {
+                    recentStates.addLast(state)
+                    while (recentStates.size > 4) recentStates.removeFirst()
+                }
+                showBestSuggestion(
+                    detection = detection,
+                    signature = signature,
+                    knownFaceUp = knownFaceUp,
+                    elapsedMs = elapsedMs,
+                    frameW = frameW,
+                    frameH = frameH,
+                    boardVisuallyChanged = true
+                )
+            } else if (stateChangedSinceSuggestion || boardVisuallyChanged) {
+                overlayController.hideArrowTemporarily()
             }
             return
         }
@@ -356,9 +485,7 @@ class AnalysisPipeline(
         val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
             isFoundationMoveTrusted(move, state, detection)
         }
-        val best = MoveSelector.bestMove(state, avoidStates, rejected) { move ->
-            isFoundationMoveTrusted(move, state, detection)
-        }
+        val best = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null

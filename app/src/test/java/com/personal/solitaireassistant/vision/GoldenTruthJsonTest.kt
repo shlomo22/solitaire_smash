@@ -58,6 +58,44 @@ class GoldenTruthJsonTest {
     }
 
     @Test
+    fun rejectionMetadataSerializesAndRoundTripsWithoutIt() {
+        val sample = GoldenSample(
+            id = "reject_20260817_105400",
+            frameWidth = 1080,
+            frameHeight = 2340,
+            slots = listOf(
+                GoldenSlot(
+                    pile = "waste",
+                    index = 0,
+                    bounds = BoardRegion(100f, 200f, 180f, 320f),
+                    engine = SlotGuess(SlotKind.FaceUp, Rank.Three, Suit.Hearts),
+                    truth = SlotGuess(SlotKind.FaceUp, Rank.Three, Suit.Hearts),
+                    inferred = false
+                )
+            )
+        )
+        val meta = RejectionMeta(
+            moveLabel = "Three Hearts → Foundation 1",
+            fingerprint = "Three_Hearts->Ace_Spades",
+            from = BoardRegion(400f, 800f, 480f, 980f),
+            to = BoardRegion(100f, 200f, 180f, 320f)
+        )
+        val json = GoldenTruthJson.toJson(sample, meta)
+        assertTrue(json.contains("\"rejectedMove\""))
+        assertTrue(json.contains("\"fingerprint\""))
+        assertTrue(json.contains("\"arrowFrom\""))
+        assertTrue(json.contains("\"arrowTo\""))
+        assertTrue(json.contains("Three Hearts → Foundation 1"))
+
+        val parsed = GoldenTruthJson.fromJson(json)
+        assertEquals(sample.id, parsed.id)
+        assertEquals(sample.frameWidth, parsed.frameWidth)
+        assertEquals(1, parsed.slots.size)
+        assertEquals(Rank.Three, parsed.slots[0].engine.rank)
+        assertEquals(Suit.Hearts, parsed.slots[0].engine.suit)
+    }
+
+    @Test
     fun fixtureTruthLabelsUseEachCardAtMostOnce() {
         val readme = javaClass.classLoader!!.getResource("golden/README.md")
             ?: error("golden/README.md missing from test resources")

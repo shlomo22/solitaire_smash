@@ -22,8 +22,15 @@ data class GoldenSlot(
     val inferred: Boolean = false
 )
 
+data class RejectionMeta(
+    val moveLabel: String,
+    val fingerprint: String,
+    val from: BoardRegion?,
+    val to: BoardRegion?
+)
+
 object GoldenTruthJson {
-    fun toJson(sample: GoldenSample): String {
+    fun toJson(sample: GoldenSample, rejection: RejectionMeta? = null): String {
         val root = JSONObject()
         root.put("id", sample.id)
         root.put(
@@ -32,6 +39,12 @@ object GoldenTruthJson {
                 .put("w", sample.frameWidth)
                 .put("h", sample.frameHeight)
         )
+        rejection?.let { meta ->
+            root.put("rejectedMove", meta.moveLabel)
+            root.put("fingerprint", meta.fingerprint)
+            meta.from?.let { root.put("arrowFrom", boundsJson(it)) }
+            meta.to?.let { root.put("arrowTo", boundsJson(it)) }
+        }
         val slots = JSONArray()
         sample.slots.forEach { slot ->
             slots.put(

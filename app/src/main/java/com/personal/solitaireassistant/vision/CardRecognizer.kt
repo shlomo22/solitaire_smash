@@ -36,7 +36,10 @@ data class RecognitionHit(
     val isEmpty: Boolean,
     val diagnostic: String,
     val inferredRed: Boolean? = null,
-    val trace: RecognitionTrace = RecognitionTrace.EMPTY
+    val trace: RecognitionTrace = RecognitionTrace.EMPTY,
+    /** Populated by [recognize] for reuse (e.g. waste fusion) without re-scoring. */
+    val rankScores: Map<Rank, Float>? = null,
+    val suitScores: Map<Suit, Float>? = null
 )
 
 /**
@@ -187,12 +190,15 @@ class CardRecognizer(
                     ) {
                         return RecognitionHit(null, 0.88f, true, false, "face-down-template")
                     }
-                    val suitCandidates = suitCandidatesForInk(inkRed)
-                    val suitScoreMap = suitTemplateScores(bitmap, region, suitCandidates)
+                    val suitCandidates = if (exactCardBounds) {
+                        Suit.entries.toSet()
+                    } else {
+                        suitCandidatesForInk(inkRed)
+                    }
+                    val suitScoreMap = suitTemplateScoresFromCrop(crop, suitCandidates)
+                    val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
                     val (suit, suitTrace) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
-                    val rankTemplates = RecognitionTrace.formatRankScores(
-                        rankTemplateScoreMap(crop, exactCardBounds)
-                    )
+                    val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
                     val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
                     var rankHit: Pair<Rank, Float>? = null
                     var glyph: RankInkHeuristics.Guess? = null
@@ -222,7 +228,9 @@ class CardRecognizer(
                             isEmpty = false,
                             diagnostic = "match-${rank.first.name}-${suit.name}@${"%.2f".format(conf)}",
                             inferredRed = suit.isRed,
-                            trace = trace
+                            trace = trace,
+                            rankScores = rankScoreMap,
+                            suitScores = suitScoreMap
                         )
                     }
                     if (suit == null && rank != null && inkRed == false) {
@@ -243,7 +251,9 @@ class CardRecognizer(
                             inferredRed = false,
                             trace = trace.merge(
                                 RecognitionTrace(suitSource = "suit-ambiguous-black")
-                            )
+                            ),
+                            rankScores = rankScoreMap,
+                            suitScores = suitScoreMap
                         )
                     }
                     if (suit == null && rank != null && inkRed == true) {
@@ -267,7 +277,9 @@ class CardRecognizer(
                                     suitSource = "suit-ambiguous-red",
                                     suitTemplates = suitTrace.suitTemplates
                                 )
-                            )
+                            ),
+                            rankScores = rankScoreMap,
+                            suitScores = suitScoreMap
                         )
                     }
                     if (suit != null) {
@@ -297,11 +309,14 @@ class CardRecognizer(
         // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
         val crop = crop(bitmap, region)
         try {
-            val suitCandidates = suitCandidatesForInk(inkRed)
-            val suitScoreMap = crop?.let { suitTemplateScores(bitmap, region, suitCandidates) }.orEmpty()
-            val rankTemplates = crop?.let {
-                RecognitionTrace.formatRankScores(rankTemplateScoreMap(it, exactCardBounds))
+            val suitCandidates = if (exactCardBounds) {
+                Suit.entries.toSet()
+            } else {
+                suitCandidatesForInk(inkRed)
             }
+            val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
+            val suitScoreMap = crop?.let { suitTemplateScoresFromCrop(it, suitCandidates) }.orEmpty()
+            val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
             val bitmapRank = crop?.let { bestBitmapRank(it, exactCardBounds) }
             val glyph = crop?.let { RankInkHeuristics.guess(it) }
             val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
@@ -357,7 +372,9 @@ class CardRecognizer(
                     isEmpty = false,
                     diagnostic = "bitmap-${rank.first.name}-${suit.name}@${"%.2f".format(rank.second)}",
                     inferredRed = suit.isRed,
-                    trace = trace
+                    trace = trace,
+                    rankScores = rankScoreMap,
+                    suitScores = suitScoreMap
                 )
             }
             if (suit == null && rank != null && inkRed == false && crop != null) {
@@ -460,15 +477,23 @@ class CardRecognizer(
         ensureLoaded()
         val cardCrop = crop(bitmap, region) ?: return emptyMap()
         return try {
-            val sourceMasks = suitBadgeMasks(cardCrop, preferLocatedBadge = true)
-            suits.mapNotNull { suit ->
-                bitmapSuitTemplates[suit]?.let { templates ->
-                    suit to maxSuitTemplateScore(sourceMasks, templates, topHalf = false)
-                }
-            }.toMap()
+            suitTemplateScoresFromCrop(cardCrop, suits)
         } finally {
             cardCrop.recycle()
         }
+    }
+
+    fun suitTemplateScoresFromCrop(
+        cardCrop: Bitmap,
+        suits: Set<Suit>
+    ): Map<Suit, Float> {
+        ensureLoaded()
+        val sourceMasks = suitBadgeMasks(cardCrop, preferLocatedBadge = true)
+        return suits.mapNotNull { suit ->
+            bitmapSuitTemplates[suit]?.let { templates ->
+                suit to maxSuitTemplateScore(sourceMasks, templates, topHalf = false)
+            }
+        }.toMap()
     }
 
     fun blackSuitTemplateScores(bitmap: Bitmap, region: BoardRegion): BlackSuitTemplateScores {
