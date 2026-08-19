@@ -224,6 +224,7 @@ class CardRecognizer(
                     region,
                     RankCornerOcr.CornerRoiProfile.WASTE
                 ),
+                regionTag = "whole@$key",
                 traces = traces,
                 bestHit = { bestHit },
                 updateBest = { bestHit = it }
@@ -236,6 +237,7 @@ class CardRecognizer(
                         corner,
                         RankCornerOcr.CornerRoiProfile.DIRECT
                     ),
+                    regionTag = "corner@${ocrRegionKey(corner)}",
                     traces = traces,
                     bestHit = { bestHit },
                     updateBest = { bestHit = it }
@@ -247,13 +249,20 @@ class CardRecognizer(
             ?: RankCornerOcr.AttemptResult(null, trace)
     }
 
+    /**
+     * Diagnostic-only: tags each waste OCR attempt with the exact pixel bounds
+     * of the region it probed, so a mixed-read trace (e.g. K,K,9,9,K) can be
+     * traced back to which physical crop produced which answer, rather than
+     * looking like a single noisy repeated read on one card.
+     */
     private fun considerWasteOcrAttempt(
         attempt: RankCornerOcr.AttemptResult,
+        regionTag: String,
         traces: MutableList<String>,
         bestHit: () -> RankCornerOcr.AttemptResult?,
         updateBest: (RankCornerOcr.AttemptResult) -> Unit
     ) {
-        traces += attempt.trace
+        traces += "$regionTag:${attempt.trace}"
         val guess = attempt.guess ?: return
         val bestGuess = bestHit()?.guess
         if (bestGuess == null || guess.confidence > bestGuess.confidence) {
