@@ -842,7 +842,7 @@ class CardRecognizer(
         }
         if (inkRed == true) {
             SuitBadgeHeuristics.guessRedSuit(crop)?.let { shape ->
-                if (shape.margin >= 0.12f && shape.confidence >= 0.52f) {
+                if (shape.margin >= RED_SHAPE_MIN_MARGIN && shape.confidence >= 0.52f) {
                     return shape.suit to RecognitionTrace(
                         suitSource = "suit-shape-red",
                         suitScore = shape.confidence,
@@ -949,12 +949,12 @@ class CardRecognizer(
                 else -> null
             }
             if (templateMargin < RED_SUIT_MARGIN) {
-                if (shape != null && shape.margin >= 0.12f) {
+                if (shape != null && shape.margin >= RED_SHAPE_MIN_MARGIN) {
                     return shape.suit to max(heartScore, diamondScore) + 0.04f
                 }
                 return null
             }
-            if (shape != null && shape.margin >= 0.12f) {
+            if (shape != null && shape.margin >= RED_SHAPE_MIN_MARGIN) {
                 val preferShape = when {
                     shape.suit == templateLead -> true
                     shape.suit == Suit.Diamonds &&
@@ -1073,7 +1073,7 @@ class CardRecognizer(
         }
         val shape = SuitBadgeHeuristics.guessRedSuit(crop)
         if (shape != null &&
-            shape.margin >= 0.12f &&
+            shape.margin >= RED_SHAPE_MIN_MARGIN &&
             !(shape.suit == Suit.Hearts && diamondScore > heartScore + 0.02f)
         ) {
             return shape.suit to (shape.margin < 0.14f)
@@ -1723,5 +1723,6 @@ class CardRecognizer(
         /** Shape margin to override a thin spade template win on club badges. */
         const val TOP_BLACK_SHAPE_VETO_MARGIN = 0.28f
         const val RED_SUIT_MARGIN = 0.040f
+        const val RED_SHAPE_MIN_MARGIN = 0.12f
     }
 }

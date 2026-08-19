@@ -744,7 +744,7 @@ class GameStateDetector(
             wasteCards.count { it.known }
         diagnostics += "knownFaceUp=$knownFaceUp"
 
-        val scrubbed = scrubWeakBlackFoundationSuits(
+        val blackScrubbed = scrubWeakBlackFoundationSuits(
             bitmap,
             locations,
             GameState(
@@ -754,6 +754,7 @@ class GameStateDetector(
                 waste = wasteCards
             )
         )
+        val scrubbed = scrubWeakRedFoundationSuits(bitmap, locations, blackScrubbed)
         val state = DeckConstraintPass.apply(
             bitmap = bitmap,
             recognizer = recognizer,
@@ -1130,6 +1131,83 @@ class GameStateDetector(
                 } finally {
                     crop.recycle()
                 }
+            }
+            return cards
+        }
+
+        val tableau = state.tableau.mapIndexed { index, cards ->
+            scrubPile(cards, PileRef.Tableau(index))
+        }
+        val waste = scrubPile(state.waste, PileRef.Waste)
+        if (tableau == state.tableau && waste == state.waste) return state
+        return state.copy(tableau = tableau, waste = waste)
+    }
+
+    /**
+     * Red-suit counterpart of [scrubWeakBlackFoundationSuits]: Hearts↔Diamonds
+     * near-ties that happen to match a foundation look "legal" but are a source
+     * of false arrows just like Clubs↔Spades. Demote those sources to
+     * suitAmbiguous so foundation moves are suppressed.
+     */
+    private fun scrubWeakRedFoundationSuits(
+        bitmap: Bitmap,
+        locations: Map<PileRef, List<CardLocation>>,
+        state: GameState
+    ): GameState {
+        fun scrubPile(
+            cards: List<Card>,
+            pile: PileRef
+        ): List<Card> {
+            if (cards.isEmpty()) return cards
+            val card = cards.last()
+            if (!card.known || !card.suit.isRed || card.suitAmbiguous) return cards
+            val placesOnRedFoundation = state.foundations.any { pileCards ->
+                val top = pileCards.lastOrNull() ?: return@any false
+                top.suit.isRed && card.canPlaceOnFoundation(top)
+            }
+            if (!placesOnRedFoundation) return cards
+            val bounds = locations[pile]?.lastOrNull()?.bounds ?: return cards
+            val cropLeft = bounds.left.toInt().coerceIn(0, bitmap.width - 1)
+            val cropTop = bounds.top.toInt().coerceIn(0, bitmap.height - 1)
+            val cropRight = bounds.right.toInt().coerceIn(cropLeft + 1, bitmap.width)
+            val cropBottom = bounds.bottom.toInt().coerceIn(cropTop + 1, bitmap.height)
+            if (cropRight - cropLeft >= 8 && cropBottom - cropTop >= 8) {
+                val crop = Bitmap.createBitmap(
+                    bitmap,
+                    cropLeft,
+                    cropTop,
+                    cropRight - cropLeft,
+                    cropBottom - cropTop
+                )
+                try {
+                    val shape = SuitBadgeHeuristics.guessRedSuit(crop)
+                    if (shape != null &&
+                        shape.suit == card.suit &&
+                        shape.margin >= CardRecognizer.RED_SHAPE_MIN_MARGIN
+                    ) {
+                        return cards
+                    }
+                } finally {
+                    crop.recycle()
+                }
+            }
+            val scores = recognizer.suitTemplateScores(
+                bitmap,
+                bounds,
+                setOf(Suit.Hearts, Suit.Diamonds)
+            )
+            val heart = scores[Suit.Hearts] ?: 0f
+            val diamond = scores[Suit.Diamonds] ?: 0f
+            val margin = kotlin.math.abs(heart - diamond)
+            val leader = if (heart >= diamond) Suit.Hearts else Suit.Diamonds
+            val bestScore = maxOf(heart, diamond)
+            // Match resolveRedSuit confidence: only suppress when we would not
+            // have committed this suit in the first place.
+            val confident =
+                leader == card.suit &&
+                    (margin >= 0.050f || (margin >= 0.025f && bestScore >= 0.84f))
+            if (!confident) {
+                return cards.dropLast(1) + card.copy(suitAmbiguous = true)
             }
             return cards
         }
