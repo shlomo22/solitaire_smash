@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
+import com.personal.solitaireassistant.BuildConfig
 import com.personal.solitaireassistant.capture.CaptureService
 
 private val presetColors = listOf(
@@ -69,6 +70,10 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Solitaire Assistant", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.labelMedium
+        )
         Text(
             "Personal draw-3 Klondike overlay helper for Solitaire Smash.",
             style = MaterialTheme.typography.bodyMedium
