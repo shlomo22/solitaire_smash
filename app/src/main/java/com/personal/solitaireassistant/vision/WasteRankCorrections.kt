@@ -62,7 +62,8 @@ internal object WasteRankCorrections {
         tightCard: Card?,
         baseCard: Card?,
         exactRankScores: Map<Rank, Float>,
-        inkGuess: RankInkHeuristics.Guess?
+        inkGuess: RankInkHeuristics.Guess?,
+        ocrRank: Rank? = null
     ): Rank? {
         val jackCandidate = legacyCard?.rank == Rank.Jack ||
             tightCard?.rank == Rank.Jack ||
@@ -73,6 +74,12 @@ internal object WasteRankCorrections {
         val jackScore = rankScore(exactRankScores, Rank.Jack)
         if (fiveScore > jackScore && fiveScore >= 0.50f) return Rank.Five
         if (tightCard?.rank == Rank.Five && fiveScore >= jackScore - 0.05f) return Rank.Five
+        // Corner OCR reading Five is a real read of the actual glyph, not a
+        // coarse shape guess — trust it at the same margin as a tight-crop
+        // Five candidate, rather than requiring the absolute 0.50 floor above
+        // (confirmed case: fiveScore 0.47 vs jackScore 0.40, five reads of
+        // OCR "5" with zero competing reads).
+        if (ocrRank == Rank.Five && fiveScore >= jackScore - 0.05f) return Rank.Five
         if (inkGuess?.rank == Rank.Five &&
             inkGuess.confidence >= 0.48f &&
             fiveScore >= jackScore - 0.10f
@@ -128,8 +135,7 @@ internal object WasteRankCorrections {
         ocrRank: Rank?,
         legacyCard: Card?,
         tightCard: Card?,
-        baseCard: Card?,
-        exactRankScores: Map<Rank, Float> = emptyMap()
+        baseCard: Card?
     ): Rank? {
         if (ocrRank == null) return null
 
@@ -179,17 +185,12 @@ internal object WasteRankCorrections {
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
-            // A lone OCR read (even a weak plurality, e.g. split 4-K/3-nine)
-            // must not outrank a King/Ten fusion unless it clears the same
-            // bar correctKingTenOnWaste already requires — otherwise a
-            // clearly-winning Ten template match (0.54, with King not even a
-            // top-4 candidate) gets silently overturned by noisy OCR alone.
-            if (ocrRank == Rank.King &&
-                fusionRank == Rank.Ten &&
-                (exactRankScores[Rank.King] ?: 0f) < 0.75f
-            ) {
-                return null
-            }
+            // King/Ten evidence (template score pattern + OCR plurality) was
+            // confirmed genuinely ambiguous on real golden samples: the same
+            // signal shape (Ten~0.54 template lead, King absent from top-4,
+            // OCR split) occurred once with Ten as truth and once with King
+            // as truth. No threshold on this evidence distinguishes them, so
+            // trust OCR here as before rather than guess a direction.
             return ocrRank
         }
 
