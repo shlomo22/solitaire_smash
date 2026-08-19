@@ -1455,6 +1455,8 @@ class CardRecognizer(
         var kingScore = 0f
         var jackScore = 0f
         var threeScore = 0f
+        var twoScore = 0f
+        var sevenScore = 0f
         bitmapRankTemplates.forEach { (rank, templateMasks) ->
             val score = templateMasks.maxOf { templateMask ->
                 sourceMasks.maxOf { source -> maskScore(source, templateMask) }
@@ -1465,6 +1467,8 @@ class CardRecognizer(
                 Rank.King -> kingScore = score
                 Rank.Jack -> jackScore = score
                 Rank.Three -> threeScore = score
+                Rank.Two -> twoScore = score
+                Rank.Seven -> sevenScore = score
                 else -> Unit
             }
             when {
@@ -1498,6 +1502,16 @@ class CardRecognizer(
             threeScore >= 0.50f
         ) {
             return Rank.Three to threeScore
+        }
+        // Two and Seven ink masks can score identically at the coarse 48x48
+        // grid, and unlike the confusions above there's no reliable glyph
+        // bias to prefer one — silently falling back to enum order (Two)
+        // makes this a coin flip dressed up as a decision. Decline instead so
+        // the caller's ink-shape/OCR tiebreak gets a real say.
+        if ((top.first == Rank.Two || top.first == Rank.Seven) &&
+            kotlin.math.abs(twoScore - sevenScore) < 0.02f
+        ) {
+            return null
         }
         return top
     }
