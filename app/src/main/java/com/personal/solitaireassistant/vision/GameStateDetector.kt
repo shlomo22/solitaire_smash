@@ -1709,10 +1709,17 @@ class GameStateDetector(
             var x = left
             while (x < right) {
                 val color = bitmap.getPixel(x, y)
+                // Top 4 bits/channel (16 levels, ~16-unit buckets) instead of
+                // 5 (~8-unit buckets). A single sample landing near an 8-unit
+                // boundary flips on ordinary capture noise almost every
+                // frame, and one flipped sample changes this whole combined
+                // hash — defeating the per-slot cache even when the card is
+                // unchanged. 16 units is still far below any real card-color
+                // difference (white/teal/red-ink/black-ink differ by 50+).
                 val quantized =
-                    (((color shr 19) and 0x1F) shl 10) or
-                        (((color shr 11) and 0x1F) shl 5) or
-                        ((color shr 3) and 0x1F)
+                    (((color shr 20) and 0xF) shl 8) or
+                        (((color shr 12) and 0xF) shl 4) or
+                        ((color shr 4) and 0xF)
                 hash = (hash xor quantized.toLong()) * 0x100000001b3L
                 x += stepX
             }
