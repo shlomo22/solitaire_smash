@@ -601,14 +601,17 @@ class GameStateDetector(
                 // divided by an assumed per-card step, which can drift over a long
                 // cascade and land every slot below the drift point on the wrong
                 // physical card. Surface the raw numbers so a real miscount can be
-                // told apart from a genuine recognition miss.
-                slotTrace = slotTrace.withPost(
+                // told apart from a genuine recognition miss. Attached to every
+                // slot in the column (not just the bottom anchor) since the
+                // anchor itself is usually the one read correctly and a mismatch
+                // elsewhere in the column would otherwise carry none of this.
+                val cascadeDiagnosticPost =
                     "cascade:firstFaceTop=${"%.1f".format(firstFaceTop)}," +
                         "bottomTop=${"%.1f".format(faceRegion.top)}," +
                         "faceUpStep=${"%.2f".format(faceUpStep)}," +
                         "geomCount=$geometricFaceUpCount,finalCount=$faceUpCount," +
                         "bottomRank=${card.rank.name},$cascadeRankCountNote"
-                )
+                slotTrace = slotTrace.withPost(cascadeDiagnosticPost)
                 for (exposedIndex in 0 until faceUpCount - 1) {
                     val distanceFromBottom = faceUpCount - 1 - exposedIndex
                     val geometricFallback = TableauCascadeSupport.geometricCascadeCard(
@@ -653,7 +656,10 @@ class GameStateDetector(
                             )
                             ResolvedCascadeSlot(
                                 card = resolved.copy(inferred = false),
-                                trace = trace,
+                                trace = trace.withPost(
+                                    "$cascadeDiagnosticPost,exposedIndex=$exposedIndex," +
+                                        "distanceFromBottom=$distanceFromBottom"
+                                ),
                                 diagnostic = slotHit.diagnostic,
                                 confidence = slotHit.confidence,
                                 inferred = false
