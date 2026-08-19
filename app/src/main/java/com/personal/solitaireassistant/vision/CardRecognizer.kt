@@ -277,7 +277,8 @@ class CardRecognizer(
     fun recognize(
         bitmap: Bitmap,
         region: BoardRegion,
-        exactCardBounds: Boolean = false
+        exactCardBounds: Boolean = false,
+        inkRegion: BoardRegion? = null
     ): RecognitionHit {
         ensureLoaded()
         if (region.width < 6f || region.height < 6f) {
@@ -296,9 +297,18 @@ class CardRecognizer(
             return RecognitionHit(null, 0.4f, false, true, "no-card-face")
         }
 
+        // `region` spans the full card height, but in a tableau cascade only a
+        // thin header strip at the top actually belongs to this card — the rest
+        // of the box is physically covered by the next card(s) stacked on top.
+        // Basing the red/black ink split on the full box lets the covering
+        // card's color leak into inkRed. Callers that know the true visible
+        // strip pass it as inkRegion so the color read comes from pixels that
+        // are actually this card.
+        val inkStats = inkRegion?.let { SmashColorAnalyzer.analyze(bitmap, it) } ?: stats
+
         val inkRed: Boolean? = when {
-            stats.redInkRatio > stats.blackInkRatio + 0.005f && stats.redInkRatio > 0.012f -> true
-            stats.blackInkRatio > stats.redInkRatio + 0.005f && stats.blackInkRatio > 0.012f -> false
+            inkStats.redInkRatio > inkStats.blackInkRatio + 0.005f && inkStats.redInkRatio > 0.012f -> true
+            inkStats.blackInkRatio > inkStats.redInkRatio + 0.005f && inkStats.blackInkRatio > 0.012f -> false
             else -> null
         }
 
@@ -325,8 +335,9 @@ class CardRecognizer(
                     // inkRed, since every downstream suit-source label only ever
                     // shows the derived boolean, not the numbers that decided it.
                     val suitTrace = suitTraceRaw.withPost(
-                        "ink-ratio:red=${"%.4f".format(stats.redInkRatio)}," +
-                            "black=${"%.4f".format(stats.blackInkRatio)},inkRed=$inkRed"
+                        "ink-ratio:red=${"%.4f".format(inkStats.redInkRatio)}," +
+                            "black=${"%.4f".format(inkStats.blackInkRatio)},inkRed=$inkRed" +
+                            (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
                     val rankResolution = resolveRankFromCrop(crop, exactCardBounds)

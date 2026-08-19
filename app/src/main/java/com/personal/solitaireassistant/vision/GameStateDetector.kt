@@ -530,25 +530,31 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
+                    // Only the top faceUpStep sliver of leadingRegion is actually
+                    // this card — the rest is covered by the card(s) stacked on
+                    // top of it. Feed the ink-color read only that visible strip
+                    // so the covering card's color can't leak into inkRed.
+                    val leadingHeaderRegion = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + faceUpStep * 0.9f)
+                            .coerceAtMost(columnRegion.bottom)
+                    )
                     val leadingHitResult = recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
                         region = leadingRegion,
                         cache = newSlotCache,
-                        exactCardBounds = true
+                        exactCardBounds = true,
+                        inkRegion = leadingHeaderRegion
                     )
                     leadingHit = leadingHitResult
                     leadingCard = leadingHitResult.card
                     val leadingHeaderStats = SmashColorAnalyzer.analyze(
                         bitmap,
-                        BoardRegion(
-                            columnRegion.left,
-                            firstFaceTop,
-                            columnRegion.right,
-                            (firstFaceTop + faceUpStep * 0.9f)
-                                .coerceAtMost(columnRegion.bottom)
-                        )
+                        leadingHeaderRegion
                     )
                     val expectedLeadingRed =
                         if ((faceUpCount - 1) % 2 == 0) {
@@ -597,6 +603,16 @@ class GameStateDetector(
                         columnRegion.right,
                         (top + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
+                    // Same overlap problem as the leading card: bounds reaches
+                    // down through cardHeight, but everything past the next
+                    // card's header start is that next card's face, not this
+                    // one's. Keep the ink read scoped to the visible strip.
+                    val headerRegion = BoardRegion(
+                        columnRegion.left,
+                        top,
+                        columnRegion.right,
+                        (top + faceUpStep * 0.9f).coerceAtMost(columnRegion.bottom)
+                    )
                     val precomputedHit = if (exposedIndex == 0) leadingHit else null
                     val slotHit = precomputedHit ?: recognizeCached(
                         bitmap = bitmap,
@@ -604,7 +620,8 @@ class GameStateDetector(
                         index = 300 + col * 16 + exposedIndex,
                         region = bounds,
                         cache = newSlotCache,
-                        exactCardBounds = true
+                        exactCardBounds = true,
+                        inkRegion = headerRegion
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
@@ -1564,7 +1581,8 @@ class GameStateDetector(
         index: Int,
         region: BoardRegion,
         cache: MutableMap<SlotKey, CachedSlotHit>,
-        exactCardBounds: Boolean = false
+        exactCardBounds: Boolean = false,
+        inkRegion: BoardRegion? = null
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
@@ -1574,7 +1592,7 @@ class GameStateDetector(
                 return previous.hit
             }
         }
-        val hit = recognizer.recognize(bitmap, region, exactCardBounds)
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
         val entry = CachedSlotHit(fingerprint, region, hit)
         cache[key] = entry
         return hit
