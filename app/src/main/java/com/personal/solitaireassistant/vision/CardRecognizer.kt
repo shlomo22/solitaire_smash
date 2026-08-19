@@ -828,29 +828,6 @@ class CardRecognizer(
         suitScoreMap: Map<Suit, Float>
     ): Pair<Suit?, RecognitionTrace> {
         val templateStr = RecognitionTrace.formatSuitScores(suitScoreMap)
-        // suitScoreMap sometimes already carries all four suits' real scores
-        // (exactCardBounds callers score every suit up front), but everything
-        // below only ever considers whichever color the coarse whole-card ink
-        // ratio (inkRed) picked — a wrong ink read locks out the correct suit
-        // even when its own score is sitting right there. Confirmed live case:
-        // a red Queen's Hearts score was 0.98 while ink-gating limited the
-        // pick to Spades/Clubs, landing on Spades at 0.78 — the map's own
-        // third-best entry. Only override on a decisive blowout (near-perfect
-        // absolute score, large gap) to avoid trusting a merely-close call.
-        if (inkRed != null) {
-            val sameColorBest = suitScoreMap.filterKeys { it.isRed == inkRed }.values.maxOrNull() ?: 0f
-            val oppositeBest = suitScoreMap.filterKeys { it.isRed != inkRed }.maxByOrNull { it.value }
-            if (oppositeBest != null &&
-                oppositeBest.value >= 0.90f &&
-                oppositeBest.value - sameColorBest >= 0.15f
-            ) {
-                return oppositeBest.key to RecognitionTrace(
-                    suitSource = "suit-png-color-override",
-                    suitScore = oppositeBest.value,
-                    suitTemplates = templateStr
-                )
-            }
-        }
         val bitmapSuit = bestBitmapSuit(crop, inkRed)
         if (bitmapSuit != null && bitmapSuit.second >= 0.45f &&
             (inkRed == null || bitmapSuit.first.isRed == inkRed)
