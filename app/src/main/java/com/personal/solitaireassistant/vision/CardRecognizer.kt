@@ -347,7 +347,7 @@ class CardRecognizer(
                             (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val rankResolution = resolveRankFromCrop(crop, exactCardBounds)
+                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap)
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -462,7 +462,7 @@ class CardRecognizer(
             val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
             val suitScoreMap = crop?.let { suitTemplateScoresFromCrop(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = crop?.let { resolveRankFromCrop(it, exactCardBounds) }
+            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
             val rank = rankResolution?.rank
             val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
                 ?.takeIf { it.second >= 0.45f }
@@ -697,8 +697,11 @@ class CardRecognizer(
         val strongBitmap: Boolean
     )
 
-    private fun resolveRankFromCrop(crop: Bitmap, exactCardBounds: Boolean): RankResolution {
-        val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
+    private fun resolveRankFromCrop(
+        crop: Bitmap,
+        rankScoreMap: Map<Rank, Float>
+    ): RankResolution {
+        val bitmapRankHit = bestBitmapRank(rankScoreMap)
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
         if (strongBitmap) {
             return RankResolution(
@@ -1441,36 +1444,13 @@ class CardRecognizer(
      * Translation-tolerant binary-mask matching. Unlike OpenCV, this runs in
      * fixture tests too and uses templates cropped from the exact Smash font.
      */
-    private fun bestBitmapRank(
-        crop: Bitmap,
-        exactCardBounds: Boolean = false
-    ): Pair<Rank, Float>? {
-        if (bitmapRankTemplates.isEmpty()) return null
-        val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
-        val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
-        val sourceMasks = mutableListOf<LongArray>()
-        // A correctly bounded card exposes the small corner rank and the large
-        // center glyph together, matching the source templates directly.
-        Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
-            sourceMasks += inkMask(roi)
-            roi.recycle()
-        }
-        if (!exactCardBounds) {
-            // Candidate bounds may start on an overlapping header rather than
-            // the exact card top. Search for the large center glyph only when
-            // the caller could not supply complete card bounds.
-            for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
-                val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-                val actualW = w.coerceAtMost(crop.width - x)
-                for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
-                    val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                    val actualH = h.coerceAtMost(crop.height - y)
-                    val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
-                    sourceMasks += inkMask(roi)
-                    roi.recycle()
-                }
-            }
-        }
+    // Takes the already-computed per-rank score map (rankTemplateScoreMap)
+    // instead of a crop, so the expensive crop-pyramid + mask-scoring pass
+    // that produces those scores only happens once per recognize() call —
+    // it used to run a second time here, independently, purely to find the
+    // max, doubling the cost of every single card's rank recognition.
+    private fun bestBitmapRank(rankScoreMap: Map<Rank, Float>): Pair<Rank, Float>? {
+        if (rankScoreMap.isEmpty()) return null
         var best: Pair<Rank, Float>? = null
         var second = 0f
         var tenScore = 0f
@@ -1480,10 +1460,7 @@ class CardRecognizer(
         var threeScore = 0f
         var twoScore = 0f
         var sevenScore = 0f
-        bitmapRankTemplates.forEach { (rank, templateMasks) ->
-            val score = templateMasks.maxOf { templateMask ->
-                sourceMasks.maxOf { source -> maskScore(source, templateMask) }
-            }
+        rankScoreMap.forEach { (rank, score) ->
             when (rank) {
                 Rank.Ten -> tenScore = score
                 Rank.Queen -> queenScore = score
