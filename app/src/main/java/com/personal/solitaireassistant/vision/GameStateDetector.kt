@@ -470,6 +470,12 @@ class GameStateDetector(
                 var firstFaceTop = columnRegion.top + faceDownCount * downStep
                 var leadingHit: RecognitionHit? = null
                 var leadingCard: Card? = null
+                // Diagnostic-only: which condition stopped the face-down scan,
+                // and the stats it stopped on. A boundary strip that is really
+                // still face-down but gets misread as face-up here shifts every
+                // faceUp index below it by one, without the count logic further
+                // down ever seeing anything wrong.
+                var boundaryBreakReason = "ran-out-of-room"
                 // A narrow teal header can be diluted by a white border and miss
                 // the primary face-down test. Do not infer a face-up card there.
                 while (firstFaceTop + downStep * 0.25f < faceRegion.top) {
@@ -481,6 +487,11 @@ class GameStateDetector(
                     )
                     val boundaryStats = SmashColorAnalyzer.analyze(bitmap, boundaryStrip)
                     if (!SmashColorAnalyzer.looksFaceDown(boundaryStats)) {
+                        boundaryBreakReason = "not-face-down@faceDownCount=$faceDownCount:" +
+                            "teal=${"%.3f".format(boundaryStats.tealRatio)}," +
+                            "white=${"%.3f".format(boundaryStats.whiteRatio)}," +
+                            "red=${"%.3f".format(boundaryStats.redInkRatio)}," +
+                            "black=${"%.3f".format(boundaryStats.blackInkRatio)}"
                         break
                     }
                     val bounds = BoardRegion(
@@ -500,6 +511,9 @@ class GameStateDetector(
                         !boundaryHit.isFaceDown &&
                         !boundaryHit.isEmpty
                     ) {
+                        boundaryBreakReason = "white-override@faceDownCount=$faceDownCount:" +
+                            "white=${"%.3f".format(boundaryStats.whiteRatio)}," +
+                            "hit=${boundaryHit.diagnostic}"
                         break
                     }
                     cards += Card(Rank.Ace, Suit.Clubs, faceUp = false, known = false)
@@ -610,7 +624,8 @@ class GameStateDetector(
                         "bottomTop=${"%.1f".format(faceRegion.top)}," +
                         "faceUpStep=${"%.2f".format(faceUpStep)}," +
                         "geomCount=$geometricFaceUpCount,finalCount=$faceUpCount," +
-                        "bottomRank=${card.rank.name},$cascadeRankCountNote"
+                        "bottomRank=${card.rank.name},$cascadeRankCountNote," +
+                        "boundary=[$boundaryBreakReason]"
                 slotTrace = slotTrace.withPost(cascadeDiagnosticPost)
                 for (exposedIndex in 0 until faceUpCount - 1) {
                     val distanceFromBottom = faceUpCount - 1 - exposedIndex
