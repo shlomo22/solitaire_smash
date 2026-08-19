@@ -164,7 +164,8 @@ class GameStateDetector(
             ocrRank = wasteOcrAttempt?.guess?.rank,
             legacyCard = legacyCard,
             tightCard = tightCard,
-            baseCard = baseCard
+            baseCard = baseCard,
+            exactRankScores = exactRankScores
         )
         val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
             legacyCard = legacyCard,

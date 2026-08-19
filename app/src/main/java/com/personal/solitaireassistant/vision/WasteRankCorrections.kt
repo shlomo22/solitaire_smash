@@ -128,7 +128,8 @@ internal object WasteRankCorrections {
         ocrRank: Rank?,
         legacyCard: Card?,
         tightCard: Card?,
-        baseCard: Card?
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float> = emptyMap()
     ): Rank? {
         if (ocrRank == null) return null
 
@@ -178,6 +179,17 @@ internal object WasteRankCorrections {
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            // A single (possibly weak-plurality) OCR read on a known-confusable
+            // pair should not overturn a fusion rank that template matching
+            // already backs decisively, with near-zero support for the OCR
+            // read. Confirmed case: OCR split 4-K/3-nine on a waste "10" whose
+            // template score (0.54) clearly won and King wasn't even a
+            // competitive template candidate.
+            val fusionScore = exactRankScores[fusionRank] ?: 0f
+            val ocrScore = exactRankScores[ocrRank] ?: 0f
+            if (fusionScore >= 0.50f && fusionScore - ocrScore >= 0.30f) {
+                return null
+            }
             return ocrRank
         }
 
