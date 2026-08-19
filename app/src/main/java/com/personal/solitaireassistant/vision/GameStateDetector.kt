@@ -35,6 +35,9 @@ class GameStateDetector(
     private var recognizeCacheHits = 0
     private var recognizeCacheMisses = 0
     private var recognizeMissNanos = 0L
+    private var missNoPriorEntry = 0
+    private var missFingerprintChanged = 0
+    private var missBoundsShifted = 0
     private val tableauColumnNanos = LongArray(7)
 
     private data class SlotKey(val pile: PileRef, val index: Int)
@@ -57,6 +60,9 @@ class GameStateDetector(
         recognizeCacheHits = 0
         recognizeCacheMisses = 0
         recognizeMissNanos = 0L
+        missNoPriorEntry = 0
+        missFingerprintChanged = 0
+        missBoundsShifted = 0
         tableauColumnNanos.fill(0L)
         val detectStartNanos = System.nanoTime()
         val board = locator.locate(bitmap)
@@ -856,7 +862,9 @@ class GameStateDetector(
             "scrub=${"%.0f".format(scrubNanos / 1_000_000.0)}ms," +
             "deckConstraint=${"%.0f".format(deckConstraintNanos / 1_000_000.0)}ms," +
             "recognize:hits=$recognizeCacheHits,misses=$recognizeCacheMisses," +
-            "missTime=${"%.0f".format(recognizeMissNanos / 1_000_000.0)}ms"
+            "missTime=${"%.0f".format(recognizeMissNanos / 1_000_000.0)}ms," +
+            "missReason:newKey=$missNoPriorEntry,fingerprint=$missFingerprintChanged," +
+            "bounds=$missBoundsShifted"
 
         slotHitCache = newSlotCache
         return DetectionResult(
@@ -1661,12 +1669,21 @@ class GameStateDetector(
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
-        slotHitCache[key]?.let { previous ->
-            if (previous.fingerprint == fingerprint && regionsSimilar(previous.bounds, region)) {
-                cache[key] = previous
-                recognizeCacheHits++
-                return previous.hit
-            }
+        val previous = slotHitCache[key]
+        if (previous != null &&
+            previous.fingerprint == fingerprint &&
+            regionsSimilar(previous.bounds, region)
+        ) {
+            cache[key] = previous
+            recognizeCacheHits++
+            return previous.hit
+        }
+        // Diagnostic-only: which reason this miss falls into, so a cache
+        // that's oddly cold can be told apart from genuine board changes.
+        when {
+            previous == null -> missNoPriorEntry++
+            previous.fingerprint != fingerprint -> missFingerprintChanged++
+            else -> missBoundsShifted++
         }
         val missStart = System.nanoTime()
         val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
