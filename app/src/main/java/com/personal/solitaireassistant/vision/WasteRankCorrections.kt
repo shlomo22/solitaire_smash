@@ -179,15 +179,15 @@ internal object WasteRankCorrections {
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
-            // A single (possibly weak-plurality) OCR read on a known-confusable
-            // pair should not overturn a fusion rank that template matching
-            // already backs decisively, with near-zero support for the OCR
-            // read. Confirmed case: OCR split 4-K/3-nine on a waste "10" whose
-            // template score (0.54) clearly won and King wasn't even a
-            // competitive template candidate.
-            val fusionScore = exactRankScores[fusionRank] ?: 0f
-            val ocrScore = exactRankScores[ocrRank] ?: 0f
-            if (fusionScore >= 0.50f && fusionScore - ocrScore >= 0.30f) {
+            // A lone OCR read (even a weak plurality, e.g. split 4-K/3-nine)
+            // must not outrank a King/Ten fusion unless it clears the same
+            // bar correctKingTenOnWaste already requires — otherwise a
+            // clearly-winning Ten template match (0.54, with King not even a
+            // top-4 candidate) gets silently overturned by noisy OCR alone.
+            if (ocrRank == Rank.King &&
+                fusionRank == Rank.Ten &&
+                (exactRankScores[Rank.King] ?: 0f) < 0.75f
+            ) {
                 return null
             }
             return ocrRank
