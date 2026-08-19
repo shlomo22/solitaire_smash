@@ -323,11 +323,18 @@ class CardRecognizer(
                     ) {
                         return RecognitionHit(null, 0.88f, true, false, "face-down-template")
                     }
-                    val suitCandidates = if (exactCardBounds) {
-                        Suit.entries.toSet()
-                    } else {
-                        suitCandidatesForInk(inkRed)
-                    }
+                    // Cascade cards (exactCardBounds) used to always score all
+                    // 4 suits, on the assumption their small header-strip crop
+                    // couldn't be trusted for a red/black ink read. The
+                    // inkRegion fix now feeds this from the card's own visible
+                    // strip specifically to avoid contamination from the card
+                    // stacked on top of it, and is decisive (non-null) as
+                    // reliably as any other pile's ink read. Gate on it here
+                    // too: suitCandidatesForInk already falls back to all 4
+                    // suits when inkRed is null, so this only cuts scoring
+                    // when the ink read is confident, never removes the hedge
+                    // for the ambiguous case.
+                    val suitCandidates = suitCandidatesForInk(inkRed)
                     val suitScoreMap = suitTemplateScoresFromCrop(crop, suitCandidates)
                     val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
                     val (suit, suitTraceRaw) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
@@ -449,11 +456,9 @@ class CardRecognizer(
         // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
         val crop = crop(bitmap, region)
         try {
-            val suitCandidates = if (exactCardBounds) {
-                Suit.entries.toSet()
-            } else {
-                suitCandidatesForInk(inkRed)
-            }
+            // Same reasoning as the OpenCV path above: trust the ink-region
+            // gate here too instead of always scoring all 4 suits.
+            val suitCandidates = suitCandidatesForInk(inkRed)
             val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
             val suitScoreMap = crop?.let { suitTemplateScoresFromCrop(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
