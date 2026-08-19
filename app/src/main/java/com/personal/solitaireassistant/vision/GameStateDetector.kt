@@ -1237,11 +1237,10 @@ class GameStateDetector(
         }
         val beforeSuit = card.suit
         val beforeAmbiguous = card.suitAmbiguous
-        val colorChecked = correctInkColorIfWrong(bitmap, region, card)
-        val resolved = if (colorChecked.suit.isRed) {
-            resolveRedSuit(bitmap, region, colorChecked)
+        val resolved = if (card.suit.isRed) {
+            resolveRedSuit(bitmap, region, card)
         } else {
-            resolveBlackSuit(bitmap, region, colorChecked)
+            resolveBlackSuit(bitmap, region, card)
         }
         val post = when {
             resolved.suit != beforeSuit ->
@@ -1253,44 +1252,6 @@ class GameStateDetector(
             else -> null
         }
         return resolved to (post?.let { trace.withPost(it) } ?: trace)
-    }
-
-    /**
-     * resolveRedSuit/resolveBlackSuit only ever refine within whatever color
-     * [card] already has — they bail immediately if the color doesn't match.
-     * That means an upstream ink-color misread (whole-card red/black ratio,
-     * computed once in CardRecognizer.recognize) can never self-correct: a
-     * red card misread as black stays locked to Clubs/Spades forever, and
-     * vice versa. Golden-truth evaluation confirmed this is the dominant
-     * suit-error mode in practice — cross-color misreads (Diamonds→Spades,
-     * Hearts→Spades, Clubs→Diamonds) far outnumber same-color near-ties.
-     * Cross-check both color pairs' best badge score before locking in, and
-     * flip color when the opposite pair decisively beats the current one.
-     */
-    private fun correctInkColorIfWrong(
-        bitmap: Bitmap,
-        region: BoardRegion,
-        card: Card
-    ): Card {
-        if (!card.known) return card
-        val sameColor = if (card.suit.isRed) {
-            setOf(Suit.Hearts, Suit.Diamonds)
-        } else {
-            setOf(Suit.Clubs, Suit.Spades)
-        }
-        val oppositeColor = if (card.suit.isRed) {
-            setOf(Suit.Clubs, Suit.Spades)
-        } else {
-            setOf(Suit.Hearts, Suit.Diamonds)
-        }
-        val scores = recognizer.suitTemplateScores(bitmap, region, sameColor + oppositeColor)
-        val sameBest = sameColor.maxOf { scores[it] ?: 0f }
-        val oppositeLeader = oppositeColor.maxByOrNull { scores[it] ?: 0f } ?: return card
-        val oppositeBest = scores[oppositeLeader] ?: 0f
-        if (oppositeBest >= sameBest + CardRecognizer.OPPOSITE_COLOR_OVERRIDE_MARGIN && oppositeBest >= 0.55f) {
-            return card.copy(suit = oppositeLeader)
-        }
-        return card
     }
 
     private fun resolveRedSuit(
