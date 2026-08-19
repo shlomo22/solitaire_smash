@@ -16,7 +16,8 @@ data class GoldenEvalReport(
     val confusions: List<Pair<String, Int>>,
     val redSuitConfusions: List<Pair<String, Int>>,
     val blackSuitConfusions: List<Pair<String, Int>>,
-    val mismatches: List<String>
+    val mismatches: List<String>,
+    val mismatchDiagnostics: List<String> = emptyList()
 ) {
     val accuracy: Float
         get() = if (slotCount == 0) 0f else matchedSlots.toFloat() / slotCount
@@ -52,6 +53,14 @@ data class GoldenEvalReport(
         }
         return lines.joinToString("\n")
     }
+
+    fun mismatchTraceBlock(): String {
+        if (mismatchDiagnostics.isEmpty()) return ""
+        return buildString {
+            appendLine("Mismatch traces (${mismatchDiagnostics.size}):")
+            mismatchDiagnostics.forEach { appendLine("  $it") }
+        }.trimEnd()
+    }
 }
 
 object GoldenTruthEvaluator {
@@ -81,6 +90,7 @@ object GoldenTruthEvaluator {
         val redSuitConfusionMap = linkedMapOf<String, Int>()
         val blackSuitConfusionMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
+        val mismatchDiagnostics = mutableListOf<String>()
         val samples = store.listSamples()
 
         samples.forEach { sample ->
@@ -105,7 +115,8 @@ object GoldenTruthEvaluator {
                     onBlackSuitConfusion = { key ->
                         blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
                     },
-                    onMismatch = { mismatches += it }
+                    onMismatch = { mismatches += it },
+                    onMismatchDiagnostic = { mismatchDiagnostics += it }
                 )
             } finally {
                 bitmap.recycle()
@@ -123,7 +134,8 @@ object GoldenTruthEvaluator {
             confusionMap = confusionMap,
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
-            mismatches = mismatches
+            mismatches = mismatches,
+            mismatchDiagnostics = mismatchDiagnostics
         )
     }
 
@@ -141,6 +153,7 @@ object GoldenTruthEvaluator {
         val redSuitConfusionMap = linkedMapOf<String, Int>()
         val blackSuitConfusionMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
+        val mismatchDiagnostics = mutableListOf<String>()
         samples.forEach { (sample, bitmap) ->
             compareSample(
                 sample = sample,
@@ -161,7 +174,8 @@ object GoldenTruthEvaluator {
                 onBlackSuitConfusion = { key ->
                     blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
                 },
-                onMismatch = { mismatches += it }
+                onMismatch = { mismatches += it },
+                onMismatchDiagnostic = { mismatchDiagnostics += it }
             )
         }
         return finishReport(
@@ -175,7 +189,8 @@ object GoldenTruthEvaluator {
             confusionMap = confusionMap,
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
-            mismatches = mismatches
+            mismatches = mismatches,
+            mismatchDiagnostics = mismatchDiagnostics
         )
     }
 
@@ -190,7 +205,8 @@ object GoldenTruthEvaluator {
         confusionMap: Map<String, Int>,
         redSuitConfusionMap: Map<String, Int>,
         blackSuitConfusionMap: Map<String, Int>,
-        mismatches: List<String>
+        mismatches: List<String>,
+        mismatchDiagnostics: List<String>
     ): GoldenEvalReport {
         val confusions = confusionMap.entries
             .sortedByDescending { it.value }
@@ -212,7 +228,8 @@ object GoldenTruthEvaluator {
             confusions = confusions,
             redSuitConfusions = redSuitConfusions,
             blackSuitConfusions = blackSuitConfusions,
-            mismatches = mismatches
+            mismatches = mismatches,
+            mismatchDiagnostics = mismatchDiagnostics
         )
     }
 
@@ -229,7 +246,8 @@ object GoldenTruthEvaluator {
         onConfusion: (String) -> Unit = {},
         onRedSuitConfusion: (String) -> Unit = {},
         onBlackSuitConfusion: (String) -> Unit = {},
-        onMismatch: (String) -> Unit = {}
+        onMismatch: (String) -> Unit = {},
+        onMismatchDiagnostic: (String) -> Unit = {}
     ) {
         val detection = detector.detect(bitmap)
         val labeled = sample.slots.filter { !it.inferred }
@@ -239,6 +257,15 @@ object GoldenTruthEvaluator {
             if (detected == null) {
                 onMissing()
                 onMismatch("${sample.id} ${truthSlot.pile} missing (truth=${truthSlot.truth.shortLabel()})")
+                onMismatchDiagnostic(
+                    buildMismatchDiagnostic(
+                        sampleId = sample.id,
+                        truthSlot = truthSlot,
+                        detected = null,
+                        bitmap = bitmap,
+                        detector = detector
+                    )
+                )
                 return@forEach
             }
             val actual = detected.engine
@@ -249,6 +276,15 @@ object GoldenTruthEvaluator {
                 onMismatch(
                     "${sample.id} ${truthSlot.pile} occupancy " +
                         "${expected.shortLabel()} vs ${actual.shortLabel()}"
+                )
+                onMismatchDiagnostic(
+                    buildMismatchDiagnostic(
+                        sampleId = sample.id,
+                        truthSlot = truthSlot,
+                        detected = detected,
+                        bitmap = bitmap,
+                        detector = detector
+                    )
                 )
                 return@forEach
             }
@@ -293,8 +329,62 @@ object GoldenTruthEvaluator {
                     "${sample.id} ${truthSlot.pile} " +
                         "${expected.shortLabel()} vs ${actual.shortLabel()}"
                 )
+                onMismatchDiagnostic(
+                    buildMismatchDiagnostic(
+                        sampleId = sample.id,
+                        truthSlot = truthSlot,
+                        detected = detected,
+                        bitmap = bitmap,
+                        detector = detector
+                    )
+                )
             }
         }
+    }
+
+    internal fun buildMismatchDiagnostic(
+        sampleId: String,
+        truthSlot: GoldenSlot,
+        detected: RecognizedSlot?,
+        bitmap: Bitmap,
+        detector: GameStateDetector
+    ): String {
+        val expected = truthSlot.truth
+        val actual = detected?.engine
+        val label = when {
+            detected == null -> "${expected.shortLabel()} vs MISSING"
+            else -> "${expected.shortLabel()} vs ${actual?.shortLabel() ?: "?"}"
+        }
+        val parts = mutableListOf("$sampleId ${truthSlot.pile} $label")
+        if (detected != null) {
+            val rankPart = buildString {
+                append("rank=")
+                append(detected.trace.rankSource ?: "?")
+                detected.trace.rankScore?.let { append("@${"%.2f".format(it)}") }
+                detected.trace.rankTemplates?.let { append(" {$it}") }
+            }
+            parts += rankPart
+            val suitPart = buildString {
+                append("suit=")
+                append(detected.trace.suitSource ?: "?")
+                detected.trace.suitScore?.let { append("@${"%.2f".format(it)}") }
+                detected.trace.suitTemplates?.let { append(" {$it}") }
+            }
+            parts += suitPart
+            if (detected.trace.postSteps.isNotEmpty()) {
+                parts += "post=[${detected.trace.postSteps.joinToString("; ")}]"
+            }
+            parts += "diag=${detected.diagnostic}"
+        }
+        if (expected.kind == SlotKind.FaceUp) {
+            val probe = if (truthSlot.pile == "waste") {
+                detector.attemptWasteRankOcr(bitmap, listOf(truthSlot.bounds))
+            } else {
+                detector.attemptCornerRankOcr(bitmap, truthSlot.bounds)
+            }
+            parts += "probe=${probe.trace}"
+        }
+        return parts.joinToString(" | ")
     }
 
     fun findMatchingSlot(

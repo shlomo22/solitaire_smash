@@ -119,4 +119,80 @@ internal object WasteRankCorrections {
         }
         return null
     }
+
+    /**
+     * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
+     * the fused PNG pick on a known confusion pair (3/J, 5/J, K/10, Q/K, Q/10).
+     */
+    fun ocrRankOverride(
+        ocrRank: Rank?,
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?
+    ): Rank? {
+        if (ocrRank == null) return null
+
+        val legacyRank = legacyCard?.rank
+        val tightRank = tightCard?.rank
+        val baseRank = baseCard?.rank
+        val candidateRanks = setOfNotNull(legacyRank, tightRank, baseRank)
+        if (ocrRank in candidateRanks) return ocrRank
+
+        val tightLegacyRanks = setOfNotNull(legacyRank, tightRank)
+        if (ocrRank == Rank.Ten &&
+            tightLegacyRanks.contains(Rank.King) &&
+            tightLegacyRanks.contains(Rank.Ten)
+        ) {
+            return Rank.Ten
+        }
+        if (ocrRank == Rank.King &&
+            tightLegacyRanks.contains(Rank.King) &&
+            tightLegacyRanks.contains(Rank.Ten)
+        ) {
+            return Rank.King
+        }
+        if (ocrRank == Rank.Queen &&
+            tightLegacyRanks.contains(Rank.Queen) &&
+            tightLegacyRanks.contains(Rank.Ten)
+        ) {
+            return Rank.Queen
+        }
+        if (ocrRank == Rank.Queen &&
+            tightLegacyRanks.contains(Rank.Queen) &&
+            tightLegacyRanks.contains(Rank.King)
+        ) {
+            return Rank.Queen
+        }
+        if (ocrRank == Rank.Jack &&
+            tightLegacyRanks.contains(Rank.Jack) &&
+            tightLegacyRanks.contains(Rank.Three)
+        ) {
+            return Rank.Jack
+        }
+        if (ocrRank == Rank.Three &&
+            tightLegacyRanks.contains(Rank.Jack) &&
+            tightLegacyRanks.contains(Rank.Three)
+        ) {
+            return Rank.Three
+        }
+
+        val fusionRank = baseRank ?: legacyRank ?: tightRank
+        if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            return ocrRank
+        }
+
+        return null
+    }
+
+    internal fun isConfusionPair(first: Rank, second: Rank): Boolean {
+        if (first == second) return false
+        return when (setOf(first, second)) {
+            setOf(Rank.Ten, Rank.Queen),
+            setOf(Rank.King, Rank.Ten),
+            setOf(Rank.King, Rank.Queen),
+            setOf(Rank.Jack, Rank.Three),
+            setOf(Rank.Five, Rank.Jack) -> true
+            else -> false
+        }
+    }
 }

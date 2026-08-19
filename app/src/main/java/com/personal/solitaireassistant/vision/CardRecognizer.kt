@@ -58,6 +58,11 @@ class CardRecognizer(
     private var faceDownTemplate: Mat? = null
     private var loaded = false
     private var openCvReady = false
+    private var rankCornerOcr: RankCornerOcr? = null
+
+    /** True when ML Kit text recognizer is initialized for rank OCR tiebreaks. */
+    var ocrReady: Boolean = false
+        private set
 
     fun ensureLoaded() {
         if (loaded) return
@@ -99,6 +104,15 @@ class CardRecognizer(
                 }
             if (templates.isNotEmpty()) {
                 bitmapSuitTemplates[suit] = templates
+            }
+        }
+        if (rankCornerOcr == null) {
+            try {
+                rankCornerOcr = RankCornerOcr()
+                ocrReady = true
+            } catch (t: Throwable) {
+                Log.w(TAG, "OCR unavailable — rank tiebreak disabled", t)
+                ocrReady = false
             }
         }
         openCvReady = try {
@@ -151,6 +165,106 @@ class CardRecognizer(
         }
     }
 
+    fun attemptCornerRankOcr(
+        bitmap: Bitmap,
+        region: BoardRegion,
+        profile: RankCornerOcr.CornerRoiProfile = RankCornerOcr.CornerRoiProfile.DEFAULT
+    ): RankCornerOcr.AttemptResult {
+        ensureLoaded()
+        val cardCrop = crop(bitmap, region)
+            ?: return RankCornerOcr.AttemptResult(null, "ocr=miss:no-crop")
+        return try {
+            rankCornerOcr?.attempt(cardCrop, profile)
+                ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
+        } finally {
+            cardCrop.recycle()
+        }
+    }
+
+    fun attemptCornerRankOcrBest(
+        bitmap: Bitmap,
+        regions: List<BoardRegion>,
+        profile: RankCornerOcr.CornerRoiProfile = RankCornerOcr.CornerRoiProfile.DEFAULT
+    ): RankCornerOcr.AttemptResult {
+        if (regions.isEmpty()) {
+            return RankCornerOcr.AttemptResult(null, "ocr=miss:no-regions")
+        }
+        var bestHit: RankCornerOcr.AttemptResult? = null
+        val traces = mutableListOf<String>()
+        for (region in regions) {
+            val attempt = attemptCornerRankOcr(bitmap, region, profile)
+            traces += attempt.trace
+            val guess = attempt.guess ?: continue
+            val bestGuess = bestHit?.guess
+            if (bestGuess == null || guess.confidence > bestGuess.confidence) {
+                bestHit = attempt
+            }
+        }
+        val trace = traces.joinToString(";")
+        return bestHit?.copy(trace = trace)
+            ?: RankCornerOcr.AttemptResult(null, trace)
+    }
+
+    fun attemptWasteRankOcr(
+        bitmap: Bitmap,
+        cardRegions: List<BoardRegion>
+    ): RankCornerOcr.AttemptResult {
+        if (cardRegions.isEmpty()) {
+            return RankCornerOcr.AttemptResult(null, "ocr=miss:no-regions")
+        }
+        var bestHit: RankCornerOcr.AttemptResult? = null
+        val traces = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+        for (region in cardRegions) {
+            val key = ocrRegionKey(region)
+            if (!seen.add(key)) continue
+            considerWasteOcrAttempt(
+                attempt = attemptCornerRankOcr(
+                    bitmap,
+                    region,
+                    RankCornerOcr.CornerRoiProfile.WASTE
+                ),
+                traces = traces,
+                bestHit = { bestHit },
+                updateBest = { bestHit = it }
+            )
+            val corner = BoardLocator.wasteRankCornerRegion(region)
+            if (corner.width >= 8f && corner.height >= 8f) {
+                considerWasteOcrAttempt(
+                    attempt = attemptCornerRankOcr(
+                        bitmap,
+                        corner,
+                        RankCornerOcr.CornerRoiProfile.DIRECT
+                    ),
+                    traces = traces,
+                    bestHit = { bestHit },
+                    updateBest = { bestHit = it }
+                )
+            }
+        }
+        val trace = traces.joinToString(";")
+        return bestHit?.copy(trace = trace)
+            ?: RankCornerOcr.AttemptResult(null, trace)
+    }
+
+    private fun considerWasteOcrAttempt(
+        attempt: RankCornerOcr.AttemptResult,
+        traces: MutableList<String>,
+        bestHit: () -> RankCornerOcr.AttemptResult?,
+        updateBest: (RankCornerOcr.AttemptResult) -> Unit
+    ) {
+        traces += attempt.trace
+        val guess = attempt.guess ?: return
+        val bestGuess = bestHit()?.guess
+        if (bestGuess == null || guess.confidence > bestGuess.confidence) {
+            updateBest(attempt)
+        }
+    }
+
+    private fun ocrRegionKey(region: BoardRegion): String =
+        "${region.left.toInt()},${region.top.toInt()}," +
+            "${region.right.toInt()},${region.bottom.toInt()}"
+
     fun recognize(
         bitmap: Bitmap,
         region: BoardRegion,
@@ -199,24 +313,17 @@ class CardRecognizer(
                     val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
                     val (suit, suitTrace) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
-                    var rankHit: Pair<Rank, Float>? = null
-                    var glyph: RankInkHeuristics.Guess? = null
-                    val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
-                    val rank = if (strongBitmap) {
-                        bitmapRankHit
-                    } else {
-                        rankHit = bestRank(crop)
-                        glyph = RankInkHeuristics.guess(crop)
-                        pickRank(bitmapRankHit, rankHit, glyph)
-                    }
+                    val rankResolution = resolveRankFromCrop(crop, exactCardBounds)
+                    val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
-                        bitmapRankHit = bitmapRankHit,
-                        rankHit = rankHit,
-                        glyph = glyph,
+                        bitmapRankHit = rankResolution.bitmapRankHit,
+                        rankHit = rankResolution.rankHit,
+                        glyph = rankResolution.glyph,
+                        ocrGuess = rankResolution.ocrGuess,
+                        ocrTrace = rankResolution.ocrTrace,
                         picked = rank,
                         rankTemplates = rankTemplates,
-                        strongBitmap = strongBitmap
+                        strongBitmap = rankResolution.strongBitmap
                     )
                     val trace = rankTrace.merge(suitTrace)
                     if (suit != null && rank != null) {
@@ -283,16 +390,22 @@ class CardRecognizer(
                         )
                     }
                     if (suit != null) {
-                        val rankHint = bitmapRankHit?.let {
+                        val rankHint = rankResolution.bitmapRankHit?.let {
                             "bitmap-${it.first.name}@${"%.2f".format(it.second)}"
-                        } ?: rankHit?.let {
+                        } ?: rankResolution.rankHit?.let {
                             "${it.first.name}@${"%.2f".format(it.second)}"
-                        } ?: glyph?.let {
+                        } ?: rankResolution.glyph?.let {
                             "glyph-${it.rank.name}@${"%.2f".format(it.confidence)}"
+                        } ?: rankResolution.ocrGuess?.let {
+                            "ocr-${it.rank.name}@${"%.2f".format(it.confidence)}"
                         } ?: "null"
                         return RecognitionHit(
                             card = null,
-                            confidence = bitmapRankHit?.second ?: rankHit?.second ?: glyph?.confidence ?: 0.4f,
+                            confidence = rankResolution.bitmapRankHit?.second
+                                ?: rankResolution.rankHit?.second
+                                ?: rankResolution.glyph?.confidence
+                                ?: rankResolution.ocrGuess?.confidence
+                                ?: 0.4f,
                             isFaceDown = false,
                             isEmpty = false,
                             diagnostic = "face-up-color-${if (suit.isRed) "red" else "black"}-rank=$rankHint",
@@ -317,8 +430,8 @@ class CardRecognizer(
             val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
             val suitScoreMap = crop?.let { suitTemplateScoresFromCrop(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val bitmapRank = crop?.let { bestBitmapRank(it, exactCardBounds) }
-            val glyph = crop?.let { RankInkHeuristics.guess(it) }
+            val rankResolution = crop?.let { resolveRankFromCrop(it, exactCardBounds) }
+            val rank = rankResolution?.rank
             val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
                 ?.takeIf { it.second >= 0.45f }
             val shapeBlack = if (inkRed == false && crop != null) {
@@ -354,14 +467,15 @@ class CardRecognizer(
                 )
                 else -> RecognitionTrace(suitTemplates = RecognitionTrace.formatSuitScores(suitScoreMap))
             }
-            val rank = pickRank(bitmapRank, null, glyph)
             val rankTrace = buildRankTrace(
-                bitmapRankHit = bitmapRank,
-                rankHit = null,
-                glyph = glyph,
+                bitmapRankHit = rankResolution?.bitmapRankHit,
+                rankHit = rankResolution?.rankHit,
+                glyph = rankResolution?.glyph,
+                ocrGuess = rankResolution?.ocrGuess,
+                ocrTrace = rankResolution?.ocrTrace,
                 picked = rank,
                 rankTemplates = rankTemplates,
-                strongBitmap = bitmapRank != null && bitmapRank.second >= 0.68f
+                strongBitmap = rankResolution?.strongBitmap == true
             )
             val trace = rankTrace.merge(suitTrace)
             if (suit != null && rank != null) {
@@ -529,6 +643,9 @@ class CardRecognizer(
         suitTemplates.clear()
         emptyTemplate = null
         faceDownTemplate = null
+        rankCornerOcr?.close()
+        rankCornerOcr = null
+        ocrReady = false
         loaded = false
     }
 
@@ -538,35 +655,125 @@ class CardRecognizer(
         null -> Suit.entries.toSet()
     }
 
+    private data class RankResolution(
+        val rank: Pair<Rank, Float>?,
+        val bitmapRankHit: Pair<Rank, Float>?,
+        val rankHit: Pair<Rank, Float>?,
+        val glyph: RankInkHeuristics.Guess?,
+        val ocrGuess: RankCornerOcr.Guess?,
+        val ocrTrace: String?,
+        val strongBitmap: Boolean
+    )
+
+    private fun resolveRankFromCrop(crop: Bitmap, exactCardBounds: Boolean): RankResolution {
+        val bitmapRankHit = bestBitmapRank(crop, exactCardBounds)
+        val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
+        if (strongBitmap) {
+            return RankResolution(
+                rank = bitmapRankHit,
+                bitmapRankHit = bitmapRankHit,
+                rankHit = null,
+                glyph = null,
+                ocrGuess = null,
+                ocrTrace = null,
+                strongBitmap = true
+            )
+        }
+        val rankHit = bestRank(crop)
+        val glyph = RankInkHeuristics.guess(crop)
+        val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
+            rankCornerOcr?.attempt(crop)
+                ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
+        } else {
+            null
+        }
+        val ocrGuess = ocrAttempt?.guess
+        val rank = pickRank(bitmapRankHit, rankHit, glyph, ocrGuess)
+        return RankResolution(
+            rank = rank,
+            bitmapRankHit = bitmapRankHit,
+            rankHit = rankHit,
+            glyph = glyph,
+            ocrGuess = ocrGuess,
+            ocrTrace = ocrAttempt?.trace,
+            strongBitmap = false
+        )
+    }
+
+    private fun rankCandidates(
+        bitmapHit: Pair<Rank, Float>?,
+        rankHit: Pair<Rank, Float>?,
+        glyph: RankInkHeuristics.Guess?
+    ): List<Pair<Rank, Float>> = listOfNotNull(
+        bitmapHit,
+        rankHit,
+        glyph?.let { it.rank to it.confidence }
+    )
+
+    private fun needsOcrTiebreak(
+        bitmapHit: Pair<Rank, Float>?,
+        rankHit: Pair<Rank, Float>?,
+        glyph: RankInkHeuristics.Guess?
+    ): Boolean {
+        if (bitmapHit != null && bitmapHit.second >= 0.68f) return false
+        val candidates = rankCandidates(bitmapHit, rankHit, glyph)
+        if (candidates.isEmpty()) return false
+
+        val sorted = candidates.sortedByDescending { it.second }
+        if (sorted[0].second < 0.68f) return true
+        if (sorted.size >= 2 && sorted[0].second - sorted[1].second < 0.08f) return true
+
+        val ranks = candidates.map { it.first }.toSet()
+        if (ranks.contains(Rank.Ten) && ranks.contains(Rank.Queen)) return true
+        if (ranks.contains(Rank.King) && ranks.contains(Rank.Ten)) return true
+        if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Three)) return true
+        if (ranks.size >= 2) return true
+        return false
+    }
+
     private fun buildRankTrace(
         bitmapRankHit: Pair<Rank, Float>?,
         rankHit: Pair<Rank, Float>?,
         glyph: RankInkHeuristics.Guess?,
+        ocrGuess: RankCornerOcr.Guess? = null,
+        ocrTrace: String? = null,
         picked: Pair<Rank, Float>?,
         rankTemplates: String?,
         strongBitmap: Boolean
     ): RecognitionTrace {
-        if (picked == null) {
-            return RecognitionTrace(rankTemplates = rankTemplates)
+        val trace = if (picked == null) {
+            RecognitionTrace(rankTemplates = rankTemplates)
+        } else {
+            val source = when {
+                strongBitmap -> "rank-png-strong"
+                ocrGuess != null && picked.first == ocrGuess.rank &&
+                    bitmapRankHit != null && picked.first == bitmapRankHit.first &&
+                    rankHit != null && picked.first == rankHit.first -> "rank-ocr+png+opencv"
+                ocrGuess != null && picked.first == ocrGuess.rank &&
+                    bitmapRankHit != null && picked.first == bitmapRankHit.first -> "rank-ocr+png"
+                ocrGuess != null && picked.first == ocrGuess.rank &&
+                    rankHit != null && picked.first == rankHit.first -> "rank-ocr+opencv"
+                ocrGuess != null && picked.first == ocrGuess.rank &&
+                    glyph != null && picked.first == glyph.rank -> "rank-ocr+glyph"
+                ocrGuess != null && picked.first == ocrGuess.rank -> "rank-ocr"
+                bitmapRankHit != null && picked.first == bitmapRankHit.first &&
+                    rankHit != null && picked.first == rankHit.first -> "rank-png+opencv"
+                bitmapRankHit != null && picked.first == bitmapRankHit.first &&
+                    glyph != null && picked.first == glyph.rank -> "rank-png+glyph"
+                rankHit != null && picked.first == rankHit.first &&
+                    glyph != null && picked.first == glyph.rank -> "rank-opencv+glyph"
+                bitmapRankHit != null && picked.first == bitmapRankHit.first -> "rank-png"
+                rankHit != null && picked.first == rankHit.first -> "rank-opencv"
+                glyph != null && picked.first == glyph.rank -> "rank-glyph"
+                else -> "rank-blend"
+            }
+            RecognitionTrace(
+                rankSource = source,
+                rankScore = picked.second,
+                rankTemplates = rankTemplates
+            )
         }
-        val source = when {
-            strongBitmap -> "rank-png-strong"
-            bitmapRankHit != null && picked.first == bitmapRankHit.first &&
-                rankHit != null && picked.first == rankHit.first -> "rank-png+opencv"
-            bitmapRankHit != null && picked.first == bitmapRankHit.first &&
-                glyph != null && picked.first == glyph.rank -> "rank-png+glyph"
-            rankHit != null && picked.first == rankHit.first &&
-                glyph != null && picked.first == glyph.rank -> "rank-opencv+glyph"
-            bitmapRankHit != null && picked.first == bitmapRankHit.first -> "rank-png"
-            rankHit != null && picked.first == rankHit.first -> "rank-opencv"
-            glyph != null && picked.first == glyph.rank -> "rank-glyph"
-            else -> "rank-blend"
-        }
-        return RecognitionTrace(
-            rankSource = source,
-            rankScore = picked.second,
-            rankTemplates = rankTemplates
-        )
+        return if (ocrTrace != null) trace.withPost(ocrTrace) else trace
     }
 
     private fun rankSourceMasks(crop: Bitmap, exactCardBounds: Boolean): List<LongArray> {
@@ -1123,6 +1330,52 @@ class CardRecognizer(
     }
 
     private fun pickRank(
+        bitmapHit: Pair<Rank, Float>?,
+        rankHit: Pair<Rank, Float>?,
+        glyph: RankInkHeuristics.Guess?,
+        ocrGuess: RankCornerOcr.Guess? = null
+    ): Pair<Rank, Float>? {
+        val base = pickRankBase(bitmapHit, rankHit, glyph)
+        if (ocrGuess == null) return base
+        if (bitmapHit != null && bitmapHit.second >= 0.68f) return base
+
+        val candidates = rankCandidates(bitmapHit, rankHit, glyph)
+        val matching = candidates.filter { it.first == ocrGuess.rank }
+        if (matching.isNotEmpty()) {
+            val confidence = max(matching.maxOf { it.second }, ocrGuess.confidence)
+                .coerceAtLeast(0.52f)
+            return ocrGuess.rank to confidence
+        }
+
+        val ranks = candidates.map { it.first }.toSet()
+        if (ocrGuess.rank == Rank.Ten &&
+            ranks.contains(Rank.King) &&
+            ranks.contains(Rank.Ten)
+        ) {
+            return Rank.Ten to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Queen &&
+            ranks.contains(Rank.Ten) &&
+            ranks.contains(Rank.Queen)
+        ) {
+            return Rank.Queen to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Jack &&
+            ranks.contains(Rank.Jack) &&
+            ranks.contains(Rank.Three)
+        ) {
+            return Rank.Jack to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Three &&
+            ranks.contains(Rank.Jack) &&
+            ranks.contains(Rank.Three)
+        ) {
+            return Rank.Three to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        return base
+    }
+
+    private fun pickRankBase(
         bitmapHit: Pair<Rank, Float>?,
         rankHit: Pair<Rank, Float>?,
         glyph: RankInkHeuristics.Guess?

@@ -15,6 +15,9 @@ class SolitaireAssistantApp : Application() {
     var openCvReady: Boolean = false
         private set
 
+    /** ML Kit bundled text recognition is always available once the app starts. */
+    val ocrReady: Boolean = true
+
     override fun onCreate() {
         super.onCreate()
         preferences = AssistantPreferences(this)

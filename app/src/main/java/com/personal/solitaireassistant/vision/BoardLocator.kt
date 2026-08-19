@@ -45,6 +45,17 @@ data class LocatedBoard(
 class BoardLocator(
     private val profile: BoardGeometryProfile = BoardGeometryProfile()
 ) {
+    companion object {
+        /** Screen-space rank-corner patch for OCR on fanned waste crops. */
+        fun wasteRankCornerRegion(cardRegion: BoardRegion): BoardRegion =
+            BoardRegion(
+                left = cardRegion.left,
+                top = cardRegion.top,
+                right = cardRegion.left + cardRegion.width * 0.44f,
+                bottom = cardRegion.top + cardRegion.height * 0.30f
+            )
+    }
+
     /**
      * Use nearly full-frame bounds. Solitaire Smash fills the portrait screen;
      * header/footer are excluded via profile fractions.
@@ -89,6 +100,41 @@ class BoardLocator(
             bottom = full.bottom
         )
     }
+
+    /** Foundation-width crop aligned to golden snapshot bounds (r~846 at 1080w). */
+    fun inkAnchoredWasteCardRegion(board: LocatedBoard): BoardRegion {
+        val full = wasteRegion(board)
+        val cardWidth = foundationRegions(board).first().width
+        val right = full.left + full.width * 0.786f
+        return BoardRegion(
+            left = right - cardWidth,
+            top = full.top,
+            right = right,
+            bottom = full.bottom
+        )
+    }
+
+    /** Foundation-width crop aligned to legacy waste fan (r~895 at 1080w). */
+    fun legacyAnchoredWasteCardRegion(board: LocatedBoard): BoardRegion {
+        val full = wasteRegion(board)
+        val cardWidth = foundationRegions(board).first().width
+        val right = full.right - full.width * 0.043f
+        return BoardRegion(
+            left = right - cardWidth,
+            top = full.top,
+            right = right,
+            bottom = full.bottom
+        )
+    }
+
+    /** Candidate full-card regions used for waste rank OCR. */
+    fun wasteOcrCardRegions(board: LocatedBoard): List<BoardRegion> =
+        listOf(
+            inkAnchoredWasteCardRegion(board),
+            legacyAnchoredWasteCardRegion(board),
+            wasteTopRegion(board),
+            tightWasteTopRegion(board)
+        )
 
     fun foundationRegions(board: LocatedBoard): List<BoardRegion> =
         board.profile.foundations.map { map(board.bounds, it) }

@@ -11,6 +11,7 @@ import com.personal.solitaireassistant.capture.PendingSnapshotHolder
 import com.personal.solitaireassistant.settings.AssistantPreferences
 import com.personal.solitaireassistant.settings.AssistantSettings
 import com.personal.solitaireassistant.vision.GoldenSample
+import com.personal.solitaireassistant.pipeline.AnalysisFileLogger
 import com.personal.solitaireassistant.vision.GoldenTruthEvaluator
 import com.personal.solitaireassistant.vision.GoldenTruthStore
 import com.personal.solitaireassistant.vision.SlotGuess
@@ -138,7 +139,15 @@ class SettingsViewModel(
             evaluating.value = true
             transient.value = "Evaluating golden set…"
             val report = withContext(Dispatchers.Default) {
-                GoldenTruthEvaluator.evaluate(getApplication(), store)
+                val result = GoldenTruthEvaluator.evaluate(getApplication(), store)
+                val logger = AnalysisFileLogger(getApplication())
+                logger.append("=== golden evaluate ===")
+                result.summary().lines().forEach { line -> logger.append(line) }
+                val traceBlock = result.mismatchTraceBlock()
+                if (traceBlock.isNotBlank()) {
+                    traceBlock.lines().forEach { line -> logger.append(line) }
+                }
+                result
             }
             evalReport.value = report.summary()
             evaluating.value = false

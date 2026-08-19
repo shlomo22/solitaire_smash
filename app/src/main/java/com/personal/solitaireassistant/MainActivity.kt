@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
                         serviceStatus = serviceStatus,
                         statusMessage = statusMessage,
                         openCvReady = (application as SolitaireAssistantApp).openCvReady,
+                        ocrReady = (application as SolitaireAssistantApp).ocrReady,
                         canDrawOverlays = Settings.canDrawOverlays(this),
                         analysisLogPath = CaptureService.analysisLogPath(),
                         onOverlayColor = viewModel::setOverlayColor,

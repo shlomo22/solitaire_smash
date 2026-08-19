@@ -47,6 +47,7 @@ fun SettingsScreen(
     serviceStatus: CaptureService.Status,
     statusMessage: String,
     openCvReady: Boolean,
+    ocrReady: Boolean,
     canDrawOverlays: Boolean,
     analysisLogPath: String?,
     onOverlayColor: (Color) -> Unit,
@@ -86,6 +87,7 @@ fun SettingsScreen(
                 Text("Service: ${serviceStatus::class.simpleName}")
                 Text(statusMessage)
                 Text("OpenCV: ${if (openCvReady) "ready" else "FAILED"}")
+                Text("OCR: ${if (ocrReady) "ready" else "FAILED"}")
                 Text("Overlay permission: ${if (canDrawOverlays) "granted" else "missing"}")
                 Text(
                     "Analysis log: ${analysisLogPath ?: "(start capture to create)"}",

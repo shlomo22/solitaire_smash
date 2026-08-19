@@ -66,7 +66,7 @@ class GoldenBlackSuitRegressionTest {
         } finally {
             detector.release()
         }
-        assertEquals(emptyList(), failures)
+        assertEquals(emptyList<String>(), failures)
     }
 
     @Test
@@ -117,7 +117,7 @@ class GoldenBlackSuitRegressionTest {
         } finally {
             detector.release()
         }
-        assertEquals(emptyList(), failures)
+        assertEquals(emptyList<String>(), failures)
     }
 
     private fun loadGolden(id: String): Pair<GoldenSample, android.graphics.Bitmap>? {

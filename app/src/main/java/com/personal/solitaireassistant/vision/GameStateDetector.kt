@@ -150,6 +150,22 @@ class GameStateDetector(
             ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
             ?.key
         val wasteInkGuess = inkGuessFromRegion(bitmap, tightWasteRegion)
+        val wasteOcrAttempt = if (legacyCard != null || tightCard != null) {
+            val wasteOcrRegions = buildList {
+                add(tightWasteRegion)
+                add(legacyWasteRegion)
+                addAll(locator.wasteOcrCardRegions(board))
+            }
+            recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+        } else {
+            null
+        }
+        val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
+            ocrRank = wasteOcrAttempt?.guess?.rank,
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard
+        )
         val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
             legacyCard = legacyCard,
             tightCard = tightCard,
@@ -188,6 +204,7 @@ class GameStateDetector(
             inkGuess = wasteInkGuess
         )
         val correctedRank = when {
+            wasteOcrOverride != null -> wasteOcrOverride
             wasteQueenOverride != null -> wasteQueenOverride
             wasteKingOverride != null -> wasteKingOverride
             exactEightSpadeOverride -> Rank.Eight
@@ -291,9 +308,13 @@ class GameStateDetector(
                         suitSource = "waste-fusion",
                         suitScore = exactSuitBest?.value,
                         suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores),
-                        postSteps = listOf(
-                            "waste-fusion:legacy=${legacyCard?.id},tight=${tightCard?.id}"
-                        )
+                        postSteps = buildList {
+                            add("waste-fusion:legacy=${legacyCard?.id},tight=${tightCard?.id}")
+                            wasteOcrAttempt?.trace?.let { add(it) }
+                            if (wasteOcrOverride != null) {
+                                add("waste-ocr-rank:${wasteOcrOverride.name}")
+                            }
+                        }
                     ).merge(legacyWasteHit.trace).merge(tightWasteHit.trace).merge(fusionPostTrace)
                 } else {
                     RecognitionTrace(
@@ -333,6 +354,10 @@ class GameStateDetector(
             diagnostics +=
                 "waste-disagreement=tight:${tightWasteHit.card?.id}," +
                 "legacy:${legacyWasteHit.card?.id}"
+        }
+        wasteOcrAttempt?.trace?.let { diagnostics += it }
+        if (wasteOcrOverride != null) {
+            diagnostics += "waste-ocr-rank=${wasteOcrOverride.name}"
         }
 
         locator.foundationRegions(board).forEachIndexed { index, region ->
@@ -998,6 +1023,16 @@ class GameStateDetector(
     fun release() {
         recognizer.release()
     }
+
+    fun attemptCornerRankOcr(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): RankCornerOcr.AttemptResult = recognizer.attemptCornerRankOcr(bitmap, region)
+
+    fun attemptWasteRankOcr(
+        bitmap: Bitmap,
+        cardRegions: List<BoardRegion>
+    ): RankCornerOcr.AttemptResult = recognizer.attemptWasteRankOcr(bitmap, cardRegions)
 
     /**
      * Black-suit near-ties that happen to match a foundation look "legal" but
