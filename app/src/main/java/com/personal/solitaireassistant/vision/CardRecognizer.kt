@@ -1724,5 +1724,7 @@ class CardRecognizer(
         const val TOP_BLACK_SHAPE_VETO_MARGIN = 0.28f
         const val RED_SUIT_MARGIN = 0.040f
         const val RED_SHAPE_MIN_MARGIN = 0.12f
+        /** Opposite-color badge score must clear this over the current color to flip. */
+        const val OPPOSITE_COLOR_OVERRIDE_MARGIN = 0.10f
     }
 }
