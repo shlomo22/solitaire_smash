@@ -30,6 +30,13 @@ class GameStateDetector(
     private val recognizer = CardRecognizer(context, minConfidence)
     private var slotHitCache = mutableMapOf<SlotKey, CachedSlotHit>()
 
+    // Diagnostic-only: per-detect() timing, reset at the top of detect().
+    // Not thread-safe, but the pipeline only ever runs one detect() at a time.
+    private var recognizeCacheHits = 0
+    private var recognizeCacheMisses = 0
+    private var recognizeMissNanos = 0L
+    private val tableauColumnNanos = LongArray(7)
+
     private data class SlotKey(val pile: PileRef, val index: Int)
     private data class CachedSlotHit(
         val fingerprint: Long,
@@ -47,6 +54,11 @@ class GameStateDetector(
     }
 
     fun detect(bitmap: Bitmap): DetectionResult {
+        recognizeCacheHits = 0
+        recognizeCacheMisses = 0
+        recognizeMissNanos = 0L
+        tableauColumnNanos.fill(0L)
+        val detectStartNanos = System.nanoTime()
         val board = locator.locate(bitmap)
         val diagnostics = mutableListOf<String>()
         diagnostics += "boardConfidence=${"%.2f".format(board.confidence)}"
@@ -391,6 +403,8 @@ class GameStateDetector(
         }
 
         locator.tableauColumnRegions(board).forEachIndexed { col, columnRegion ->
+            val columnStartNanos = System.nanoTime()
+            try {
             val cards = mutableListOf<Card>()
             val locs = mutableListOf<CardLocation>()
             val cardWidth = columnRegion.width
@@ -767,6 +781,9 @@ class GameStateDetector(
                 }
             }
             diagnostics += "tableau$col=$summary"
+            } finally {
+                tableauColumnNanos[col] = System.nanoTime() - columnStartNanos
+            }
         }
 
         val wasteConfidence = if (wasteCandidatesDisagree) {
@@ -805,6 +822,7 @@ class GameStateDetector(
             wasteCards.count { it.known }
         diagnostics += "knownFaceUp=$knownFaceUp"
 
+        val scrubStartNanos = System.nanoTime()
         val blackScrubbed = scrubWeakBlackFoundationSuits(
             bitmap,
             locations,
@@ -816,12 +834,29 @@ class GameStateDetector(
             )
         )
         val scrubbed = scrubWeakRedFoundationSuits(bitmap, locations, blackScrubbed)
+        val scrubNanos = System.nanoTime() - scrubStartNanos
+        val deckConstraintStartNanos = System.nanoTime()
         val state = DeckConstraintPass.apply(
             bitmap = bitmap,
             recognizer = recognizer,
             state = scrubbed,
             recognizedSlots = recognizedSlots
         )
+        val deckConstraintNanos = System.nanoTime() - deckConstraintStartNanos
+
+        // Diagnostic-only: where detect()'s wall-clock time actually goes, to
+        // find real latency targets instead of guessing at what's slow.
+        val totalMs = (System.nanoTime() - detectStartNanos) / 1_000_000.0
+        val tableauMs = tableauColumnNanos.sum() / 1_000_000.0
+        val perColumnMs = tableauColumnNanos.indices.joinToString(",") { i ->
+            "c$i=${"%.0f".format(tableauColumnNanos[i] / 1_000_000.0)}"
+        }
+        diagnostics += "timing:total=${"%.0f".format(totalMs)}ms," +
+            "tableau=${"%.0f".format(tableauMs)}ms[$perColumnMs]," +
+            "scrub=${"%.0f".format(scrubNanos / 1_000_000.0)}ms," +
+            "deckConstraint=${"%.0f".format(deckConstraintNanos / 1_000_000.0)}ms," +
+            "recognize:hits=$recognizeCacheHits,misses=$recognizeCacheMisses," +
+            "missTime=${"%.0f".format(recognizeMissNanos / 1_000_000.0)}ms"
 
         slotHitCache = newSlotCache
         return DetectionResult(
@@ -1629,10 +1664,14 @@ class GameStateDetector(
         slotHitCache[key]?.let { previous ->
             if (previous.fingerprint == fingerprint && regionsSimilar(previous.bounds, region)) {
                 cache[key] = previous
+                recognizeCacheHits++
                 return previous.hit
             }
         }
+        val missStart = System.nanoTime()
         val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
+        recognizeMissNanos += System.nanoTime() - missStart
+        recognizeCacheMisses++
         val entry = CachedSlotHit(fingerprint, region, hit)
         cache[key] = entry
         return hit
