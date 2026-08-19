@@ -320,7 +320,14 @@ class CardRecognizer(
                     }
                     val suitScoreMap = suitTemplateScoresFromCrop(crop, suitCandidates)
                     val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
-                    val (suit, suitTrace) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
+                    val (suit, suitTraceRaw) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
+                    // Diagnostic-only: expose the raw whole-card ink ratio behind
+                    // inkRed, since every downstream suit-source label only ever
+                    // shows the derived boolean, not the numbers that decided it.
+                    val suitTrace = suitTraceRaw.withPost(
+                        "ink-ratio:red=${"%.4f".format(stats.redInkRatio)}," +
+                            "black=${"%.4f".format(stats.blackInkRatio)},inkRed=$inkRed"
+                    )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
                     val rankResolution = resolveRankFromCrop(crop, exactCardBounds)
                     val rank = rankResolution.rank
