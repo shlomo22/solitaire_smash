@@ -1444,6 +1444,21 @@ class CardRecognizer(
         ) {
             return Rank.Three to ocrGuess.confidence.coerceAtLeast(0.52f)
         }
+        // Every branch above only lets OCR confirm a rank some other source
+        // already guessed, or step in on a few specific known confusions
+        // (Ten/King, Queen/Ten, Jack/Three). Real cascade reads showed OCR
+        // correctly reading '5' and '4' while glyph/bitmap matching missed
+        // both entirely (neither even had the right rank as a candidate),
+        // and the correct OCR read got silently thrown away in favor of a
+        // weaker, wrong base guess. Only step in when OCR isn't even weaker
+        // than the base it would be overriding — this doesn't assert OCR is
+        // generally better, just that it shouldn't lose to something no more
+        // confident than itself.
+        if (base == null || ocrGuess.confidence >= base.second) {
+            if (base == null || base.second < 0.68f) {
+                return ocrGuess.rank to ocrGuess.confidence.coerceAtLeast(0.52f)
+            }
+        }
         return base
     }
 
