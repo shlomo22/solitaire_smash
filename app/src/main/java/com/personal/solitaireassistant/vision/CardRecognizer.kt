@@ -1015,8 +1015,20 @@ class CardRecognizer(
                 return leader to leaderScore
             }
             val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
+            val topMargin = kotlin.math.abs(topClub - topSpade)
+            val topLeader = if (topSpade > topClub) Suit.Spades else Suit.Clubs
+            // The full-score margin alone can look "thin enough to override" while the
+            // top-region score (isolating just the pip's tip/shoulders) is decisively
+            // confident in the template leader - two real cases (QC misread as QS, 10C
+            // misread as 10S) had full margin ~0.06-0.07 but top margin 0.14 favoring the
+            // correct, already-leading suit. Don't let the shape heuristic override a
+            // leader the top score independently confirms this strongly.
+            val topConfirmsLeader = best?.first != null &&
+                topLeader == best!!.first &&
+                topMargin >= TOP_BLACK_SUIT_MARGIN
             if (shape != null &&
                 shape.margin >= BLACK_SHAPE_MIN_MARGIN &&
+                !topConfirmsLeader &&
                 (fullMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
             ) {
                 blackDebug?.invoke(
@@ -1631,11 +1643,10 @@ class CardRecognizer(
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
-                    val luma = (r * 30 + g * 59 + b * 11) / 100
                     val isInk =
                         SmashColorAnalyzer.isRedInk(r, g, b) ||
                             SmashColorAnalyzer.isBlackInk(r, g, b) ||
-                            luma < 135
+                            SmashColorAnalyzer.isGenericDarkInk(r, g, b)
                     if (isInk) rows[y] = rows[y] or (1L shl x)
                 }
             }

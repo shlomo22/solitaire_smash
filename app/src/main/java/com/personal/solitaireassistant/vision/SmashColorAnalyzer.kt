@@ -88,6 +88,20 @@ object SmashColorAnalyzer {
             (r + g + b) < 280 &&
             !(g > r + 40 && b > r + 40) // exclude teal backs
 
+    /**
+     * Generic "dark enough to be ink" fallback used when scoring suit/rank
+     * badges, for glyph antialiasing that isn't quite red or charcoal.
+     * Genuine ink stays close to neutral grey (e.g. RGB(56,68,82), b-r~26);
+     * the card's top border bar is a saturated blue-purple (e.g. RGB(80,102,188),
+     * b-r~108) that is dark enough to trip a bare luma check, corrupting
+     * corner-badge ink masks whose crop starts right at the card edge. Require
+     * near-neutral color so the border is excluded without excluding real ink.
+     */
+    fun isGenericDarkInk(r: Int, g: Int, b: Int): Boolean {
+        val luma = (r * 30 + g * 59 + b * 11) / 100
+        return luma < 135 && b < r + 60
+    }
+
     fun looksFaceDown(stats: RegionStats): Boolean =
         // Teal backs include white borders and dark suit-pattern icons.
         stats.tealRatio > 0.20f &&

@@ -1004,10 +1004,9 @@ object SuitBadgeHeuristics {
         val r = (color shr 16) and 0xFF
         val g = (color shr 8) and 0xFF
         val b = color and 0xFF
-        val luma = (r * 30 + g * 59 + b * 11) / 100
         return SmashColorAnalyzer.isRedInk(r, g, b) ||
             SmashColorAnalyzer.isBlackInk(r, g, b) ||
-            luma < 135
+            SmashColorAnalyzer.isGenericDarkInk(r, g, b)
     }
 
     const val INK_MASK_GRID = 48
