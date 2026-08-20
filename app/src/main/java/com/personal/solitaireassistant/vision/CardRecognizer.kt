@@ -1332,6 +1332,23 @@ class CardRecognizer(
             debug?.invoke("branch=topClub-spadeShapeOverride->Spades")
             return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
         }
+        // Unlike the topLeader==Spades branch above, this Clubs fallback never
+        // consulted tiebreakShape directly - only the narrower boolean shape
+        // checks, gated on top scores being close. Real cases (golden foundation
+        // slots holding an unmistakable Two/Four of Spades, verified against the
+        // actual card art) showed topClub beating topSpade by a real ~0.05 while
+        // tiebreakShape still read Spades with an overwhelming margin (~1.08,
+        // far past TOP_BLACK_SHAPE_VETO_MARGIN's own "confident" scale) - a top
+        // score that thin shouldn't out-vote a shape read that decisive. Only
+        // trust it at a margin well past ordinary veto confidence so this stays
+        // narrow.
+        if (topLeader == Suit.Clubs &&
+            tiebreakShape?.suit == Suit.Spades &&
+            tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f
+        ) {
+            debug?.invoke("branch=topClub-strongSpadeShapeOverride->Spades")
+            return Suit.Spades to false
+        }
         debug?.invoke("branch=topLeaderDirect->$topLeader")
         return topLeader to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
     }
