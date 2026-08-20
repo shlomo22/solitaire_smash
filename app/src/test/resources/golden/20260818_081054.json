@@ -427,25 +427,6 @@
       "inferred": false,
       "bounds": {
         "l": 620.8148803710938,
-        "t": 1069.0302734375,
-        "r": 758.49951171875,
-        "b": 1261.788818359375
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Diamonds"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:4",
-      "index": 6,
-      "inferred": false,
-      "bounds": {
-        "l": 620.8148803710938,
         "t": 1035.067138671875,
         "r": 758.49951171875,
         "b": 1227.82568359375

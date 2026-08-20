@@ -510,23 +510,6 @@
     {
       "pile": "tableau:5",
       "index": 5,
-      "inferred": false,
-      "bounds": {
-        "l": 770.4720458984375,
-        "t": 1059.39208984375,
-        "r": 908.1566162109375,
-        "b": 1252.1505126953125
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:5",
-      "index": 6,
       "inferred": true,
       "bounds": {
         "l": 770.4720458984375,
@@ -545,7 +528,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 7,
+      "index": 6,
       "inferred": true,
       "bounds": {
         "l": 770.4720458984375,
@@ -564,7 +547,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 8,
+      "index": 7,
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
