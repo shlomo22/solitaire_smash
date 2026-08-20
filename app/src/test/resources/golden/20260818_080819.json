@@ -442,7 +442,7 @@
       "truth": {
         "kind": "FaceUp",
         "rank": "Four",
-        "suit": "Clubs",
+        "suit": "Spades",
         "suitAmbiguous": true
       }
     },

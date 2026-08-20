@@ -284,7 +284,7 @@
       "truth": {
         "kind": "FaceUp",
         "rank": "Nine",
-        "suit": "Clubs"
+        "suit": "Spades"
       }
     },
     {
@@ -454,7 +454,7 @@
       "truth": {
         "kind": "FaceUp",
         "rank": "Seven",
-        "suit": "Clubs"
+        "suit": "Spades"
       }
     },
     {
