@@ -545,11 +545,26 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
+                    // A full cardHeight-tall peek reaches well past the next
+                    // downStep-wide slice - a real device log showed this
+                    // picking up a confidently-recognized card several slices
+                    // below firstFaceTop (e.g. bottomTop 21-29px away vs a
+                    // ~193px-tall peek) and wrongly treating THIS position as
+                    // its start, converting a still-face-down card into a
+                    // phantom face-up one. Cap the peek at one downStep so a
+                    // hit here can only belong to a card actually exposed at
+                    // this position.
+                    val peekBounds = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + downStep).coerceAtMost(columnRegion.bottom)
+                    )
                     val boundaryHit = recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 100 + faceDownCount,
-                        region = bounds,
+                        region = peekBounds,
                         cache = newSlotCache
                     )
                     if (boundaryStats.whiteRatio > 0.12f &&
