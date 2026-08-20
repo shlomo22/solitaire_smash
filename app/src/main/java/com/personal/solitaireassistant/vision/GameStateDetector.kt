@@ -600,23 +600,16 @@ class GameStateDetector(
                 val geometricFaceUpCount = faceUpCount
                 var cascadeRankCountNote = "n/a"
                 if (card.known) {
-                    // Only the top faceUpStep sliver below firstFaceTop is
-                    // actually this card — the rest of a full cardHeight box is
-                    // covered by the card(s) stacked on top of it. This used to
-                    // feed just the ink-color read while the rank/suit template
-                    // match still ran on the full-cardHeight crop, letting
-                    // covering-card content leak into the match (a real device
-                    // log showed a clearly legible "6" misread as King). Use
-                    // this same trimmed strip as the primary recognition region.
-                    // hasCenterGlyph=false below is the other half of this fix:
-                    // Smash's big center-of-card glyph sits well below this
-                    // strip (it's covered by the next card too), so without it
-                    // the glyph/center-template readers were scoring whatever
-                    // was actually in this narrow strip against center-glyph
-                    // shapes and confidently returning a wrong rank - an
-                    // earlier attempt that trimmed only the crop (without
-                    // suppressing those readers) still ended up with those
-                    // wrong reads winning via pickRankBase's King/Ten override.
+                    val leadingRegion = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                    )
+                    // Only the top faceUpStep sliver of leadingRegion is actually
+                    // this card — the rest is covered by the card(s) stacked on
+                    // top of it. Feed the ink-color read only that visible strip
+                    // so the covering card's color can't leak into inkRed.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -628,11 +621,10 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
-                        region = leadingHeaderRegion,
+                        region = leadingRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = leadingHeaderRegion,
-                        hasCenterGlyph = false
+                        inkRegion = leadingHeaderRegion
                     )
                     leadingHit = leadingHitResult
                     leadingCard = leadingHitResult.card
@@ -711,11 +703,7 @@ class GameStateDetector(
                     // Same overlap problem as the leading card: bounds reaches
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
-                    // one's. Recognize from the visible strip, not the full
-                    // bounds, and skip the center-glyph readers (see the
-                    // leading-card comment above) — keep `bounds` (full
-                    // cardHeight) only for this slot's displayed position
-                    // below.
+                    // one's. Keep the ink read scoped to the visible strip.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -727,21 +715,17 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
-                        region = headerRegion,
+                        region = bounds,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = headerRegion,
-                        hasCenterGlyph = false
+                        inkRegion = headerRegion
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
-                            // Same reasoning as recognizeCached above:
-                            // resolveCardSuitWithTrace crops bitmap
-                            // independently for its black/red suit tie-break.
                             val (resolved, trace) = resolveCardSuitWithTrace(
                                 bitmap,
-                                headerRegion,
+                                bounds,
                                 requireNotNull(slotCard),
                                 slotHit.trace
                             )
@@ -1748,8 +1732,7 @@ class GameStateDetector(
         region: BoardRegion,
         cache: MutableMap<SlotKey, CachedSlotHit>,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null,
-        hasCenterGlyph: Boolean = true
+        inkRegion: BoardRegion? = null
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
@@ -1770,7 +1753,7 @@ class GameStateDetector(
             else -> missBoundsShifted++
         }
         val missStart = System.nanoTime()
-        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion, hasCenterGlyph)
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
         recognizeMissNanos += System.nanoTime() - missStart
         recognizeCacheMisses++
         val entry = CachedSlotHit(fingerprint, region, hit)

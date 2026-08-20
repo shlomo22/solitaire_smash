@@ -293,8 +293,7 @@ class CardRecognizer(
         bitmap: Bitmap,
         region: BoardRegion,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null,
-        hasCenterGlyph: Boolean = true
+        inkRegion: BoardRegion? = null
     ): RecognitionHit {
         ensureLoaded()
         if (region.width < 6f || region.height < 6f) {
@@ -365,7 +364,7 @@ class CardRecognizer(
                             (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap, hasCenterGlyph)
+                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap)
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -483,7 +482,7 @@ class CardRecognizer(
             val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap, hasCenterGlyph) }
+            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
             val rank = rankResolution?.rank
             val bitmapSuit = if (crop != null && suitSourceMasks != null) {
                 bestBitmapSuit(crop, inkRed, suitSourceMasks)
@@ -737,8 +736,7 @@ class CardRecognizer(
 
     private fun resolveRankFromCrop(
         crop: Bitmap,
-        rankScoreMap: Map<Rank, Float>,
-        hasCenterGlyph: Boolean = true
+        rankScoreMap: Map<Rank, Float>
     ): RankResolution {
         val bitmapRankHit = bestBitmapRank(rankScoreMap)
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
@@ -753,15 +751,8 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = bestRank(crop, hasCenterGlyph)
-        // RankInkHeuristics.guess() reads Smash's big center-of-card glyph
-        // (its own ROI is y=28%..78%) - never visible on a partially-occluded
-        // cascade card's own trimmed crop, since that region belongs to
-        // whatever card is stacked on top. Skip it there instead of letting
-        // it confidently score whatever is actually in that unrelated slice;
-        // this also stops pickRankBase's King/Ten override rule below from
-        // firing on a glyph read that was never reading this card at all.
-        val glyph = if (hasCenterGlyph) RankInkHeuristics.guess(crop) else null
+        val rankHit = bestRank(crop)
+        val glyph = RankInkHeuristics.guess(crop)
         val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
             rankCornerOcr?.attempt(crop)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
@@ -860,42 +851,22 @@ class CardRecognizer(
     private fun rankSourceMasks(crop: Bitmap, exactCardBounds: Boolean): List<LongArray> {
         val sourceMasks = mutableListOf<LongArray>()
         val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
-        if (exactCardBounds) {
-            // A single fixed 54%-of-height ROI assumed the crop always
-            // represents a fully visible card, leaving generous headroom
-            // below a top-corner digit. Tableau cascade slots now pass a
-            // crop trimmed to just their own visible strip before the next
-            // card covers it (well under half a full card's height) - on a
-            // crop that short, 54% clips the digit itself, and a real
-            // device log showed nearly everything then matching "Ten"'s
-            // stubby silhouette. Sample several height fractions so at
-            // least one candidate captures the whole digit regardless of
-            // how tightly the caller already trimmed the crop; maxOf over
-            // template scores picks whichever sample fits best, so this can
-            // only add candidates, never remove the original 54% one that
-            // already works for tightly-fitted (non-cascade) crops.
-            for (hFraction in listOf(0.54f, 0.75f, 1.0f)) {
-                val h = (crop.height * hFraction).toInt().coerceIn(8, crop.height)
-                val roi = Bitmap.createBitmap(crop, 0, 0, w, h)
-                sourceMasks += inkMask(roi)
-                roi.recycle()
-            }
-            return sourceMasks
-        }
         val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
         Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
             sourceMasks += inkMask(roi)
             roi.recycle()
         }
-        for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
-            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-            val actualW = w.coerceAtMost(crop.width - x)
-            for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
-                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                val actualH = h.coerceAtMost(crop.height - y)
-                val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
-                sourceMasks += inkMask(roi)
-                roi.recycle()
+        if (!exactCardBounds) {
+            for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
+                val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
+                val actualW = w.coerceAtMost(crop.width - x)
+                for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
+                    val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
+                    val actualH = h.coerceAtMost(crop.height - y)
+                    val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
+                    sourceMasks += inkMask(roi)
+                    roi.recycle()
+                }
             }
         }
         return sourceMasks
@@ -1738,20 +1709,12 @@ class CardRecognizer(
         return matchTemplate(crop, tmpl, badgeOnly = false) >= 0.72f
     }
 
-    private fun bestRank(crop: Bitmap, hasCenterGlyph: Boolean = true): Pair<Rank, Float>? {
+    private fun bestRank(crop: Bitmap): Pair<Rank, Float>? {
         if (rankTemplates.isEmpty()) return null
         var best: Pair<Rank, Float>? = null
         var second = 0f
         for ((rank, template) in rankTemplates) {
-            // The "center" ROI (matchTemplate's badgeOnly=false branch) targets
-            // Smash's big center-of-card glyph, y=28%..88% of the crop. A
-            // partially-occluded cascade card's crop is trimmed to just its own
-            // exposed corner strip, well above where that glyph would sit even
-            // on a full card - the center glyph is physically covered by the
-            // next card down. Scoring it there just template-matches whatever
-            // happens to be in that unrelated slice and can outscore the real
-            // corner-badge match with a wrong rank.
-            val center = if (hasCenterGlyph) matchTemplate(crop, template, badgeOnly = false) else 0f
+            val center = matchTemplate(crop, template, badgeOnly = false)
             val badge = matchTemplate(crop, template, badgeOnly = true)
             val score = max(center, badge)
             when {
