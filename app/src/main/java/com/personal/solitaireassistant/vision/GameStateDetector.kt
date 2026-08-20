@@ -607,13 +607,16 @@ class GameStateDetector(
                     // match still ran on the full-cardHeight crop, letting
                     // covering-card content leak into the match (a real device
                     // log showed a clearly legible "6" misread as King). Use
-                    // this same trimmed strip as the primary recognition region
-                    // now that rankSourceMasks samples multiple height
-                    // fractions instead of a single one sized for a full card —
-                    // an earlier attempt that trimmed the crop without that
-                    // change made everything read as "Ten" because the old
-                    // fixed 54%-of-height ROI clipped the digit itself on a
-                    // crop this short.
+                    // this same trimmed strip as the primary recognition region.
+                    // hasCenterGlyph=false below is the other half of this fix:
+                    // Smash's big center-of-card glyph sits well below this
+                    // strip (it's covered by the next card too), so without it
+                    // the glyph/center-template readers were scoring whatever
+                    // was actually in this narrow strip against center-glyph
+                    // shapes and confidently returning a wrong rank - an
+                    // earlier attempt that trimmed only the crop (without
+                    // suppressing those readers) still ended up with those
+                    // wrong reads winning via pickRankBase's King/Ten override.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -628,7 +631,8 @@ class GameStateDetector(
                         region = leadingHeaderRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = leadingHeaderRegion
+                        inkRegion = leadingHeaderRegion,
+                        hasCenterGlyph = false
                     )
                     leadingHit = leadingHitResult
                     leadingCard = leadingHitResult.card
@@ -708,11 +712,10 @@ class GameStateDetector(
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
                     // one's. Recognize from the visible strip, not the full
-                    // bounds — rankSourceMasks now samples multiple height
-                    // fractions so a short crop like this one doesn't clip the
-                    // digit (see the leading-card comment above). Keep
-                    // `bounds` (full cardHeight) only for this slot's displayed
-                    // position below.
+                    // bounds, and skip the center-glyph readers (see the
+                    // leading-card comment above) — keep `bounds` (full
+                    // cardHeight) only for this slot's displayed position
+                    // below.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -727,7 +730,8 @@ class GameStateDetector(
                         region = headerRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = headerRegion
+                        inkRegion = headerRegion,
+                        hasCenterGlyph = false
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
@@ -1744,7 +1748,8 @@ class GameStateDetector(
         region: BoardRegion,
         cache: MutableMap<SlotKey, CachedSlotHit>,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null
+        inkRegion: BoardRegion? = null,
+        hasCenterGlyph: Boolean = true
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
@@ -1765,7 +1770,7 @@ class GameStateDetector(
             else -> missBoundsShifted++
         }
         val missStart = System.nanoTime()
-        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion, hasCenterGlyph)
         recognizeMissNanos += System.nanoTime() - missStart
         recognizeCacheMisses++
         val entry = CachedSlotHit(fingerprint, region, hit)
