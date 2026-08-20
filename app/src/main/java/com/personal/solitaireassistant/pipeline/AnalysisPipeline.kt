@@ -42,6 +42,7 @@ class AnalysisPipeline(
     private val rejectedMoveStore = RejectedMoveStore(appContext)
     private val rejectedSnapshotStore = RejectedSnapshotStore(appContext)
     private val rejectionExecutor = Executors.newSingleThreadExecutor()
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0
@@ -63,28 +64,38 @@ class AnalysisPipeline(
 
     private data class PendingFrame(
         val bitmap: Bitmap,
-        val settings: AssistantSettings
+        val settings: AssistantSettings,
+        val capturedAtMs: Long
     )
 
     fun updateSettings(settings: AssistantSettings) {
         settingsRef.set(settings)
     }
 
+    // onFrame is called directly from the screen-capture thread's
+    // onImageAvailable callback. It used to run detect()+solve+overlay
+    // (up to several seconds) synchronously right there, which blocked that
+    // thread from ever seeing a newer frame until the current one finished —
+    // so a move made mid-analysis was invisible to capture until a whole
+    // extra cycle later. Copy and hand off to a dedicated analysis thread
+    // instead, so capture stays free to keep grabbing the latest frame the
+    // whole time analysis is running.
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
         settingsRef.set(settings)
-        if (!busy.compareAndSet(false, true)) {
-            val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            if (copy != null) {
-                pendingFrame.getAndSet(PendingFrame(copy, settings))?.bitmap?.recycle()
-            }
-            return
+        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        pendingFrame.getAndSet(PendingFrame(copy, settings, System.currentTimeMillis()))
+            ?.bitmap?.recycle()
+        if (busy.compareAndSet(false, true)) {
+            analysisExecutor.execute(::drainPendingFrames)
         }
+    }
+
+    private fun drainPendingFrames() {
         try {
-            processFrame(bitmap, settings)
             while (true) {
                 val pending = pendingFrame.getAndSet(null) ?: break
                 try {
-                    processFrame(pending.bitmap, pending.settings)
+                    processFrame(pending.bitmap, pending.settings, pending.capturedAtMs)
                 } finally {
                     pending.bitmap.recycle()
                 }
@@ -96,10 +107,18 @@ class AnalysisPipeline(
             overlayController.hideArrowTemporarily()
         } finally {
             busy.set(false)
+            // onFrame runs on the capture thread now, concurrently with this
+            // drain loop, so a frame can be enqueued right after our last
+            // empty check above but before busy flips false — onFrame would
+            // then see busy still true and not schedule anyone to pick it up.
+            // Re-check once after clearing busy and reclaim if so.
+            if (pendingFrame.get() != null && busy.compareAndSet(false, true)) {
+                analysisExecutor.execute(::drainPendingFrames)
+            }
         }
     }
 
-    private fun processFrame(bitmap: Bitmap, settings: AssistantSettings) {
+    private fun processFrame(bitmap: Bitmap, settings: AssistantSettings, capturedAtMs: Long) {
         settingsRef.set(settings)
         if (!sessionStarted) {
             sessionStarted = true
@@ -127,12 +146,17 @@ class AnalysisPipeline(
             }
         }
         val elapsed = System.currentTimeMillis() - started
+        // How long this frame sat in the pending-frame handoff before
+        // analysis actually started on it — the part of end-to-end latency
+        // the detect()/cache optimizations don't touch at all.
+        val queueDelayMs = started - capturedAtMs
         handleDetection(
             detectionRaw = detection,
             elapsedMs = elapsed,
             frameW = bitmap.width,
             frameH = bitmap.height,
-            boardVisuallyChanged = boardVisuallyChanged
+            boardVisuallyChanged = boardVisuallyChanged,
+            queueDelayMs = queueDelayMs
         )
     }
 
@@ -328,7 +352,8 @@ class AnalysisPipeline(
         elapsedMs: Long,
         frameW: Int,
         frameH: Int,
-        boardVisuallyChanged: Boolean
+        boardVisuallyChanged: Boolean,
+        queueDelayMs: Long
     ) {
         val rawState = detectionRaw.state
         if (!detectionRaw.livePlayScreen) {
@@ -446,7 +471,8 @@ class AnalysisPipeline(
                     elapsedMs = elapsedMs,
                     frameW = frameW,
                     frameH = frameH,
-                    boardVisuallyChanged = true
+                    boardVisuallyChanged = true,
+                    queueDelayMs = queueDelayMs
                 )
             } else if (stateChangedSinceSuggestion || boardVisuallyChanged) {
                 overlayController.hideArrowTemporarily()
@@ -466,7 +492,8 @@ class AnalysisPipeline(
             elapsedMs = elapsedMs,
             frameW = frameW,
             frameH = frameH,
-            boardVisuallyChanged = boardVisuallyChanged
+            boardVisuallyChanged = boardVisuallyChanged,
+            queueDelayMs = queueDelayMs
         )
     }
 
@@ -477,15 +504,18 @@ class AnalysisPipeline(
         elapsedMs: Long,
         frameW: Int,
         frameH: Int,
-        boardVisuallyChanged: Boolean = false
+        boardVisuallyChanged: Boolean = false,
+        queueDelayMs: Long = 0L
     ) {
         val state = detection.state ?: return
+        val selectStartedMs = System.currentTimeMillis()
         val avoidStates = recentStates.dropLast(1)
         val rejected = rejectedMoveStore.all() + sessionRejected
         val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
             isFoundationMoveTrusted(move, state, detection)
         }
         val best = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
+        val selectMs = System.currentTimeMillis() - selectStartedMs
         if (best == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
@@ -502,7 +532,9 @@ class AnalysisPipeline(
                 move = null,
                 from = null,
                 to = null,
-                knownFaceUp = knownFaceUp
+                knownFaceUp = knownFaceUp,
+                queueDelayMs = queueDelayMs,
+                selectMs = selectMs
             )
             return
         }
@@ -589,7 +621,9 @@ class AnalysisPipeline(
             knownFaceUp = knownFaceUp,
             score = best.score,
             rationale = best.rationale,
-            runnerUps = ranked.filter { it.move != best.move }.take(3)
+            runnerUps = ranked.filter { it.move != best.move }.take(3),
+            queueDelayMs = queueDelayMs,
+            selectMs = selectMs
         )
     }
 
@@ -606,7 +640,9 @@ class AnalysisPipeline(
         knownFaceUp: Int,
         score: Double? = null,
         rationale: String? = null,
-        runnerUps: List<ScoredMove> = emptyList()
+        runnerUps: List<ScoredMove> = emptyList(),
+        queueDelayMs: Long = 0L,
+        selectMs: Long = 0L
     ) {
         val key = buildString {
             append(outcome)
@@ -631,6 +667,10 @@ class AnalysisPipeline(
             buildString {
                 appendLine("OUTCOME=$outcome status=$status")
                 appendLine("  frame=${frameW}x$frameH elapsed=${elapsedMs}ms conf=${"%.2f".format(detection.confidence)} knownFaceUp=$knownFaceUp")
+                appendLine(
+                    "  timing: queueDelay=${queueDelayMs}ms detect=${elapsedMs}ms " +
+                        "select=${selectMs}ms total=${queueDelayMs + elapsedMs + selectMs}ms"
+                )
                 appendLine("  move=${move?.label ?: "-"} score=${score?.let { "%.1f".format(it) } ?: "-"} rationale=${rationale ?: "-"}")
                 if (runnerUps.isNotEmpty()) {
                     appendLine("  runner-up:")
