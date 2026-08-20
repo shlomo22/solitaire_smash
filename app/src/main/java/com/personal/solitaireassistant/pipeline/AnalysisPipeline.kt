@@ -335,10 +335,23 @@ class AnalysisPipeline(
             var x = left
             while (x < right) {
                 val color = bitmap.getPixel(x, y)
+                // 4 bits/channel (16-unit buckets), not 5 (8-unit buckets): a
+                // real device log showed this whole-board fingerprint flipping
+                // on almost every frame with the game visually static, which
+                // marks boardVisuallyChanged=true nonstop and defeats the
+                // stableHits<2 debounce in handleDetection() — a low-confidence
+                // slot (0.58, partially-occluded tableau card) then alternated
+                // between two different reads every other frame because
+                // fastUpdateAfterMove kept firing instead of the debounce path,
+                // flipping the suggested move back and forth with no real board
+                // change. regionFingerprint() below hit the identical failure
+                // mode for the per-slot cache and was already widened from 5 to
+                // 4 bits/channel for the same reason; this brings the
+                // whole-board fingerprint in line with that fix.
                 val quantized =
-                    (((color shr 19) and 0x1F) shl 10) or
-                        (((color shr 11) and 0x1F) shl 5) or
-                        ((color shr 3) and 0x1F)
+                    (((color shr 20) and 0xF) shl 8) or
+                        (((color shr 12) and 0xF) shl 4) or
+                        ((color shr 4) and 0xF)
                 hash = (hash xor quantized.toLong()) * 0x100000001b3L
                 x += stepX
             }
