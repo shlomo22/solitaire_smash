@@ -1794,18 +1794,6 @@ class GameStateDetector(
 
     companion object {
         private const val pileFingerprintSeed = -0x6c62272e07bb0142L
-
-        /**
-         * WasteRankCorrections can only ever change the fused rank for these
-         * six ranks (correctKingTenOnWaste, correctQueenOnWaste,
-         * correctFiveJack, correctJackThree, and ocrRankOverride's
-         * isConfusionPair whitelist all gate on a subset of them). For any
-         * other waste rank, corner OCR is provably a no-op on the outcome —
-         * skip the up-to-12-region ML Kit probe entirely rather than pay its
-         * latency for a result nothing downstream can use.
-         */
-        private val WASTE_OCR_RELEVANT_RANKS =
-            setOf(Rank.Three, Rank.Five, Rank.Ten, Rank.Jack, Rank.Queen, Rank.King)
     }
 }
 
