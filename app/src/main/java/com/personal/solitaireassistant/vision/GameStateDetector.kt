@@ -438,14 +438,25 @@ class GameStateDetector(
                 var y = columnRegion.top
                 var faceDownCount = 0
                 while (y + 4f < faceRegion.top && faceDownCount < 6) {
+                    val stripBottom = (y + downStep).coerceAtMost(faceRegion.top)
                     val strip = BoardRegion(
                         columnRegion.left,
                         y,
                         columnRegion.right,
-                        (y + downStep).coerceAtMost(faceRegion.top)
+                        stripBottom
                     )
                     val stats = SmashColorAnalyzer.analyze(bitmap, strip)
-                    if (SmashColorAnalyzer.looksFaceDown(stats)) {
+                    // The faceRegion.top cap can truncate the final strip well
+                    // below a full downStep when the true facedown/faceup
+                    // boundary falls mid-band. A real golden sample showed that
+                    // truncated sliver (21.6px of a 44.3px step) still averaging
+                    // teal=0.32 - past looksFaceDown's 0.20 floor - purely
+                    // because it straddles the boundary (part teal card back,
+                    // part the exposed card's white top edge), not because a
+                    // whole card sits there. Only trust a facedown read from a
+                    // strip that got most of its intended height.
+                    val stripHeight = stripBottom - y
+                    if (stripHeight >= downStep * 0.85f && SmashColorAnalyzer.looksFaceDown(stats)) {
                         val bounds = BoardRegion(
                             columnRegion.left,
                             y,
