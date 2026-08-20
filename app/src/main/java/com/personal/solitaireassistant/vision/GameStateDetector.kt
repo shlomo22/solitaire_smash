@@ -416,7 +416,8 @@ class GameStateDetector(
             val cardWidth = columnRegion.width
             val cardHeight = cardWidth * board.profile.cardAspect
             val downStep = cardHeight * board.profile.faceDownOverlap
-            val faceRegion = findPlayableFaceRegion(bitmap, columnRegion, cardHeight)
+            val (faceRegion, faceScanTrace) = findPlayableFaceRegion(bitmap, columnRegion, cardHeight)
+            diagnostics += "tableau$col.faceScan=$faceScanTrace"
 
             if (faceRegion != null) {
                 // Count only genuinely teal headers above the playable face. This
@@ -1048,11 +1049,17 @@ class GameStateDetector(
      * top from the known card aspect ratio. This is substantially more stable
      * than stepping through the large center rank as if it were another card.
      */
+    // Diagnostic-only: findPlayableFaceRegion's bottom-of-column scan has been
+    // seen to land on a different row between two live captures of a board
+    // that never visibly changed, shifting where the whole cascade's card
+    // count gets anchored. Returns a trace of the scan (where it stopped,
+    // why, and the last-white-row bookkeeping) alongside the region so a
+    // real oscillation can be pinned to a specific row instead of guessed at.
     private fun findPlayableFaceRegion(
         bitmap: Bitmap,
         column: BoardRegion,
         cardHeight: Float
-    ): BoardRegion? {
+    ): Pair<BoardRegion?, String> {
         val rowHeight = (column.width / 24f).coerceAtLeast(2f)
         var y = column.top
         var lastWhiteBottom = -1f
@@ -1060,6 +1067,7 @@ class GameStateDetector(
         var sawCardContent = false
         var blankRows = 0
         val maxBlankRows = (cardHeight * 0.22f / rowHeight).toInt().coerceAtLeast(4)
+        var breakY: Float? = null
         while (y < column.bottom) {
             val row = BoardRegion(
                 column.left,
@@ -1074,7 +1082,10 @@ class GameStateDetector(
                 blankRows = 0
             } else if (sawCardContent) {
                 blankRows++
-                if (blankRows >= maxBlankRows) break
+                if (blankRows >= maxBlankRows) {
+                    breakY = y
+                    break
+                }
             }
             if (stats.whiteRatio > 0.28f && stats.tealRatio < 0.18f) {
                 lastWhiteBottom = row.bottom
@@ -1086,7 +1097,10 @@ class GameStateDetector(
         // Empty placeholders have only thin white border rows; a card face has
         // a substantial white area.
         val minimumRows = (cardHeight * 0.22f / rowHeight).toInt().coerceAtLeast(3)
-        if (lastWhiteBottom < 0f || whiteRows < minimumRows) return null
+        val trace = "rowHeight=${"%.2f".format(rowHeight)},lastWhiteBottom=" +
+            "${"%.1f".format(lastWhiteBottom)},whiteRows=$whiteRows,minimumRows=" +
+            "$minimumRows,breakY=${breakY?.let { "%.1f".format(it) } ?: "none"}"
+        if (lastWhiteBottom < 0f || whiteRows < minimumRows) return null to trace
 
         val top = (lastWhiteBottom - cardHeight).coerceAtLeast(column.top)
         return BoardRegion(
@@ -1094,7 +1108,7 @@ class GameStateDetector(
             top,
             column.right,
             (top + cardHeight).coerceAtMost(column.bottom)
-        )
+        ) to trace
     }
 
     fun regionForMove(
