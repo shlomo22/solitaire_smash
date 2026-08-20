@@ -31,6 +31,18 @@ class GoldenTruthStore(context: Context) {
         return runCatching { GoldenTruthJson.fromJson(file.readText()) }.getOrNull()
     }
 
+    /**
+     * Ids whose json is present but unparseable, so [listSamples] silently
+     * drops them. A hand-edited golden file with a bad enum spelling
+     * ("king" for "King") sat in the set unnoticed for a whole tuning
+     * session: count() counts json files while listSamples() counts the ones
+     * that actually parsed, so the mismatch only ever showed up as
+     * "Saved samples: 35" next to "Golden set: 34 samples" - two numbers far
+     * enough apart in the report to read as unrelated. Surface it instead.
+     */
+    fun listUnreadableIds(): List<String> =
+        listIds().filter { loadSample(it) == null }
+
     fun loadBitmap(id: String): Bitmap? {
         val file = File(dir(), "$id.png")
         if (!file.isFile) return null

@@ -17,7 +17,9 @@ data class GoldenEvalReport(
     val redSuitConfusions: List<Pair<String, Int>>,
     val blackSuitConfusions: List<Pair<String, Int>>,
     val mismatches: List<String>,
-    val mismatchDiagnostics: List<String> = emptyList()
+    val mismatchDiagnostics: List<String> = emptyList(),
+    /** Golden ids present on disk but unparseable, so not evaluated at all. */
+    val unreadableSampleIds: List<String> = emptyList()
 ) {
     val accuracy: Float
         get() = if (slotCount == 0) 0f else matchedSlots.toFloat() / slotCount
@@ -29,6 +31,10 @@ data class GoldenEvalReport(
             "Accuracy: ${"%.0f".format(accuracy * 100f)}% ($matchedSlots/$slotCount)",
             "Rank errors: $rankErrors  Suit errors: $suitErrors  Occupancy: $occupancyErrors  Missing: $missingSlots"
         )
+        if (unreadableSampleIds.isNotEmpty()) {
+            lines += "SKIPPED ${unreadableSampleIds.size} unreadable sample(s) - not evaluated:"
+            unreadableSampleIds.forEach { lines += "  $it.json" }
+        }
         if (confusions.isNotEmpty()) {
             lines += "Confusions:"
             confusions.take(8).forEach { (pair, count) ->
@@ -135,7 +141,8 @@ object GoldenTruthEvaluator {
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
             mismatches = mismatches,
-            mismatchDiagnostics = mismatchDiagnostics
+            mismatchDiagnostics = mismatchDiagnostics,
+            unreadableSampleIds = store.listUnreadableIds()
         )
     }
 
@@ -206,7 +213,8 @@ object GoldenTruthEvaluator {
         redSuitConfusionMap: Map<String, Int>,
         blackSuitConfusionMap: Map<String, Int>,
         mismatches: List<String>,
-        mismatchDiagnostics: List<String>
+        mismatchDiagnostics: List<String>,
+        unreadableSampleIds: List<String> = emptyList()
     ): GoldenEvalReport {
         val confusions = confusionMap.entries
             .sortedByDescending { it.value }
@@ -229,7 +237,8 @@ object GoldenTruthEvaluator {
             redSuitConfusions = redSuitConfusions,
             blackSuitConfusions = blackSuitConfusions,
             mismatches = mismatches,
-            mismatchDiagnostics = mismatchDiagnostics
+            mismatchDiagnostics = mismatchDiagnostics,
+            unreadableSampleIds = unreadableSampleIds
         )
     }
 
