@@ -168,9 +168,15 @@ class GameStateDetector(
             ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
             ?.key
         val wasteInkGuess = inkGuessFromRegion(bitmap, tightWasteRegion)
-        val wasteOcrRelevant =
-            legacyCard?.rank in WASTE_OCR_RELEVANT_RANKS ||
-                tightCard?.rank in WASTE_OCR_RELEVANT_RANKS
+        // Used to gate on legacyCard/tightCard's rank already being in
+        // WASTE_OCR_RELEVANT_RANKS, on the assumption a wrong initial guess
+        // would always land on one of those ranks. A real game showed a
+        // waste Ten confidently misread as Eight — not in that set — so OCR
+        // never ran and the correction logic below (which depends entirely
+        // on ocrRank) never got a chance. Any rank can be the wrong initial
+        // guess; the early-exit added to attemptWasteRankOcr already bounds
+        // the cost of trying, so just always try when there's a real card.
+        val wasteOcrRelevant = legacyCard != null || tightCard != null
         val wasteOcrStartNanos = System.nanoTime()
         val wasteOcrAttempt = if (wasteOcrRelevant) {
             val wasteOcrRegions = buildList {
