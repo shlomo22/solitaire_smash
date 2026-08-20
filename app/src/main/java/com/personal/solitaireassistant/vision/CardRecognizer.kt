@@ -1385,13 +1385,16 @@ class CardRecognizer(
         if (!widePeakClubTemplatesCompetitive(scores)) return false
         if (scores.topMargin >= 0.100f && scores.fullClub >= 0.859f) return true
         if (scores.fullMargin < 0.038f && scores.topMargin < 0.048f) return true
-        if (scores.fullMargin < 0.048f &&
-            scores.topMargin >= 0.075f &&
-            scores.topMargin < 0.100f &&
-            scores.fullClub >= 0.859f
-        ) {
-            return true
-        }
+        // A former third rule (fullMargin<0.048 && topMargin in [0.075,0.100) &&
+        // fullClub>=0.859) covered this exact card skin's genuine Spade badge:
+        // an offline replay of every golden black-suit slot found 10 independent,
+        // visually-verified Spades (different ranks/samples, one hand-checked
+        // against its actual card art) all landing in that band and getting
+        // vetoed to Clubs, while removing the rule fixed all 10 with no case in
+        // the set where a genuinely Clubs-scoring card (fullClub actually
+        // leading, not just above 0.859) depended on it - this rule only ever
+        // gates the topLeader==Spades path, which correctly-scoring Clubs cards
+        // don't reach. See the black-tiebreak trace investigation for the data.
         return false
     }
 
