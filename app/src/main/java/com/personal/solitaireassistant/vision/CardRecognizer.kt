@@ -335,9 +335,11 @@ class CardRecognizer(
                     // when the ink read is confident, never removes the hedge
                     // for the ambiguous case.
                     val suitCandidates = suitCandidatesForInk(inkRed)
-                    val suitScoreMap = suitTemplateScoresFromCrop(crop, suitCandidates)
+                    val suitSourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
+                    val suitScoreMap = suitScoresFromMasks(suitSourceMasks, suitCandidates)
                     val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
-                    val (suit, suitTraceRaw) = inferSuitWithTrace(crop, inkRed, suitScoreMap)
+                    val (suit, suitTraceRaw) =
+                        inferSuitWithTrace(crop, inkRed, suitScoreMap, suitSourceMasks)
                     // Diagnostic-only: expose the raw whole-card ink ratio behind
                     // inkRed, since every downstream suit-source label only ever
                     // shows the derived boolean, not the numbers that decided it.
@@ -459,13 +461,17 @@ class CardRecognizer(
             // Same reasoning as the OpenCV path above: trust the ink-region
             // gate here too instead of always scoring all 4 suits.
             val suitCandidates = suitCandidatesForInk(inkRed)
+            val suitSourceMasks = crop?.let { suitBadgeMasks(it, preferLocatedBadge = true) }
             val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
-            val suitScoreMap = crop?.let { suitTemplateScoresFromCrop(it, suitCandidates) }.orEmpty()
+            val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
             val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
             val rank = rankResolution?.rank
-            val bitmapSuit = crop?.let { bestBitmapSuit(it, inkRed) }
-                ?.takeIf { it.second >= 0.45f }
+            val bitmapSuit = if (crop != null && suitSourceMasks != null) {
+                bestBitmapSuit(crop, inkRed, suitSourceMasks)
+            } else {
+                null
+            }?.takeIf { it.second >= 0.45f }
             val shapeBlack = if (inkRed == false && crop != null) {
                 SuitBadgeHeuristics.guessBlackSuit(crop)
                     ?.takeIf {
@@ -635,12 +641,24 @@ class CardRecognizer(
     ): Map<Suit, Float> {
         ensureLoaded()
         val sourceMasks = suitBadgeMasks(cardCrop, preferLocatedBadge = true)
-        return suits.mapNotNull { suit ->
+        return suitScoresFromMasks(sourceMasks, suits)
+    }
+
+    // Shared with bestBitmapSuit below: badge-mask extraction (suitBadgeMasks,
+    // specifically its locateBadge OpenCV call) is the expensive part of suit
+    // recognition, and recognize() used to trigger it twice per card — once
+    // here for the diagnostic score map, once independently inside
+    // bestBitmapSuit for the actual decision. Both now take the same
+    // precomputed masks instead.
+    private fun suitScoresFromMasks(
+        sourceMasks: List<LongArray>,
+        suits: Set<Suit>
+    ): Map<Suit, Float> =
+        suits.mapNotNull { suit ->
             bitmapSuitTemplates[suit]?.let { templates ->
                 suit to maxSuitTemplateScore(sourceMasks, templates, topHalf = false)
             }
         }.toMap()
-    }
 
     fun blackSuitTemplateScores(bitmap: Bitmap, region: BoardRegion): BlackSuitTemplateScores {
         ensureLoaded()
@@ -851,10 +869,11 @@ class CardRecognizer(
     private fun inferSuitWithTrace(
         crop: Bitmap,
         inkRed: Boolean?,
-        suitScoreMap: Map<Suit, Float>
+        suitScoreMap: Map<Suit, Float>,
+        suitSourceMasks: List<LongArray>
     ): Pair<Suit?, RecognitionTrace> {
         val templateStr = RecognitionTrace.formatSuitScores(suitScoreMap)
-        val bitmapSuit = bestBitmapSuit(crop, inkRed)
+        val bitmapSuit = bestBitmapSuit(crop, inkRed, suitSourceMasks)
         if (bitmapSuit != null && bitmapSuit.second >= 0.45f &&
             (inkRed == null || bitmapSuit.first.isRed == inkRed)
         ) {
@@ -923,9 +942,12 @@ class CardRecognizer(
         return null to RecognitionTrace(suitTemplates = templateStr)
     }
 
-    private fun bestBitmapSuit(crop: Bitmap, isRed: Boolean? = null): Pair<Suit, Float>? {
+    private fun bestBitmapSuit(
+        crop: Bitmap,
+        isRed: Boolean? = null,
+        sourceMasks: List<LongArray> = suitBadgeMasks(crop, preferLocatedBadge = true)
+    ): Pair<Suit, Float>? {
         if (bitmapSuitTemplates.isEmpty()) return null
-        val sourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
         var clubScore = 0f
         var spadeScore = 0f
         var heartScore = 0f
