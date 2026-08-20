@@ -1368,10 +1368,15 @@ class GameStateDetector(
         }
         val beforeSuit = card.suit
         val beforeAmbiguous = card.suitAmbiguous
-        val resolved = if (card.suit.isRed) {
-            resolveRedSuit(bitmap, region, card)
+        val resolved: Card
+        val blackDebug: String?
+        if (card.suit.isRed) {
+            resolved = resolveRedSuit(bitmap, region, card)
+            blackDebug = null
         } else {
-            resolveBlackSuit(bitmap, region, card)
+            val (blackResolved, debug) = resolveBlackSuit(bitmap, region, card)
+            resolved = blackResolved
+            blackDebug = debug
         }
         val post = when {
             resolved.suit != beforeSuit ->
@@ -1382,7 +1387,11 @@ class GameStateDetector(
                 "post-${if (beforeSuit.isRed) "red" else "black"}-suit:cleared-ambiguous"
             else -> null
         }
-        return resolved to (post?.let { trace.withPost(it) } ?: trace)
+        var updatedTrace = post?.let { trace.withPost(it) } ?: trace
+        if (blackDebug != null) {
+            updatedTrace = updatedTrace.withPost("black-tiebreak2:$blackDebug")
+        }
+        return resolved to updatedTrace
     }
 
     private fun resolveRedSuit(
@@ -1517,8 +1526,8 @@ class GameStateDetector(
         bitmap: Bitmap,
         region: BoardRegion,
         card: Card
-    ): Card {
-        if (!card.known || card.suit.isRed) return card
+    ): Pair<Card, String?> {
+        if (!card.known || card.suit.isRed) return card to null
         val scores = recognizer.blackSuitTemplateScores(bitmap, region)
         val clubScore = scores.fullClub
         val spadeScore = scores.fullSpade
@@ -1556,12 +1565,13 @@ class GameStateDetector(
             ) {
                 preferTopHalf = false
             }
+            val debugLines = mutableListOf<String>()
             val resolved = if (margin < CardRecognizer.BLACK_SUIT_TOP_TIEBREAK_MAX || preferTopHalf) {
                 val (leader, ambiguous) = recognizer.resolveBlackSuitLeader(
                     scores,
                     cardCrop,
                     tiebreakShape
-                )
+                ) { debugLines += it }
                 if (leader != null) {
                     card.copy(suit = leader, suitAmbiguous = ambiguous)
                 } else {
@@ -1595,13 +1605,17 @@ class GameStateDetector(
                 topSpadeScore = scores.topSpade,
                 topMargin = scores.topMargin
             )
+            if (recovered != null && recovered.first != resolved.suit) {
+                debugLines += "recoverLowConfidenceSpade->${recovered.first}"
+            }
+            val debug = debugLines.takeIf { it.isNotEmpty() }?.joinToString(";")
             return if (recovered != null) {
                 resolved.copy(
                     suit = recovered.first,
                     suitAmbiguous = recovered.second
-                )
+                ) to debug
             } else {
-                resolved
+                resolved to debug
             }
         } finally {
             cardCrop?.recycle()

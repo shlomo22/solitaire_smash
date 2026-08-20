@@ -409,7 +409,9 @@ class CardRecognizer(
                             inferredRed = false,
                             trace = trace.merge(
                                 RecognitionTrace(suitSource = "suit-ambiguous-black")
-                            ),
+                            ).let { t ->
+                                guess.third?.let { t.withPost("black-tiebreak:$it") } ?: t
+                            },
                             rankScores = rankScoreMap,
                             suitScores = suitScoreMap
                         )
@@ -561,7 +563,9 @@ class CardRecognizer(
                     inferredRed = false,
                     trace = trace.merge(
                         RecognitionTrace(suitSource = "suit-ambiguous-black")
-                    )
+                    ).let { t ->
+                        guess.third?.let { t.withPost("black-tiebreak:$it") } ?: t
+                    }
                 )
             }
             if (suit == null && rank != null && inkRed == true && crop != null) {
@@ -888,15 +892,21 @@ class CardRecognizer(
         suitSourceMasks: List<LongArray>
     ): Pair<Suit?, RecognitionTrace> {
         val templateStr = RecognitionTrace.formatSuitScores(suitScoreMap)
-        val bitmapSuit = bestBitmapSuit(crop, inkRed, suitSourceMasks)
+        val blackDebugLines = mutableListOf<String>()
+        val bitmapSuit = bestBitmapSuit(crop, inkRed, suitSourceMasks) { blackDebugLines += it }
         if (bitmapSuit != null && bitmapSuit.second >= 0.45f &&
             (inkRed == null || bitmapSuit.first.isRed == inkRed)
         ) {
-            return bitmapSuit.first to RecognitionTrace(
+            val base = RecognitionTrace(
                 suitSource = "suit-png",
                 suitScore = bitmapSuit.second,
                 suitTemplates = templateStr
             )
+            return bitmapSuit.first to if (blackDebugLines.isNotEmpty()) {
+                base.withPost("black-tiebreak:${blackDebugLines.joinToString(";")}")
+            } else {
+                base
+            }
         }
         if (inkRed == false) {
             SuitBadgeHeuristics.guessBlackSuit(crop)?.let { shape ->
@@ -960,7 +970,8 @@ class CardRecognizer(
     private fun bestBitmapSuit(
         crop: Bitmap,
         isRed: Boolean? = null,
-        sourceMasks: List<LongArray> = suitBadgeMasks(crop, preferLocatedBadge = true)
+        sourceMasks: List<LongArray> = suitBadgeMasks(crop, preferLocatedBadge = true),
+        blackDebug: ((String) -> Unit)? = null
     ): Pair<Suit, Float>? {
         if (bitmapSuitTemplates.isEmpty()) return null
         var clubScore = 0f
@@ -998,7 +1009,7 @@ class CardRecognizer(
                     TOP_BLACK_SHAPE_VETO_MARGIN
                 )
                 val scores = BlackSuitTemplateScores(clubScore, spadeScore, topClub, topSpade)
-                val (leader, ambiguous) = resolveThinBlackLeader(scores, crop, tiebreakShape)
+                val (leader, ambiguous) = resolveThinBlackLeader(scores, crop, tiebreakShape, blackDebug)
                 if (leader == null) return null
                 val leaderScore = if (leader == Suit.Spades) topSpade else topClub
                 return leader to leaderScore
@@ -1008,8 +1019,19 @@ class CardRecognizer(
                 shape.margin >= BLACK_SHAPE_MIN_MARGIN &&
                 (fullMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
             ) {
+                blackDebug?.invoke(
+                    "full=C${"%.2f".format(clubScore)}/S${"%.2f".format(spadeScore)}," +
+                        "top=C${"%.2f".format(topClub)}/S${"%.2f".format(topSpade)}," +
+                        "branch=wideMarginShapeOverride->${shape.suit}"
+                )
                 best = shape.suit to max(clubScore, spadeScore) + 0.03f
                 second = min(clubScore, spadeScore)
+            } else {
+                blackDebug?.invoke(
+                    "full=C${"%.2f".format(clubScore)}/S${"%.2f".format(spadeScore)}," +
+                        "top=C${"%.2f".format(topClub)}/S${"%.2f".format(topSpade)}," +
+                        "branch=wideMarginDirect->${best?.first}"
+                )
             }
         }
         if (isRed == true) {
@@ -1117,23 +1139,25 @@ class CardRecognizer(
         return masks
     }
 
-    /** Pair of resolved suit and whether the guess is low-confidence. */
-    private fun ambiguousBlackSuit(crop: Bitmap): Pair<Suit, Boolean> {
+    /** Triple of resolved suit, whether the guess is low-confidence, and a tiebreak trace. */
+    private fun ambiguousBlackSuit(crop: Bitmap): Triple<Suit, Boolean, String?> {
         val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
         if (shape != null && shape.margin >= BLACK_SHAPE_MIN_MARGIN) {
-            return shape.suit to (shape.margin < 0.45f)
+            return Triple(shape.suit, shape.margin < 0.45f, null)
         }
         val tiebreakShape = SuitBadgeHeuristics.guessBlackSuit(crop, TOP_BLACK_SHAPE_VETO_MARGIN)
         val scores = blackSuitScoresFromCrop(crop)
-        val (leader, ambiguous) = resolveBlackSuitLeader(scores, crop, tiebreakShape)
+        val debugLines = mutableListOf<String>()
+        val (leader, ambiguous) = resolveBlackSuitLeader(scores, crop, tiebreakShape) { debugLines += it }
+        val debug = debugLines.takeIf { it.isNotEmpty() }?.joinToString(";")
         if (leader != null) {
-            return leader to ambiguous
+            return Triple(leader, ambiguous, debug)
         }
         val loose = bestBitmapSuitLoose(crop, red = false)
-        if (loose != null) return loose to true
+        if (loose != null) return Triple(loose, true, debug)
         val fallback = shape?.suit
             ?: if (scores.fullSpade >= scores.fullClub) Suit.Spades else Suit.Clubs
-        return fallback to true
+        return Triple(fallback, true, debug)
     }
 
     private fun ambiguousRedSuit(crop: Bitmap): Pair<Suit, Boolean> {
@@ -1213,11 +1237,13 @@ class CardRecognizer(
     fun resolveBlackSuitLeader(
         scores: BlackSuitTemplateScores,
         crop: Bitmap? = null,
-        tiebreakShape: SuitBadgeHeuristics.Guess? = null
+        tiebreakShape: SuitBadgeHeuristics.Guess? = null,
+        debug: ((String) -> Unit)? = null
     ): Pair<Suit?, Boolean> {
         if (max(scores.fullClub, scores.fullSpade) < 0.40f &&
             max(scores.topClub, scores.topSpade) < 0.40f
         ) {
+            debug?.invoke("branch=belowFloor->ambiguous")
             return null to true
         }
         val fullLeader = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
@@ -1227,16 +1253,24 @@ class CardRecognizer(
             scores.topMargin >= TOP_BLACK_SUIT_MARGIN &&
             !shouldVetoTopHalfForSpadeTip(scores, crop, fullLeader, topLeader)
         if (preferTopHalf || scores.fullMargin < BLACK_SUIT_TOP_TIEBREAK_MAX) {
-            return resolveThinBlackLeader(scores, crop, tiebreakShape)
+            return resolveThinBlackLeader(scores, crop, tiebreakShape, debug)
         }
+        debug?.invoke("branch=fullLeaderDirect->$fullLeader")
         return fullLeader to false
     }
 
     private fun resolveThinBlackLeader(
         scores: BlackSuitTemplateScores,
         crop: Bitmap?,
-        tiebreakShape: SuitBadgeHeuristics.Guess?
+        tiebreakShape: SuitBadgeHeuristics.Guess?,
+        debug: ((String) -> Unit)? = null
     ): Pair<Suit?, Boolean> {
+        debug?.invoke(
+            "full=C${"%.2f".format(scores.fullClub)}/S${"%.2f".format(scores.fullSpade)}," +
+                "top=C${"%.2f".format(scores.topClub)}/S${"%.2f".format(scores.topSpade)}," +
+                "shape=${tiebreakShape?.suit?.name ?: "none"}" +
+                (tiebreakShape?.let { "@${"%.2f".format(it.margin)}" } ?: "")
+        )
         if (scores.topMargin < TOP_BLACK_SUIT_MARGIN) {
             if (tiebreakShape != null && tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN) {
                 if (tiebreakShape.suit == Suit.Clubs &&
@@ -1244,10 +1278,13 @@ class CardRecognizer(
                     spadeShapeBlocksClubVeto(crop) &&
                     !widePeakClubShapeVetoApplies(scores)
                 ) {
+                    debug?.invoke("branch=lowTopMargin-clubShapeBlockedBySpadeShape->ambiguous")
                     return null to true
                 }
+                debug?.invoke("branch=lowTopMargin-shapeLeader->${tiebreakShape.suit}")
                 return tiebreakShape.suit to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
             }
+            debug?.invoke("branch=lowTopMargin-noShape->ambiguous")
             return null to true
         }
         val topLeader = if (scores.topSpade > scores.topClub) Suit.Spades else Suit.Clubs
@@ -1256,18 +1293,22 @@ class CardRecognizer(
             tiebreakShape.margin >= TOP_BLACK_SHAPE_VETO_MARGIN
         ) {
             if (crop != null && SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop)) {
+                debug?.invoke("branch=topSpade-clubLobeEvidence->Clubs")
                 return Suit.Clubs to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
             }
             val widePeakOnly = tiebreakShape.margin < 0.38f
             if (widePeakOnly && !widePeakClubShapeVetoApplies(scores)) {
+                debug?.invoke("branch=topSpade-widePeakOnlyNoVeto->Spades")
                 return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
             }
             if (crop != null &&
                 spadeShapeBlocksClubVeto(crop) &&
                 !widePeakClubShapeVetoApplies(scores)
             ) {
+                debug?.invoke("branch=topSpade-spadeShapeBlocksVeto->Spades")
                 return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
             }
+            debug?.invoke("branch=topSpade-clubShapeVetoWins->Clubs")
             return Suit.Clubs to (tiebreakShape.margin < TOP_BLACK_SHAPE_VETO_MARGIN * 1.5f)
         }
         if (topLeader == Suit.Clubs &&
@@ -1276,8 +1317,10 @@ class CardRecognizer(
             !SuitBadgeHeuristics.blackSuitClubLobeEvidence(crop) &&
             scores.topSpade + 0.02f >= scores.topClub
         ) {
+            debug?.invoke("branch=topClub-spadeShapeOverride->Spades")
             return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
         }
+        debug?.invoke("branch=topLeaderDirect->$topLeader")
         return topLeader to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
     }
 
