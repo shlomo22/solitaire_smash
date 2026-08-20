@@ -32,7 +32,17 @@ data class BoardGeometryProfile(
     val tableauLeft: Float = 0.015f,
     val tableauRight: Float = 0.985f,
     val cardAspect: Float = 1.40f,
-    val faceUpOverlap: Float = 0.28f,
+    // Measured, not assumed: the exposed height of an overlapped face-up card
+    // is 48.90px against a 192.76px card (137.68 * cardAspect), i.e. 0.2537.
+    // Taken from the rank-glyph row spacing in 12 long cascades across the
+    // golden set - 88 intervals, all between 48.67 and 49.17, with no
+    // dependence on cascade length. The previous 0.28 (53.97px) was ~10% too
+    // large, and because cascade slots are placed at firstFaceTop + i * step
+    // the error accumulates: by the 8th card a slot sits a full card low and
+    // reads its neighbour instead. Replaying all 37 golden cascade columns,
+    // 0.28 puts 38 of 179 slots more than half a card off (mean error
+    // 16.9px); 0.2537 puts 1 of 179 off (mean error 1.0px).
+    val faceUpOverlap: Float = 0.2537f,
     val faceDownOverlap: Float = 0.23f
 )
 
