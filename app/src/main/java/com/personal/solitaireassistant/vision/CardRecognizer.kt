@@ -851,22 +851,42 @@ class CardRecognizer(
     private fun rankSourceMasks(crop: Bitmap, exactCardBounds: Boolean): List<LongArray> {
         val sourceMasks = mutableListOf<LongArray>()
         val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
+        if (exactCardBounds) {
+            // A single fixed 54%-of-height ROI assumed the crop always
+            // represents a fully visible card, leaving generous headroom
+            // below a top-corner digit. Tableau cascade slots now pass a
+            // crop trimmed to just their own visible strip before the next
+            // card covers it (well under half a full card's height) - on a
+            // crop that short, 54% clips the digit itself, and a real
+            // device log showed nearly everything then matching "Ten"'s
+            // stubby silhouette. Sample several height fractions so at
+            // least one candidate captures the whole digit regardless of
+            // how tightly the caller already trimmed the crop; maxOf over
+            // template scores picks whichever sample fits best, so this can
+            // only add candidates, never remove the original 54% one that
+            // already works for tightly-fitted (non-cascade) crops.
+            for (hFraction in listOf(0.54f, 0.75f, 1.0f)) {
+                val h = (crop.height * hFraction).toInt().coerceIn(8, crop.height)
+                val roi = Bitmap.createBitmap(crop, 0, 0, w, h)
+                sourceMasks += inkMask(roi)
+                roi.recycle()
+            }
+            return sourceMasks
+        }
         val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
         Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
             sourceMasks += inkMask(roi)
             roi.recycle()
         }
-        if (!exactCardBounds) {
-            for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
-                val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
-                val actualW = w.coerceAtMost(crop.width - x)
-                for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
-                    val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
-                    val actualH = h.coerceAtMost(crop.height - y)
-                    val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
-                    sourceMasks += inkMask(roi)
-                    roi.recycle()
-                }
+        for (xFraction in listOf(0.08f, 0.14f, 0.20f)) {
+            val x = (crop.width * xFraction).toInt().coerceIn(0, crop.width - 8)
+            val actualW = w.coerceAtMost(crop.width - x)
+            for (yFraction in listOf(0.16f, 0.22f, 0.28f, 0.34f, 0.40f)) {
+                val y = (crop.height * yFraction).toInt().coerceIn(0, crop.height - 8)
+                val actualH = h.coerceAtMost(crop.height - y)
+                val roi = Bitmap.createBitmap(crop, x, y, actualW, actualH)
+                sourceMasks += inkMask(roi)
+                roi.recycle()
             }
         }
         return sourceMasks
