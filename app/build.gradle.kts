@@ -95,4 +95,14 @@ tasks.withType<Test>().configureEach {
         "refreshSuitTemplates",
         findProperty("refreshSuitTemplates")?.toString() ?: "false"
     )
+    // The golden-truth tests report their results by printing the same
+    // summary block the on-device Evaluate button produces. Gradle discards
+    // test stdout unless asked, which made those reports invisible and the
+    // desktop evaluate path effectively unusable for iterating on recognizer
+    // changes without a device rebuild.
+    testLogging {
+        showStandardStreams = true
+        events("passed", "failed", "skipped")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
