@@ -1333,15 +1333,26 @@ class CardRecognizer(
             return Suit.Spades to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
         }
         // A prior attempt trusted tiebreakShape==Spades here once its margin
-        // passed TOP_BLACK_SHAPE_VETO_MARGIN*1.5 (~0.42), on the theory that a
-        // margin that decisive should out-vote a thin topClub lead. Reverted:
-        // an offline replay across the full golden set found the identical
-        // margin (1.08) on both a card visually confirmed to be Spades and a
-        // different card visually confirmed to be Clubs - shapeMargin doesn't
-        // separate the two at any threshold, so trusting it here just trades
-        // one error direction for the other. See the "topClub-strongSpade
-        // ShapeOverride" investigation for the data; needs a better-
-        // discriminating signal before revisiting, not a different constant.
+        // passed TOP_BLACK_SHAPE_VETO_MARGIN*1.5 (~0.42) and was reverted after
+        // an offline Python replica of this decision tree claimed the same
+        // shapeMargin (1.08) occurred on both a confirmed-Spades and a
+        // confirmed-Clubs card. Re-checked against real on-device
+        // analysis.log traces (not the replica, which had drifted from the
+        // Kotlin shape scorer) instead: every real topLeader==Clubs case with
+        // tiebreakShape==Spades splits cleanly into two non-overlapping
+        // clusters - genuine Spades cards (foundation/waste Aces/Kings/Twos,
+        // shape margin 1.08, fullClub~0.81-0.83) vs. genuine Clubs cards
+        // (tableau Sixes/Sevens, shape margin 0.50, fullClub~0.92-0.93).
+        // Require both signals so a single noisy score can't flip a card on
+        // its own.
+        if (topLeader == Suit.Clubs &&
+            tiebreakShape?.suit == Suit.Spades &&
+            tiebreakShape.margin >= BLACK_TOP_CLUB_STRONG_SPADE_SHAPE_MARGIN &&
+            scores.fullClub <= BLACK_TOP_CLUB_STRONG_SPADE_FULL_CLUB_MAX
+        ) {
+            debug?.invoke("branch=topClub-strongSpadeShapeOverride->Spades")
+            return Suit.Spades to false
+        }
         debug?.invoke("branch=topLeaderDirect->$topLeader")
         return topLeader to (scores.topMargin < TOP_BLACK_SUIT_MARGIN * 1.25f)
     }
@@ -1864,6 +1875,19 @@ class CardRecognizer(
         const val TOP_BLACK_SUIT_MARGIN = 0.04f
         /** Shape margin to override a thin spade template win on club badges. */
         const val TOP_BLACK_SHAPE_VETO_MARGIN = 0.28f
+        /**
+         * Shape margin required to flip a wide-margin topLeader==Clubs read to
+         * Spades. Real device data splits cleanly: confirmed-Spades cases sit
+         * at margin 1.08, confirmed-Clubs cases at 0.50 - this sits with
+         * roughly equal buffer from both.
+         */
+        const val BLACK_TOP_CLUB_STRONG_SPADE_SHAPE_MARGIN = 0.80f
+        /**
+         * fullClub ceiling paired with the margin check above. Same real-data
+         * split: confirmed-Spades cases have fullClub~0.81-0.83, confirmed-
+         * Clubs cases ~0.92-0.93.
+         */
+        const val BLACK_TOP_CLUB_STRONG_SPADE_FULL_CLUB_MAX = 0.88f
         const val RED_SUIT_MARGIN = 0.040f
         const val RED_SHAPE_MIN_MARGIN = 0.12f
         /**
