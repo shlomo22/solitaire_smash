@@ -171,6 +171,7 @@ class GameStateDetector(
         val wasteOcrRelevant =
             legacyCard?.rank in WASTE_OCR_RELEVANT_RANKS ||
                 tightCard?.rank in WASTE_OCR_RELEVANT_RANKS
+        val wasteOcrStartNanos = System.nanoTime()
         val wasteOcrAttempt = if (wasteOcrRelevant) {
             val wasteOcrRegions = buildList {
                 add(tightWasteRegion)
@@ -181,6 +182,12 @@ class GameStateDetector(
         } else {
             null
         }
+        // Diagnostic-only: OCR (ML Kit text recognition) is the one recognize
+        // step that blocks on a real ML model call instead of pixel/template
+        // math, and waste tries it across up to 5 crop regions x 2 (whole +
+        // corner) sequentially. Surface how long that actually took.
+        diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
+            "ms=${(System.nanoTime() - wasteOcrStartNanos) / 1_000_000}"
         val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
             ocrRank = wasteOcrAttempt?.guess?.rank,
             legacyCard = legacyCard,

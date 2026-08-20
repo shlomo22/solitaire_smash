@@ -215,33 +215,48 @@ class CardRecognizer(
         var bestHit: RankCornerOcr.AttemptResult? = null
         val traces = mutableListOf<String>()
         val seen = mutableSetOf<String>()
-        for (region in cardRegions) {
-            val key = ocrRegionKey(region)
-            if (!seen.add(key)) continue
-            considerWasteOcrAttempt(
-                attempt = attemptCornerRankOcr(
-                    bitmap,
-                    region,
-                    RankCornerOcr.CornerRoiProfile.WASTE
-                ),
-                regionTag = "whole@$key",
-                traces = traces,
-                bestHit = { bestHit },
-                updateBest = { bestHit = it }
-            )
-            val corner = BoardLocator.wasteRankCornerRegion(region)
-            if (corner.width >= 8f && corner.height >= 8f) {
+        // Each OCR attempt is a blocking ML Kit call; trying every region x
+        // whole/corner combination unconditionally (up to ~10 sequential
+        // calls) is what made waste recognition the dominant per-frame cost
+        // once a rank needing OCR showed up. Stop as soon as a clean, short
+        // parse comes back — that's the common case (a real rank corner:
+        // "K", "10", "A", a single digit) — and only keep searching the
+        // remaining regions when what's found so far is still weak/ambiguous.
+        run regions@{
+            for (region in cardRegions) {
+                val key = ocrRegionKey(region)
+                if (!seen.add(key)) continue
                 considerWasteOcrAttempt(
                     attempt = attemptCornerRankOcr(
                         bitmap,
-                        corner,
-                        RankCornerOcr.CornerRoiProfile.DIRECT
+                        region,
+                        RankCornerOcr.CornerRoiProfile.WASTE
                     ),
-                    regionTag = "corner@${ocrRegionKey(corner)}",
+                    regionTag = "whole@$key",
                     traces = traces,
                     bestHit = { bestHit },
                     updateBest = { bestHit = it }
                 )
+                if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
+                    return@regions
+                }
+                val corner = BoardLocator.wasteRankCornerRegion(region)
+                if (corner.width >= 8f && corner.height >= 8f) {
+                    considerWasteOcrAttempt(
+                        attempt = attemptCornerRankOcr(
+                            bitmap,
+                            corner,
+                            RankCornerOcr.CornerRoiProfile.DIRECT
+                        ),
+                        regionTag = "corner@${ocrRegionKey(corner)}",
+                        traces = traces,
+                        bestHit = { bestHit },
+                        updateBest = { bestHit = it }
+                    )
+                    if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
+                        return@regions
+                    }
+                }
             }
         }
         val trace = traces.joinToString(";")
@@ -1769,5 +1784,12 @@ class CardRecognizer(
         const val TOP_BLACK_SHAPE_VETO_MARGIN = 0.28f
         const val RED_SUIT_MARGIN = 0.040f
         const val RED_SHAPE_MIN_MARGIN = 0.12f
+        /**
+         * estimateConfidence's "clean short parse" tier (a real rank corner
+         * like "K", "10", "A", or a single digit). Waste OCR stops trying
+         * further regions once it hits this, instead of exhausting all of
+         * them on every attempt.
+         */
+        const val WASTE_OCR_EARLY_EXIT_CONFIDENCE = 0.62f
     }
 }
