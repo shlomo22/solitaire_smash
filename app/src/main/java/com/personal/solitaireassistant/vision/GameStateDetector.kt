@@ -600,18 +600,16 @@ class GameStateDetector(
                 val geometricFaceUpCount = faceUpCount
                 var cascadeRankCountNote = "n/a"
                 if (card.known) {
-                    // Only the top faceUpStep sliver below firstFaceTop is
-                    // actually this card — the rest of a full cardHeight box is
-                    // covered by the card(s) stacked on top of it. This used to
-                    // feed just the ink-color read; the rank/suit template
-                    // match still ran on a full-cardHeight crop, whose
-                    // covering-card content corrupts rankSourceMasks'
-                    // proportional ROI (h = crop.height*0.54, sized for an
-                    // un-occluded card) — a real device log showed a clearly
-                    // legible "6" misread as King because the sampled ROI
-                    // reached deep into the next card's face. Use the same
-                    // trimmed strip as the primary recognition region too, not
-                    // just for ink color.
+                    val leadingRegion = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                    )
+                    // Only the top faceUpStep sliver of leadingRegion is actually
+                    // this card — the rest is covered by the card(s) stacked on
+                    // top of it. Feed the ink-color read only that visible strip
+                    // so the covering card's color can't leak into inkRed.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -623,7 +621,7 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
-                        region = leadingHeaderRegion,
+                        region = leadingRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
                         inkRegion = leadingHeaderRegion
@@ -705,12 +703,7 @@ class GameStateDetector(
                     // Same overlap problem as the leading card: bounds reaches
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
-                    // one's. Recognize from the visible strip, not the full
-                    // bounds — feeding the oversized crop into rankSourceMasks'
-                    // proportional ROI let the covering card's content corrupt
-                    // the rank read (see the leading-card comment above). Keep
-                    // `bounds` (full cardHeight) only for this slot's displayed
-                    // position below.
+                    // one's. Keep the ink read scoped to the visible strip.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -722,7 +715,7 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
-                        region = headerRegion,
+                        region = bounds,
                         cache = newSlotCache,
                         exactCardBounds = true,
                         inkRegion = headerRegion
@@ -730,17 +723,9 @@ class GameStateDetector(
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
-                            // Same oversized-crop problem as the recognizeCached
-                            // call above: resolveCardSuitWithTrace crops bitmap
-                            // at whatever region it's given to run the black/red
-                            // suit tie-break, independently of the crop already
-                            // used above. Passing full-cardHeight bounds here let
-                            // covering-card content corrupt the shape heuristic
-                            // for exactly the ambiguous cases this refinement
-                            // exists to resolve.
                             val (resolved, trace) = resolveCardSuitWithTrace(
                                 bitmap,
-                                headerRegion,
+                                bounds,
                                 requireNotNull(slotCard),
                                 slotHit.trace
                             )
