@@ -43,7 +43,18 @@ data class BoardGeometryProfile(
     // 0.28 puts 38 of 179 slots more than half a card off (mean error
     // 16.9px); 0.2537 puts 1 of 179 off (mean error 1.0px).
     val faceUpOverlap: Float = 0.2537f,
-    val faceDownOverlap: Float = 0.23f
+    // Never got the same empirical pass as faceUpOverlap above - still had the
+    // old guessed value. Measured the same way (teal-back transition spacing
+    // this time, cleaner than glyph ink since it's one saturated color with no
+    // per-rank shape variance): 0.23 (44.34px) undershoots the true ~49px
+    // step by ~4.6px per face-down card. Since firstFaceTop for the face-up
+    // cascade is columnRegion.top + faceDownCount * downStep, that error
+    // accumulates through the face-down run and gets carried into every card
+    // below it - a 3-deep face-down stack was enough to misread the exposed
+    // card 5+ slots into the cascade (e.g. Eight of Diamonds read as the
+    // Seven of Clubs sitting right below it). True face-down spacing measured
+    // the same as face-up: reuse 0.2537.
+    val faceDownOverlap: Float = 0.2537f
 )
 
 data class LocatedBoard(
