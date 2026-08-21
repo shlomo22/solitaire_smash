@@ -51,6 +51,10 @@ class CardRecognizer(
     private val minConfidence: Float = 0.65f
 ) {
     private val bitmapRankTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
+    // Same rank templates, content-cropped before the 48x48 ink-mask resample.
+    // Only used for trimmedToVisibleStrip cascade cards - see the comment on
+    // tightContentCrop for why the untrimmed templates don't work there.
+    private val bitmapRankTemplatesTrimmed = mutableMapOf<Rank, MutableList<LongArray>>()
     private val bitmapSuitTemplates = mutableMapOf<Suit, MutableList<LongArray>>()
     private val rankTemplates = mutableMapOf<Rank, Mat>()
     private val suitTemplates = mutableMapOf<Suit, MutableList<Mat>>()
@@ -69,6 +73,7 @@ class CardRecognizer(
         loaded = true
         Rank.entries.forEach { rank ->
             val templates = mutableListOf<LongArray>()
+            val trimmedTemplates = mutableListOf<LongArray>()
             val prefix = "rank_${rank.name.lowercase()}"
             val templateNames = context.assets.list("templates")
                 .orEmpty()
@@ -81,10 +86,14 @@ class CardRecognizer(
             templateNames.forEach { name ->
                 loadBitmap("templates/$name")?.let { bitmap ->
                     templates += inkMask(bitmap)
+                    val tight = tightContentCrop(bitmap)
+                    trimmedTemplates += inkMask(tight)
+                    if (tight !== bitmap) tight.recycle()
                     bitmap.recycle()
                 }
             }
             if (templates.isNotEmpty()) bitmapRankTemplates[rank] = templates
+            if (trimmedTemplates.isNotEmpty()) bitmapRankTemplatesTrimmed[rank] = trimmedTemplates
         }
         Suit.entries.forEach { suit ->
             val prefix = "suit_${suit.name.lowercase()}"
@@ -763,6 +772,7 @@ class CardRecognizer(
         emptyTemplate?.release()
         faceDownTemplate?.release()
         bitmapRankTemplates.clear()
+        bitmapRankTemplatesTrimmed.clear()
         bitmapSuitTemplates.clear()
         rankTemplates.clear()
         suitTemplates.clear()
@@ -953,11 +963,20 @@ class CardRecognizer(
             // tall glyph like "8" measured using close to the full trimmed
             // strip while "6" needed noticeably less - maxOf over template
             // scores lets either framing win.
+            // The 50%-width ROI above is deliberately wider than the digit
+            // itself (keeps the suit pip out); inkMask then stretches that
+            // extra whitespace right along with the digit into the 48x48
+            // grid, shrinking the digit's relative size compared to the
+            // snugly-cropped rank templates. Content-crop to the digit's own
+            // ink before the resample so both sides get framed the same way
+            // - see tightContentCrop for the measured before/after.
             val w = (crop.width * 0.50f).toInt().coerceIn(8, crop.width)
             for (hFraction in listOf(0.70f, 0.90f)) {
                 val h = (crop.height * hFraction).toInt().coerceIn(8, crop.height)
                 val roi = Bitmap.createBitmap(crop, 0, 0, w, h)
-                sourceMasks += inkMask(roi)
+                val tight = tightContentCrop(roi)
+                sourceMasks += inkMask(tight)
+                if (tight !== roi) tight.recycle()
                 roi.recycle()
             }
             return sourceMasks
@@ -989,9 +1008,10 @@ class CardRecognizer(
         exactCardBounds: Boolean,
         trimmedToVisibleStrip: Boolean = false
     ): Map<Rank, Float> {
-        if (bitmapRankTemplates.isEmpty()) return emptyMap()
+        val templates = if (trimmedToVisibleStrip) bitmapRankTemplatesTrimmed else bitmapRankTemplates
+        if (templates.isEmpty()) return emptyMap()
         val sourceMasks = rankSourceMasks(crop, exactCardBounds, trimmedToVisibleStrip)
-        return bitmapRankTemplates.mapValues { (_, templateMasks) ->
+        return templates.mapValues { (_, templateMasks) ->
             templateMasks.maxOf { templateMask ->
                 sourceMasks.maxOf { source -> maskScore(source, templateMask) }
             }
@@ -1758,6 +1778,55 @@ class CardRecognizer(
             return null
         }
         return top
+    }
+
+    /**
+     * Crop to the tight bounding box of ink pixels (with a small margin).
+     * inkMask always stretches whatever bitmap it's given to fill a 48x48
+     * grid, so two crops with different amounts of surrounding whitespace
+     * end up warping the same glyph to different relative sizes. Rank
+     * template PNGs are already snug around the digit (ink fills ~90% of
+     * the frame), but rankSourceMasks' trimmedToVisibleStrip ROI is
+     * deliberately wider than the digit (50% of card width, to keep the
+     * suit pip out) - the digit there only fills ~35-40% of the frame
+     * width. A real golden crop of "8" scored 0.50 against its own rank_eight
+     * template that way (tied for last among all ranks); content-cropping
+     * both sides to the same framing before the resample brought it to
+     * 0.89, a clear win over every other rank.
+     */
+    private fun tightContentCrop(bitmap: Bitmap, margin: Int = 2): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until height) {
+            val rowOffset = y * width
+            for (x in 0 until width) {
+                val c = pixels[rowOffset + x]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val isInk = SmashColorAnalyzer.isRedInk(r, g, b) ||
+                    SmashColorAnalyzer.isBlackInk(r, g, b) ||
+                    SmashColorAnalyzer.isGenericDarkInk(r, g, b)
+                if (isInk) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+        if (maxX < 0) return bitmap
+        val left = (minX - margin).coerceIn(0, width - 1)
+        val top = (minY - margin).coerceIn(0, height - 1)
+        val right = (maxX + margin + 1).coerceIn(left + 1, width)
+        val bottom = (maxY + margin + 1).coerceIn(top + 1, height)
+        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
     }
 
     private fun inkMask(bitmap: Bitmap): LongArray {
