@@ -43,18 +43,20 @@ data class BoardGeometryProfile(
     // 0.28 puts 38 of 179 slots more than half a card off (mean error
     // 16.9px); 0.2537 puts 1 of 179 off (mean error 1.0px).
     val faceUpOverlap: Float = 0.2537f,
-    // Never got the same empirical pass as faceUpOverlap above - still had the
-    // old guessed value. Measured the same way (teal-back transition spacing
-    // this time, cleaner than glyph ink since it's one saturated color with no
-    // per-rank shape variance): 0.23 (44.34px) undershoots the true ~49px
-    // step by ~4.6px per face-down card. Since firstFaceTop for the face-up
-    // cascade is columnRegion.top + faceDownCount * downStep, that error
-    // accumulates through the face-down run and gets carried into every card
-    // below it - a 3-deep face-down stack was enough to misread the exposed
-    // card 5+ slots into the cascade (e.g. Eight of Diamonds read as the
-    // Seven of Clubs sitting right below it). True face-down spacing measured
-    // the same as face-up: reuse 0.2537.
-    val faceDownOverlap: Float = 0.2537f
+    // Tried raising this to 0.2537 (matching faceUpOverlap) after measuring
+    // ~49px face-down card spacing via teal-back transitions across many
+    // golden samples - real signal, and it did eliminate a genuine deep-
+    // cascade misread (Eight of Diamonds read as the Seven of Clubs below
+    // it, from firstFaceTop drifting low after 0.23's per-card shortfall
+    // accumulated). But on-device it net-regressed accuracy (1011->1005):
+    // the last-face-down-to-first-face-up transition isn't spaced the same
+    // as the rest of the run, so the larger step pushed several first-
+    // exposed cards' check window back into the still-teal transition zone
+    // and misread them as still face-down. Reverted pending a fix that
+    // treats the down-to-up transition distance separately from the
+    // steady-state face-down repeat spacing, instead of one constant for
+    // both.
+    val faceDownOverlap: Float = 0.23f
 )
 
 data class LocatedBoard(
