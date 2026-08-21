@@ -86,9 +86,30 @@ class CardRecognizer(
             templateNames.forEach { name ->
                 loadBitmap("templates/$name")?.let { bitmap ->
                     templates += inkMask(bitmap)
-                    val tight = tightContentCrop(bitmap)
+                    // Cap to the top 75% of the template's own height before
+                    // tight-cropping, for the trimmed variant only. Queen's
+                    // template is a real outlier: its tail (Q vs O) makes it
+                    // ~13% taller than the other rank templates, but a
+                    // trimmed cascade card's source crop is hard-capped at
+                    // faceUpStep*0.9 in GameStateDetector and never has room
+                    // to show that tail at all - the real on-screen glyph
+                    // there is a plain oval with no visible tail. Comparing
+                    // that oval against a template that includes the tail
+                    // scored Queen behind Ace on a real golden crop; capping
+                    // the template to the achievable oval-only shape fixed
+                    // it (swept 1.0 down to 0.55: everything from 0.65-0.85
+                    // works, 0.55 breaks a different rank, so 0.75 sits with
+                    // margin on both sides).
+                    val cappedHeight = (bitmap.height * 0.75f).toInt().coerceAtLeast(8)
+                    val capped = if (cappedHeight < bitmap.height) {
+                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, cappedHeight)
+                    } else {
+                        bitmap
+                    }
+                    val tight = tightContentCrop(capped)
                     trimmedTemplates += inkMask(tight)
-                    if (tight !== bitmap) tight.recycle()
+                    if (tight !== capped) tight.recycle()
+                    if (capped !== bitmap) capped.recycle()
                     bitmap.recycle()
                 }
             }
