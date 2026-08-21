@@ -21,6 +21,7 @@ object DeckConstraintPass {
         var card: Card,
         val confidence: Float,
         val recognizedIndex: Int,
+        val originalDiagnostic: String,
         val debugNotes: MutableList<String> = mutableListOf()
     )
 
@@ -94,7 +95,8 @@ object DeckConstraintPass {
                 bounds = slot.bounds,
                 card = card.copy(rank = rank, suit = suit),
                 confidence = slot.confidence,
-                recognizedIndex = recognizedIndex
+                recognizedIndex = recognizedIndex,
+                originalDiagnostic = slot.diagnostic
             )
         }
         return entries
@@ -235,16 +237,23 @@ object DeckConstraintPass {
             resolvedIndices += group.map { it.recognizedIndex }
             // Confidence alone ties two independently-confident reads more
             // often than it should - a real duplicate King of Spades showed
-            // both slots at rank-ocr@0.62 while one's suit read was already
+            // both slots at rank-ocr@0.62 with one's suit read originally
             // flagged suitAmbiguous (its own black-tiebreak had bailed to
-            // "ambiguous") and the other's wasn't. sortedByDescending is
-            // stable, so a tie silently kept whichever slot happened to come
-            // first in column order and reassigned the other - in that case
-            // the wrong one, since the non-ambiguous read was the reliable
-            // one. Prefer keeping non-ambiguous reads untouched; only fall
-            // back to raw confidence within the same ambiguity tier.
+            // "ambiguous") and the other's not. card.suitAmbiguous itself
+            // isn't safe to compare here: GameStateDetector re-resolves black
+            // suits a second time later in the pipeline (cascade cards get a
+            // fresh black-tiebreak2 pass), which can clear or set the flag
+            // *after* this diagnostic string was frozen - in the real case
+            // both entries' suitAmbiguous had converged to false by the time
+            // this pass saw them, so that comparison was a dead tie and fell
+            // through to column order, silently keeping the wrong one. The
+            // diagnostic string is the immutable record of the original
+            // best-match call, so use its "-ambiguous" suffix directly.
+            // sortedByDescending is stable, so within a tie fall back to
+            // whatever card.suitAmbiguous still shows, then raw confidence.
             val sortedGroup = group.sortedWith(
-                compareByDescending<Entry> { !it.card.suitAmbiguous }
+                compareByDescending<Entry> { !it.originalDiagnostic.contains("-ambiguous") }
+                    .thenByDescending { !it.card.suitAmbiguous }
                     .thenByDescending { it.confidence }
             )
             sortedGroup.first().debugNotes += "dedup-kept:ambiguous=${sortedGroup.first().card.suitAmbiguous}," +
