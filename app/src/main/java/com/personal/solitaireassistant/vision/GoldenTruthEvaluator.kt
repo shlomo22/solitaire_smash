@@ -271,6 +271,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = null,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -291,6 +292,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = detected,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -343,6 +345,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = detected,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -355,6 +358,7 @@ object GoldenTruthEvaluator {
         sampleId: String,
         truthSlot: GoldenSlot,
         detected: RecognizedSlot?,
+        allDetected: List<RecognizedSlot> = emptyList(),
         bitmap: Bitmap,
         detector: GameStateDetector
     ): String {
@@ -366,24 +370,19 @@ object GoldenTruthEvaluator {
         }
         val parts = mutableListOf("$sampleId ${truthSlot.pile} $label")
         if (detected != null) {
-            val rankPart = buildString {
-                append("rank=")
-                append(detected.trace.rankSource ?: "?")
-                detected.trace.rankScore?.let { append("@${"%.2f".format(it)}") }
-                detected.trace.rankTemplates?.let { append(" {$it}") }
-            }
-            parts += rankPart
-            val suitPart = buildString {
-                append("suit=")
-                append(detected.trace.suitSource ?: "?")
-                detected.trace.suitScore?.let { append("@${"%.2f".format(it)}") }
-                detected.trace.suitTemplates?.let { append(" {$it}") }
-            }
-            parts += suitPart
-            if (detected.trace.postSteps.isNotEmpty()) {
-                parts += "post=[${detected.trace.postSteps.joinToString("; ")}]"
-            }
-            parts += "diag=${detected.diagnostic}"
+            parts += formatSlotTraceParts(detected)
+        }
+        // A detected slot the evaluator excludes as unreliable (inferred=true,
+        // see findMatchingSlot) is invisible above: a MISSING truth slot shows
+        // nothing about what the real recognizer saw at that position, and an
+        // occupancy/rank/suit mismatch shows only the wrong neighboring slot
+        // it fell back to instead. Surface the nearest excluded candidate's
+        // own trace too, so a rejected-but-real attempt (low confidence,
+        // unresolved rank, ambiguous suit) can be told apart from a position
+        // with no attempt at all. Purely diagnostic - findMatchingSlot still
+        // ignores inferred slots for scoring, so this cannot change results.
+        findNearestInferredSlot(allDetected, truthSlot)?.let { inferredSlot ->
+            parts += "inferred=[${formatSlotTraceParts(inferredSlot).joinToString(" | ")}]"
         }
         if (expected.kind == SlotKind.FaceUp) {
             val probe = if (truthSlot.pile == "waste") {
@@ -396,6 +395,27 @@ object GoldenTruthEvaluator {
         return parts.joinToString(" | ")
     }
 
+    private fun formatSlotTraceParts(slot: RecognizedSlot): List<String> {
+        val rankPart = buildString {
+            append("rank=")
+            append(slot.trace.rankSource ?: "?")
+            slot.trace.rankScore?.let { append("@${"%.2f".format(it)}") }
+            slot.trace.rankTemplates?.let { append(" {$it}") }
+        }
+        val suitPart = buildString {
+            append("suit=")
+            append(slot.trace.suitSource ?: "?")
+            slot.trace.suitScore?.let { append("@${"%.2f".format(it)}") }
+            slot.trace.suitTemplates?.let { append(" {$it}") }
+        }
+        val parts = mutableListOf(rankPart, suitPart)
+        if (slot.trace.postSteps.isNotEmpty()) {
+            parts += "post=[${slot.trace.postSteps.joinToString("; ")}]"
+        }
+        parts += "diag=${slot.diagnostic}"
+        return parts
+    }
+
     fun findMatchingSlot(
         detected: List<RecognizedSlot>,
         truth: GoldenSlot
@@ -405,6 +425,24 @@ object GoldenTruthEvaluator {
         val cy = truth.bounds.centerY
         return detected
             .filter { it.pile == pile && !it.inferred }
+            .minByOrNull { hypot(it.bounds.centerX - cx, it.bounds.centerY - cy) }
+            ?.takeIf { match ->
+                hypot(
+                    match.bounds.centerX - cx,
+                    match.bounds.centerY - cy
+                ) < MATCH_DISTANCE_PX
+            }
+    }
+
+    private fun findNearestInferredSlot(
+        detected: List<RecognizedSlot>,
+        truth: GoldenSlot
+    ): RecognizedSlot? {
+        val pile = runCatching { parsePileRefKey(truth.pile) }.getOrNull() ?: return null
+        val cx = truth.bounds.centerX
+        val cy = truth.bounds.centerY
+        return detected
+            .filter { it.pile == pile && it.inferred }
             .minByOrNull { hypot(it.bounds.centerX - cx, it.bounds.centerY - cy) }
             ?.takeIf { match ->
                 hypot(

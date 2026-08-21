@@ -767,10 +767,23 @@ class GameStateDetector(
                                 inferred = false
                             )
                         } else {
+                            // Keep the real attempt's own rank/suit/post trace instead
+                            // of discarding it to RecognitionTrace.EMPTY. Previously a
+                            // card that failed isReliableRead left zero information
+                            // about why - "inferred-cascade" masked whatever rank/suit
+                            // read and confidence actually got rejected, making these
+                            // cases undebuggable from analysis.log alone. Golden
+                            // matching still excludes inferred=true slots entirely
+                            // (GoldenTruthEvaluator.findMatchingSlot), so surfacing
+                            // this cannot change what gets scored - it only makes a
+                            // rejected read visible instead of invisible.
                             ResolvedCascadeSlot(
                                 card = geometricFallback,
-                                trace = RecognitionTrace.EMPTY,
-                                diagnostic = "inferred-cascade",
+                                trace = slotHit.trace.withPost(
+                                    "rejected:known=${slotCard?.known}," +
+                                        "conf=${"%.2f".format(slotHit.confidence)}"
+                                ),
+                                diagnostic = "inferred-cascade:${slotHit.diagnostic}",
                                 confidence = if (geometricFallback.known) 0.55f else 0.20f,
                                 inferred = true
                             )
