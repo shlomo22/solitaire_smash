@@ -207,7 +207,20 @@ object DeckConstraintPass {
         val used = entries.map { it.card.id }.toMutableSet()
         val byId = entries.groupBy { it.card.id }
         byId.filter { it.value.size > 1 }.forEach { (_, group) ->
-            group.sortedByDescending { it.confidence }.drop(1).forEach { entry ->
+            // Confidence alone ties two independently-confident reads more
+            // often than it should - a real duplicate King of Spades showed
+            // both slots at rank-ocr@0.62 while one's suit read was already
+            // flagged suitAmbiguous (its own black-tiebreak had bailed to
+            // "ambiguous") and the other's wasn't. sortedByDescending is
+            // stable, so a tie silently kept whichever slot happened to come
+            // first in column order and reassigned the other - in that case
+            // the wrong one, since the non-ambiguous read was the reliable
+            // one. Prefer keeping non-ambiguous reads untouched; only fall
+            // back to raw confidence within the same ambiguity tier.
+            group.sortedWith(
+                compareByDescending<Entry> { !it.card.suitAmbiguous }
+                    .thenByDescending { it.confidence }
+            ).drop(1).forEach { entry ->
                 val oldId = entry.card.id
                 val replacement = bestAlternateAssignment(
                     bitmap = bitmap,
