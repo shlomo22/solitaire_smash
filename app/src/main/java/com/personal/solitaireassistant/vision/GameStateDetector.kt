@@ -802,6 +802,7 @@ class GameStateDetector(
                             engine = slotGuessFromCard(cascadeCard),
                             confidence = cascadeConfidence,
                             diagnostic = cascadeDiagnostic,
+                            trace = cascadeTrace,
                             inferred = true
                         )
                     } else {

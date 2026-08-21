@@ -102,6 +102,14 @@ object GoldenTruthEvaluator {
         samples.forEach { sample ->
             val bitmap = store.loadBitmap(sample.id) ?: return@forEach
             try {
+                // Samples are independent snapshots, not consecutive frames of one
+                // game - detector.detect() otherwise reuses recognizeCached's
+                // frame-to-frame slotHitCache across them, which is correct for
+                // the live capture pipeline (same board, unchanged regions) but
+                // wrong here: a coincidental fingerprint+bounds match against an
+                // unrelated earlier sample would silently serve that sample's
+                // stale hit instead of genuinely recognizing this one.
+                detector.clearSlotCache()
                 compareSample(
                     sample = sample,
                     bitmap = bitmap,
@@ -162,6 +170,9 @@ object GoldenTruthEvaluator {
         val mismatches = mutableListOf<String>()
         val mismatchDiagnostics = mutableListOf<String>()
         samples.forEach { (sample, bitmap) ->
+            // See the matching comment in evaluate(store, detector) above: these
+            // are independent snapshots, not consecutive frames of one game.
+            detector.clearSlotCache()
             compareSample(
                 sample = sample,
                 bitmap = bitmap,
