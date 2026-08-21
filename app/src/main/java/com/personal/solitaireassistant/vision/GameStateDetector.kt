@@ -600,13 +600,31 @@ class GameStateDetector(
                 val geometricFaceUpCount = faceUpCount
                 var cascadeRankCountNote = "n/a"
                 if (card.known) {
-                    // Only the top faceUpStep sliver below firstFaceTop is
-                    // actually this card — the rest of a full cardHeight box is
-                    // covered by the card(s) stacked on top of it. Recognize
-                    // from this trimmed strip directly, not just its ink color
-                    // (see rankSourceMasks' trimmedToVisibleStrip branch for
-                    // why width, not height, was the real bug in three earlier
-                    // attempts here).
+                    val leadingRegion = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                    )
+                    // Only the top faceUpStep sliver of leadingRegion is actually
+                    // this card — the rest is covered by the card(s) stacked on
+                    // top of it. Feed the ink-color read only that visible strip
+                    // so the covering card's color can't leak into inkRed.
+                    //
+                    // leadingRegion itself stays full cardHeight: a fifth
+                    // attempt trimmed it down (matching leadingHeaderRegion)
+                    // and a real device log showed FaceUp->FaceDown mismatches
+                    // spike (Occupancy 9->29, Missing 1->18) - the coarse
+                    // looksFaceDown/looksEmpty color gates in recognize() run
+                    // on this same region's stats, and a few pixels of teal
+                    // bleed from the covering card at the boundary is a much
+                    // larger fraction of a ~44px strip than of a ~193px card,
+                    // tipping genuinely face-up cards into the face-down gate.
+                    // trimmedToVisibleStrip (passed below) tells recognize() to
+                    // derive its own smaller sub-crop internally, from
+                    // leadingRegion's already-correct crop, using inkRegion's
+                    // proportions - narrower fix than trimming the region the
+                    // color gates see.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -618,7 +636,7 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
-                        region = leadingHeaderRegion,
+                        region = leadingRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
                         inkRegion = leadingHeaderRegion,
@@ -701,9 +719,13 @@ class GameStateDetector(
                     // Same overlap problem as the leading card: bounds reaches
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
-                    // one's. Recognize from the visible strip directly. Keep
-                    // `bounds` (full cardHeight) only for this slot's
-                    // displayed/click position below.
+                    // one's. Keep `bounds` (full cardHeight) as the region
+                    // recognizeCached sees - trimming it made the coarse
+                    // looksFaceDown color gate misfire on genuinely face-up
+                    // cards (see the leading-card comment above). Only
+                    // trimmedToVisibleStrip + inkRegion tell recognize() to
+                    // build its own smaller sub-crop internally for rank
+                    // matching specifically.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -715,7 +737,7 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
-                        region = headerRegion,
+                        region = bounds,
                         cache = newSlotCache,
                         exactCardBounds = true,
                         inkRegion = headerRegion,

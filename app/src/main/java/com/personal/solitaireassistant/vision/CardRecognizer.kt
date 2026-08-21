@@ -337,6 +337,30 @@ class CardRecognizer(
         if (openCvReady) {
             val crop = crop(bitmap, region)
             if (crop != null) {
+                // region/crop stay full cardHeight so the coarse color gates
+                // above (looksFaceDown/looksEmpty/looksFaceUp) keep seeing a
+                // full card's worth of pixels - trimming region itself made
+                // those gates misfire on genuinely face-up cascade cards
+                // (boundary bleed from the covering card is a much bigger
+                // fraction of a ~44px strip than of a ~193px card). Rank
+                // matching still needs the covering card's content kept out,
+                // so derive a separate, shorter bitmap here from inkRegion's
+                // already-correct boundaries (expressed as a fraction of
+                // crop's own height) and use it only for rank scoring, not
+                // suit or the color gates.
+                var rankCrop: Bitmap? = null
+                val effectiveRankCrop = if (trimmedToVisibleStrip && inkRegion != null && region.height > 0f) {
+                    val heightFraction =
+                        ((inkRegion.bottom - inkRegion.top) / region.height).coerceIn(0.05f, 1f)
+                    val h = (crop.height * heightFraction).toInt().coerceIn(8, crop.height)
+                    if (h < crop.height) {
+                        Bitmap.createBitmap(crop, 0, 0, crop.width, h).also { rankCrop = it }
+                    } else {
+                        crop
+                    }
+                } else {
+                    crop
+                }
                 try {
                     // Never override a clear white face-up with the face-down template —
                     // on-device logs showed foundations matching face-down-template.
@@ -359,7 +383,8 @@ class CardRecognizer(
                     val suitCandidates = suitCandidatesForInk(inkRed)
                     val suitSourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
                     val suitScoreMap = suitScoresFromMasks(suitSourceMasks, suitCandidates)
-                    val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds, trimmedToVisibleStrip)
+                    val rankScoreMap =
+                        rankTemplateScoreMap(effectiveRankCrop, exactCardBounds, trimmedToVisibleStrip)
                     val (suit, suitTraceRaw) =
                         inferSuitWithTrace(crop, inkRed, suitScoreMap, suitSourceMasks)
                     // Diagnostic-only: expose the raw whole-card ink ratio behind
@@ -371,7 +396,8 @@ class CardRecognizer(
                             (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap, trimmedToVisibleStrip)
+                    val rankResolution =
+                        resolveRankFromCrop(effectiveRankCrop, rankScoreMap, trimmedToVisibleStrip)
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -474,6 +500,7 @@ class CardRecognizer(
                         )
                     }
                 } finally {
+                    rankCrop?.takeUnless { it.isRecycled }?.recycle()
                     if (!crop.isRecycled) crop.recycle()
                 }
             }
@@ -481,16 +508,36 @@ class CardRecognizer(
 
         // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
         val crop = crop(bitmap, region)
+        var rankCropFallback: Bitmap? = null
         try {
             // Same reasoning as the OpenCV path above: trust the ink-region
             // gate here too instead of always scoring all 4 suits.
             val suitCandidates = suitCandidatesForInk(inkRed)
             val suitSourceMasks = crop?.let { suitBadgeMasks(it, preferLocatedBadge = true) }
+            // Same region/crop-stays-full-height reasoning as the OpenCV path
+            // above - derive a separate shorter bitmap for rank matching only.
+            val effectiveRankCrop = if (crop != null &&
+                trimmedToVisibleStrip && inkRegion != null && region.height > 0f
+            ) {
+                val heightFraction =
+                    ((inkRegion.bottom - inkRegion.top) / region.height).coerceIn(0.05f, 1f)
+                val h = (crop.height * heightFraction).toInt().coerceIn(8, crop.height)
+                if (h < crop.height) {
+                    Bitmap.createBitmap(crop, 0, 0, crop.width, h).also { rankCropFallback = it }
+                } else {
+                    crop
+                }
+            } else {
+                crop
+            }
             val rankScoreMap =
-                crop?.let { rankTemplateScoreMap(it, exactCardBounds, trimmedToVisibleStrip) }.orEmpty()
+                effectiveRankCrop?.let { rankTemplateScoreMap(it, exactCardBounds, trimmedToVisibleStrip) }
+                    .orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap, trimmedToVisibleStrip) }
+            val rankResolution = effectiveRankCrop?.let {
+                resolveRankFromCrop(it, rankScoreMap, trimmedToVisibleStrip)
+            }
             val rank = rankResolution?.rank
             val bitmapSuit = if (crop != null && suitSourceMasks != null) {
                 bestBitmapSuit(crop, inkRed, suitSourceMasks)
@@ -606,6 +653,7 @@ class CardRecognizer(
                 trace = trace
             )
         } finally {
+            rankCropFallback?.takeUnless { it.isRecycled }?.recycle()
             crop?.takeUnless { it.isRecycled }?.recycle()
         }
     }
