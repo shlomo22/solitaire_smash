@@ -88,6 +88,57 @@ fun SettingsScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Text("Golden truth", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Capture boards, confirm every recognized card, then evaluate after recognizer tweaks.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text("Saved samples: ${state.goldenCount}")
+                Text(
+                    "Folder: ${state.goldenPath.ifBlank { "(unavailable)" }}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Pull: adb exec-out run-as com.personal.solitaireassistant ls files/golden",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onSnapshotBoard,
+                        modifier = Modifier.weight(1f),
+                        enabled = serviceStatus is CaptureService.Status.Running
+                    ) {
+                        Text("Snapshot board")
+                    }
+                    OutlinedButton(
+                        onClick = onEvaluateGolden,
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.evaluating && state.goldenCount > 0
+                    ) {
+                        Text(if (state.evaluating) "Evaluating…" else "Evaluate")
+                    }
+                }
+                if (state.evalReport.isNotBlank()) {
+                    Text(
+                        state.evalReport,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text("Status", style = MaterialTheme.typography.titleMedium)
                 Text("Service: ${serviceStatus::class.simpleName}")
                 Text(statusMessage)
@@ -163,57 +214,6 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.debugSaveFrames,
                         onCheckedChange = onDebugFrames
-                    )
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            tonalElevation = 2.dp
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Golden truth", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Capture boards, confirm every recognized card, then evaluate after recognizer tweaks.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text("Saved samples: ${state.goldenCount}")
-                Text(
-                    "Folder: ${state.goldenPath.ifBlank { "(unavailable)" }}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    "Pull: adb exec-out run-as com.personal.solitaireassistant ls files/golden",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = onSnapshotBoard,
-                        modifier = Modifier.weight(1f),
-                        enabled = serviceStatus is CaptureService.Status.Running
-                    ) {
-                        Text("Snapshot board")
-                    }
-                    OutlinedButton(
-                        onClick = onEvaluateGolden,
-                        modifier = Modifier.weight(1f),
-                        enabled = !state.evaluating && state.goldenCount > 0
-                    ) {
-                        Text(if (state.evaluating) "Evaluating…" else "Evaluate")
-                    }
-                }
-                if (state.evalReport.isNotBlank()) {
-                    Text(
-                        state.evalReport,
-                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
