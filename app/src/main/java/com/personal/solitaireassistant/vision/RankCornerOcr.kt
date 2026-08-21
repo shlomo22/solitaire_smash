@@ -104,12 +104,17 @@ class RankCornerOcr {
             val (widthFraction, heightFraction) = when (profile) {
                 CornerRoiProfile.DEFAULT -> 0.35f to 0.25f
                 CornerRoiProfile.WASTE -> 0.45f to 0.32f
-                // Same width/height fractions validated for rankSourceMasks'
-                // trimmedToVisibleStrip branch against real golden pixels:
-                // digit ink always ends by ~30% of card width with the pip
-                // not starting before ~71%, and a tall glyph like "8" needed
-                // close to the full trimmed strip's height.
-                CornerRoiProfile.TRIMMED -> 0.50f to 0.90f
+                // Width fraction validated for rankSourceMasks' trimmedToVisibleStrip
+                // branch against real golden pixels: digit ink always ends by ~30%
+                // of card width with the pip not starting before ~71%. Height uses
+                // the full available crop (>=1.0 always clamps to h via coerceIn
+                // below) rather than rankSourceMasks' own 0.90: a side-by-side pixel
+                // crop of a real "10" showed 0.90 clipping the bottom of the digit,
+                // which template matching tolerates but ML Kit's text detector does
+                // not - the caller's effectiveRankCrop already keeps a safety margin
+                // before the covering card (inkRegion = faceUpStep*0.9), so there is
+                // no need for OCR's own ROI to shrink further inside that.
+                CornerRoiProfile.TRIMMED -> 0.50f to 1.0f
                 CornerRoiProfile.DIRECT -> return null
             }
             val roiW = (w * widthFraction).toInt().coerceIn(8, w)
