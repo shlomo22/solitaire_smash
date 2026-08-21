@@ -1780,13 +1780,16 @@ class CardRecognizer(
         return top
     }
 
+    private class InkComponent(var size: Int, var left: Int, var top: Int, var right: Int, var bottom: Int)
+
     /**
-     * Crop to the largest connected blob of ink pixels (with a small margin).
-     * inkMask always stretches whatever bitmap it's given to fill a 48x48
-     * grid, so two crops with different amounts of surrounding whitespace
-     * end up warping the same glyph to different relative sizes. Rank
-     * template PNGs are already snug around the digit (ink fills ~90% of
-     * the frame), but rankSourceMasks' trimmedToVisibleStrip ROI is
+     * Crop to the union of "significant" connected ink blobs (with a small
+     * margin) - components at least sizeThreshold of the largest one's pixel
+     * count. inkMask always stretches whatever bitmap it's given to fill a
+     * 48x48 grid, so two crops with different amounts of surrounding
+     * whitespace end up warping the same glyph to different relative sizes.
+     * Rank template PNGs are already snug around the digit (ink fills ~90%
+     * of the frame), but rankSourceMasks' trimmedToVisibleStrip ROI is
      * deliberately wider than the digit (50% of card width, to keep the
      * suit pip out) - the digit there only fills ~35-40% of the frame
      * width. A real golden crop of "8" scored 0.50 against its own rank_eight
@@ -1794,17 +1797,21 @@ class CardRecognizer(
      * both sides to the same framing before the resample brought it to
      * 0.89, a clear win over every other rank.
      *
-     * Bounding-box-of-all-ink was the first attempt and it regressed a
-     * different real card: a single stray red pixel bled in from the card
-     * above at the very top of the ROI, and the box stretched to include it,
-     * reintroducing the same "digit doesn't fill the frame" problem this
-     * function exists to fix - just from contamination instead of margin.
-     * Isolating the single largest connected ink component before taking its
-     * bounding box ignores that kind of small, disconnected speck while
-     * still capturing the whole digit (whose strokes are one connected
-     * blob).
+     * Two earlier attempts here were both wrong in opposite directions.
+     * Bounding-box-of-all-ink regressed a real card: a single stray red
+     * pixel bled in from the card above at the very top of the ROI, and the
+     * box stretched to include it, reintroducing the "digit doesn't fill
+     * the frame" problem this function exists to fix - just from
+     * contamination instead of margin. Switching to the single largest
+     * connected component fixed that, but broke "10" - Solitaire's only
+     * two-character rank - because "1" and "0" are two separate components
+     * with no touching pixels, and "1" alone has more ink than the (thinner,
+     * ring-shaped) "0", so the single-largest rule silently dropped "0"
+     * entirely, leaving just a bare "1" to match against. A size-relative
+     * threshold keeps both real digit strokes (comparable sizes) while still
+     * discarding a stray speck (a handful of pixels next to a whole digit).
      */
-    private fun tightContentCrop(bitmap: Bitmap, margin: Int = 2): Bitmap {
+    private fun tightContentCrop(bitmap: Bitmap, margin: Int = 2, sizeThreshold: Float = 0.20f): Bitmap {
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
@@ -1820,11 +1827,7 @@ class CardRecognizer(
                 SmashColorAnalyzer.isGenericDarkInk(r, g, b)
         }
         val visited = BooleanArray(width * height)
-        var bestSize = 0
-        var bestLeft = -1
-        var bestTop = -1
-        var bestRight = -1
-        var bestBottom = -1
+        val components = mutableListOf<InkComponent>()
         val queueX = IntArray(width * height)
         val queueY = IntArray(width * height)
         for (startY in 0 until height) {
@@ -1867,16 +1870,24 @@ class CardRecognizer(
                         }
                     }
                 }
-                if (size > bestSize) {
-                    bestSize = size
-                    bestLeft = minX
-                    bestTop = minY
-                    bestRight = maxX
-                    bestBottom = maxY
-                }
+                components += InkComponent(size, minX, minY, maxX, maxY)
             }
         }
-        if (bestSize == 0) return bitmap
+        if (components.isEmpty()) return bitmap
+        val maxSize = components.maxOf { it.size }
+        val minKeptSize = maxSize * sizeThreshold
+        var bestLeft = width
+        var bestTop = height
+        var bestRight = -1
+        var bestBottom = -1
+        components.forEach { component ->
+            if (component.size >= minKeptSize) {
+                if (component.left < bestLeft) bestLeft = component.left
+                if (component.top < bestTop) bestTop = component.top
+                if (component.right > bestRight) bestRight = component.right
+                if (component.bottom > bestBottom) bestBottom = component.bottom
+            }
+        }
         val left = (bestLeft - margin).coerceIn(0, width - 1)
         val top = (bestTop - margin).coerceIn(0, height - 1)
         val right = (bestRight + margin + 1).coerceIn(left + 1, width)
