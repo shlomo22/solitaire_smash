@@ -38,8 +38,8 @@ object DeckConstraintPass {
             return state
         }
 
-        resolveDuplicateCardIds(bitmap, recognizer, entries)
-        resolvePartnerSuitSwaps(bitmap, recognizer, entries)
+        val resolvedByDedup = resolveDuplicateCardIds(bitmap, recognizer, entries)
+        resolvePartnerSuitSwaps(bitmap, recognizer, entries, resolvedByDedup)
 
         entries.forEach { entry ->
             setCard(tableau, foundations, waste, entry.pile, entry.cardIndex, entry.card)
@@ -94,12 +94,23 @@ object DeckConstraintPass {
     private fun resolvePartnerSuitSwaps(
         bitmap: Bitmap,
         recognizer: CardRecognizer,
-        entries: MutableList<Entry>
+        entries: MutableList<Entry>,
+        resolvedByDedup: Set<Int>
     ) {
         entries.groupBy { it.card.rank }.forEach { (_, group) ->
             if (group.size != 2) return@forEach
             val first = group[0]
             val second = group[1]
+            // resolveDuplicateCardIds already disambiguated this exact pair using
+            // the suitAmbiguous flag from the original read - a signal this pass
+            // doesn't have. Re-scoring from fresh template matches here was
+            // silently undoing that decision (real case: a duplicate King of
+            // Spades got correctly split into KC/KS by dedup, then swapped right
+            // back to the wrong pair by this pass using the same misleading raw
+            // scores that caused the duplicate in the first place).
+            if (first.recognizedIndex in resolvedByDedup || second.recognizedIndex in resolvedByDedup) {
+                return@forEach
+            }
             if (first.card.suit.isRed != second.card.suit.isRed) return@forEach
             if (first.card.suit == second.card.suit) return@forEach
 
@@ -203,10 +214,12 @@ object DeckConstraintPass {
         bitmap: Bitmap,
         recognizer: CardRecognizer,
         entries: MutableList<Entry>
-    ) {
+    ): Set<Int> {
         val used = entries.map { it.card.id }.toMutableSet()
         val byId = entries.groupBy { it.card.id }
+        val resolvedIndices = mutableSetOf<Int>()
         byId.filter { it.value.size > 1 }.forEach { (_, group) ->
+            resolvedIndices += group.map { it.recognizedIndex }
             // Confidence alone ties two independently-confident reads more
             // often than it should - a real duplicate King of Spades showed
             // both slots at rank-ocr@0.62 while one's suit read was already
@@ -235,6 +248,7 @@ object DeckConstraintPass {
                 entry.card = replacement
             }
         }
+        return resolvedIndices
     }
 
     private fun bestAlternateAssignment(
