@@ -1829,7 +1829,13 @@ class CardRecognizer(
             // resolveRankFromCrop comment on RankInkHeuristics for the
             // identical failure mode in a sibling heuristic.
             val center = if (trimmedToVisibleStrip) 0f else matchTemplate(crop, template, badgeOnly = false)
-            val badge = matchTemplate(crop, template, badgeOnly = true)
+            val badge = if (trimmedToVisibleStrip) {
+                listOf(0.70f, 0.90f).maxOf { fraction ->
+                    matchTemplate(crop, template, badgeOnly = true, badgeHeightFraction = fraction)
+                }
+            } else {
+                matchTemplate(crop, template, badgeOnly = true)
+            }
             val score = max(center, badge)
             when {
                 best == null || score > best.second -> {
@@ -1862,7 +1868,20 @@ class CardRecognizer(
         crop: Bitmap,
         template: Mat,
         badgeOnly: Boolean,
-        suitPip: Boolean = false
+        suitPip: Boolean = false,
+        // matchTemplate's badgeOnly ROI (h=42% of crop) is calibrated for a
+        // full ~193px card's corner badge. On an already-trimmed ~44-54px
+        // cascade-card crop (bestRank's only trimmedToVisibleStrip caller),
+        // 42% shrinks to ~18-23px - often too short for the rank digit. This
+        // silently starved bestRank of any usable score for cascade cards
+        // (confirmed via a fresh device log: rankScoreMap - a separate,
+        // already-fixed ink-mask path - had real if noisy candidates, but
+        // bestRank's own score stayed empty, so needsOcrTiebreak saw no
+        // candidates at all and never even tried OCR). Same fractions
+        // rankSourceMasks already validated against real golden pixels: a
+        // tall glyph like "8" needs close to the full trimmed strip, "6"
+        // needs noticeably less - callers try both and take the max.
+        badgeHeightFraction: Float = 0.42f
     ): Float {
         val src = Mat()
         val gray = Mat()
@@ -1888,7 +1907,7 @@ class CardRecognizer(
                 )
             } else if (badgeOnly) {
                 val w = (gray.cols() * 0.50).toInt().coerceAtLeast(8)
-                val h = (gray.rows() * 0.42).toInt().coerceAtLeast(8)
+                val h = (gray.rows() * badgeHeightFraction).toInt().coerceAtLeast(8)
                 Mat(gray, Rect(0, 0, w.coerceAtMost(gray.cols()), h.coerceAtMost(gray.rows())))
             } else {
                 val x = (gray.cols() * 0.08).toInt()
