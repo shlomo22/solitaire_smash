@@ -1781,7 +1781,7 @@ class CardRecognizer(
     }
 
     /**
-     * Crop to the tight bounding box of ink pixels (with a small margin).
+     * Crop to the largest connected blob of ink pixels (with a small margin).
      * inkMask always stretches whatever bitmap it's given to fill a 48x48
      * grid, so two crops with different amounts of surrounding whitespace
      * end up warping the same glyph to different relative sizes. Rank
@@ -1793,39 +1793,94 @@ class CardRecognizer(
      * template that way (tied for last among all ranks); content-cropping
      * both sides to the same framing before the resample brought it to
      * 0.89, a clear win over every other rank.
+     *
+     * Bounding-box-of-all-ink was the first attempt and it regressed a
+     * different real card: a single stray red pixel bled in from the card
+     * above at the very top of the ROI, and the box stretched to include it,
+     * reintroducing the same "digit doesn't fill the frame" problem this
+     * function exists to fix - just from contamination instead of margin.
+     * Isolating the single largest connected ink component before taking its
+     * bounding box ignores that kind of small, disconnected speck while
+     * still capturing the whole digit (whose strokes are one connected
+     * blob).
      */
     private fun tightContentCrop(bitmap: Bitmap, margin: Int = 2): Bitmap {
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-        var minX = width
-        var minY = height
-        var maxX = -1
-        var maxY = -1
-        for (y in 0 until height) {
-            val rowOffset = y * width
-            for (x in 0 until width) {
-                val c = pixels[rowOffset + x]
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                val isInk = SmashColorAnalyzer.isRedInk(r, g, b) ||
-                    SmashColorAnalyzer.isBlackInk(r, g, b) ||
-                    SmashColorAnalyzer.isGenericDarkInk(r, g, b)
-                if (isInk) {
-                    if (x < minX) minX = x
-                    if (x > maxX) maxX = x
-                    if (y < minY) minY = y
-                    if (y > maxY) maxY = y
+        val ink = BooleanArray(width * height)
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            ink[i] = SmashColorAnalyzer.isRedInk(r, g, b) ||
+                SmashColorAnalyzer.isBlackInk(r, g, b) ||
+                SmashColorAnalyzer.isGenericDarkInk(r, g, b)
+        }
+        val visited = BooleanArray(width * height)
+        var bestSize = 0
+        var bestLeft = -1
+        var bestTop = -1
+        var bestRight = -1
+        var bestBottom = -1
+        val queueX = IntArray(width * height)
+        val queueY = IntArray(width * height)
+        for (startY in 0 until height) {
+            for (startX in 0 until width) {
+                val startIndex = startY * width + startX
+                if (!ink[startIndex] || visited[startIndex]) continue
+                var head = 0
+                var tail = 0
+                queueX[tail] = startX
+                queueY[tail] = startY
+                tail++
+                visited[startIndex] = true
+                var size = 0
+                var minX = startX
+                var minY = startY
+                var maxX = startX
+                var maxY = startY
+                while (head < tail) {
+                    val cx = queueX[head]
+                    val cy = queueY[head]
+                    head++
+                    size++
+                    if (cx < minX) minX = cx
+                    if (cx > maxX) maxX = cx
+                    if (cy < minY) minY = cy
+                    if (cy > maxY) maxY = cy
+                    for (dy in -1..1) {
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+                            val nx = cx + dx
+                            val ny = cy + dy
+                            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+                            val nIndex = ny * width + nx
+                            if (ink[nIndex] && !visited[nIndex]) {
+                                visited[nIndex] = true
+                                queueX[tail] = nx
+                                queueY[tail] = ny
+                                tail++
+                            }
+                        }
+                    }
+                }
+                if (size > bestSize) {
+                    bestSize = size
+                    bestLeft = minX
+                    bestTop = minY
+                    bestRight = maxX
+                    bestBottom = maxY
                 }
             }
         }
-        if (maxX < 0) return bitmap
-        val left = (minX - margin).coerceIn(0, width - 1)
-        val top = (minY - margin).coerceIn(0, height - 1)
-        val right = (maxX + margin + 1).coerceIn(left + 1, width)
-        val bottom = (maxY + margin + 1).coerceIn(top + 1, height)
+        if (bestSize == 0) return bitmap
+        val left = (bestLeft - margin).coerceIn(0, width - 1)
+        val top = (bestTop - margin).coerceIn(0, height - 1)
+        val right = (bestRight + margin + 1).coerceIn(left + 1, width)
+        val bottom = (bestBottom + margin + 1).coerceIn(top + 1, height)
         return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
     }
 
