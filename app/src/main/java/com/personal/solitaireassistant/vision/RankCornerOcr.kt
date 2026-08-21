@@ -31,7 +31,17 @@ class RankCornerOcr {
         /** Fanned waste cards: wider corner window for clipped rank glyphs. */
         WASTE,
         /** Region is already a rank-corner patch; skip inner ROI crop. */
-        DIRECT
+        DIRECT,
+        /**
+         * Caller already trimmed the crop down to a tableau cascade card's
+         * own visible header strip (well under half a full card's height).
+         * DEFAULT's 25% height fraction assumes a full ~193px card, which on
+         * an already-trimmed ~44-54px crop shrinks to ~11px - too short for
+         * ML Kit to read anything, which is why this profile's absence made
+         * the real recognition path silently OCR-miss on crops the
+         * diagnostic probe (run on full, untrimmed truth bounds) read fine.
+         */
+        TRIMMED
     }
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -94,6 +104,12 @@ class RankCornerOcr {
             val (widthFraction, heightFraction) = when (profile) {
                 CornerRoiProfile.DEFAULT -> 0.35f to 0.25f
                 CornerRoiProfile.WASTE -> 0.45f to 0.32f
+                // Same width/height fractions validated for rankSourceMasks'
+                // trimmedToVisibleStrip branch against real golden pixels:
+                // digit ink always ends by ~30% of card width with the pip
+                // not starting before ~71%, and a tall glyph like "8" needed
+                // close to the full trimmed strip's height.
+                CornerRoiProfile.TRIMMED -> 0.50f to 0.90f
                 CornerRoiProfile.DIRECT -> return null
             }
             val roiW = (w * widthFraction).toInt().coerceIn(8, w)

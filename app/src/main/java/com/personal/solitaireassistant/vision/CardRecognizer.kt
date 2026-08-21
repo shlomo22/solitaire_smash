@@ -822,7 +822,12 @@ class CardRecognizer(
         // rankSourceMasks/rankTemplateScoreMap.
         val glyph = if (trimmedToVisibleStrip) null else RankInkHeuristics.guess(crop)
         val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
-            rankCornerOcr?.attempt(crop)
+            val profile = if (trimmedToVisibleStrip) {
+                RankCornerOcr.CornerRoiProfile.TRIMMED
+            } else {
+                RankCornerOcr.CornerRoiProfile.DEFAULT
+            }
+            rankCornerOcr?.attempt(crop, profile)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
         } else {
             null
