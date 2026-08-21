@@ -862,7 +862,14 @@ class CardRecognizer(
     ): Boolean {
         if (bitmapHit != null && bitmapHit.second >= 0.68f) return false
         val candidates = rankCandidates(bitmapHit, rankHit, glyph)
-        if (candidates.isEmpty()) return false
+        // No template/glyph candidate at all is the strongest case for OCR,
+        // not the weakest - this used to decline it, treating "nothing to
+        // tiebreak" the same as "no need to tiebreak". A fresh device log
+        // showed dozens of trimmed cascade cards stuck at rank=null with no
+        // ocr= attempt anywhere in their trace, while the diagnostic-only
+        // probe (same card, untrimmed truth bounds) read the digit fine -
+        // the real pipeline's OCR was never even given a chance.
+        if (candidates.isEmpty()) return true
 
         val sorted = candidates.sortedByDescending { it.second }
         if (sorted[0].second < 0.68f) return true
