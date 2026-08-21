@@ -46,6 +46,14 @@ class RankCornerOcr {
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
+    // Tableau columns now recognize concurrently (GameStateDetector.detect's
+    // computeColumn), and this single ML Kit client is shared across all of
+    // them as a rare rank-tiebreak fallback. ML Kit's client isn't documented
+    // as safe for concurrent process() calls from multiple threads, so
+    // serialize access here rather than risk it - OCR is already the rare,
+    // non-hot path (only reached when template/glyph matching disagrees), so
+    // this costs nothing in the common case where no column needs it.
+    @Synchronized
     fun attempt(
         crop: Bitmap,
         profile: CornerRoiProfile = CornerRoiProfile.DEFAULT
