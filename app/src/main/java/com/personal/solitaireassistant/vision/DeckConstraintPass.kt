@@ -20,7 +20,8 @@ object DeckConstraintPass {
         val bounds: BoardRegion,
         var card: Card,
         val confidence: Float,
-        val recognizedIndex: Int
+        val recognizedIndex: Int,
+        val debugNotes: MutableList<String> = mutableListOf()
     )
 
     fun apply(
@@ -46,10 +47,18 @@ object DeckConstraintPass {
             val slot = recognizedSlots[entry.recognizedIndex]
             val beforeLabel = slot.engine.shortLabel()
             val afterLabel = slotGuessFromCard(entry.card).shortLabel()
-            val updatedTrace = if (beforeLabel != afterLabel) {
+            var updatedTrace = if (beforeLabel != afterLabel) {
                 slot.trace.withPost("deck-constraint:$beforeLabel->$afterLabel")
             } else {
                 slot.trace
+            }
+            // TEMP DIAGNOSTIC: surfaces which sub-pass actually decided this
+            // slot's final suit, since the combined before/after label above
+            // can't distinguish "dedup decided X, then partner-swap reverted
+            // it" from "neither pass touched this slot" - remove once the
+            // KC/KS regression is confirmed fixed on-device.
+            if (entry.debugNotes.isNotEmpty()) {
+                updatedTrace = updatedTrace.withPost("dbg:${entry.debugNotes.joinToString(",")}")
             }
             recognizedSlots[entry.recognizedIndex] = slot.copy(
                 engine = slotGuessFromCard(entry.card),
@@ -109,6 +118,8 @@ object DeckConstraintPass {
             // back to the wrong pair by this pass using the same misleading raw
             // scores that caused the duplicate in the first place).
             if (first.recognizedIndex in resolvedByDedup || second.recognizedIndex in resolvedByDedup) {
+                first.debugNotes += "partner-swap-skip(dedup)"
+                second.debugNotes += "partner-swap-skip(dedup)"
                 return@forEach
             }
             if (first.card.suit.isRed != second.card.suit.isRed) return@forEach
@@ -136,6 +147,8 @@ object DeckConstraintPass {
                 return@forEach
             }
 
+            first.debugNotes += "partner-swap-applied:direct=${"%.2f".format(direct)},swapped=${"%.2f".format(swapped)}"
+            second.debugNotes += "partner-swap-applied:direct=${"%.2f".format(direct)},swapped=${"%.2f".format(swapped)}"
             first.card = first.card.copy(suit = firstAlt, suitAmbiguous = false)
             second.card = second.card.copy(suit = secondAlt, suitAmbiguous = false)
         }
@@ -230,10 +243,13 @@ object DeckConstraintPass {
             // the wrong one, since the non-ambiguous read was the reliable
             // one. Prefer keeping non-ambiguous reads untouched; only fall
             // back to raw confidence within the same ambiguity tier.
-            group.sortedWith(
+            val sortedGroup = group.sortedWith(
                 compareByDescending<Entry> { !it.card.suitAmbiguous }
                     .thenByDescending { it.confidence }
-            ).drop(1).forEach { entry ->
+            )
+            sortedGroup.first().debugNotes += "dedup-kept:ambiguous=${sortedGroup.first().card.suitAmbiguous}," +
+                "conf=${"%.2f".format(sortedGroup.first().confidence)}"
+            sortedGroup.drop(1).forEach { entry ->
                 val oldId = entry.card.id
                 val replacement = bestAlternateAssignment(
                     bitmap = bitmap,
@@ -243,6 +259,7 @@ object DeckConstraintPass {
                     preferSameRank = true,
                     requireShapeAgreement = entry.pile is PileRef.Foundation
                 ) ?: entry.card.copy(suitAmbiguous = true)
+                entry.debugNotes += "dedup-reassigned:${entry.card.id}->${replacement.id}"
                 used.remove(oldId)
                 used.add(replacement.id)
                 entry.card = replacement
