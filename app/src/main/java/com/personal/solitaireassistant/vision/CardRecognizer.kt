@@ -371,7 +371,7 @@ class CardRecognizer(
                             (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap)
+                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap, trimmedToVisibleStrip)
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -490,7 +490,7 @@ class CardRecognizer(
                 crop?.let { rankTemplateScoreMap(it, exactCardBounds, trimmedToVisibleStrip) }.orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
+            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap, trimmedToVisibleStrip) }
             val rank = rankResolution?.rank
             val bitmapSuit = if (crop != null && suitSourceMasks != null) {
                 bestBitmapSuit(crop, inkRed, suitSourceMasks)
@@ -744,7 +744,8 @@ class CardRecognizer(
 
     private fun resolveRankFromCrop(
         crop: Bitmap,
-        rankScoreMap: Map<Rank, Float>
+        rankScoreMap: Map<Rank, Float>,
+        trimmedToVisibleStrip: Boolean = false
     ): RankResolution {
         val bitmapRankHit = bestBitmapRank(rankScoreMap)
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
@@ -759,8 +760,19 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = bestRank(crop)
-        val glyph = RankInkHeuristics.guess(crop)
+        val rankHit = bestRank(crop, trimmedToVisibleStrip)
+        // RankInkHeuristics.guess reads the large glyph in a card's CENTER -
+        // on a tableau cascade card trimmed to just its own ~45-54px visible
+        // header strip there is no center glyph, only the small corner digit
+        // (and mostly blank space below it). Its center-band math then lands
+        // on the bottom of that corner digit plus blank space, a shape that
+        // matches nothing real; the "Ten" rule is the loosest one it has
+        // (aspect>1.18, density 0.10-0.30, no other constraint), so it kept
+        // winning almost regardless of the true digit. This was the actual
+        // cause behind all four attempts at this bug so far - none of them
+        // touched this heuristic, which is entirely separate from
+        // rankSourceMasks/rankTemplateScoreMap.
+        val glyph = if (trimmedToVisibleStrip) null else RankInkHeuristics.guess(crop)
         val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
             rankCornerOcr?.attempt(crop)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
@@ -1750,12 +1762,20 @@ class CardRecognizer(
         return matchTemplate(crop, tmpl, badgeOnly = false) >= 0.72f
     }
 
-    private fun bestRank(crop: Bitmap): Pair<Rank, Float>? {
+    private fun bestRank(crop: Bitmap, trimmedToVisibleStrip: Boolean = false): Pair<Rank, Float>? {
         if (rankTemplates.isEmpty()) return null
         var best: Pair<Rank, Float>? = null
         var second = 0f
         for ((rank, template) in rankTemplates) {
-            val center = matchTemplate(crop, template, badgeOnly = false)
+            // matchTemplate's "center" ROI targets the large center rank
+            // glyph on a full card. A tableau cascade card's crop is already
+            // trimmed to just its own visible header strip, which has no
+            // center glyph at all - only the small corner badge, which the
+            // badgeOnly ROI below already covers. Scoring the (nonexistent)
+            // center content there produced spurious matches; see the
+            // resolveRankFromCrop comment on RankInkHeuristics for the
+            // identical failure mode in a sibling heuristic.
+            val center = if (trimmedToVisibleStrip) 0f else matchTemplate(crop, template, badgeOnly = false)
             val badge = matchTemplate(crop, template, badgeOnly = true)
             val score = max(center, badge)
             when {
