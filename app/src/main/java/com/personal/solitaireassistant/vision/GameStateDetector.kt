@@ -600,19 +600,16 @@ class GameStateDetector(
                 val geometricFaceUpCount = faceUpCount
                 var cascadeRankCountNote = "n/a"
                 if (card.known) {
-                    // Only the top faceUpStep sliver below firstFaceTop is
-                    // actually this card — the rest of a full cardHeight box is
-                    // covered by the card(s) stacked on top of it. Recognize
-                    // from this trimmed strip directly (not just its ink
-                    // color): the full-cardHeight crop let covering-card
-                    // content leak into the rank/suit match itself (a real
-                    // device log showed a clearly legible "6" misread as
-                    // King). trimmedToVisibleStrip tells rankSourceMasks this
-                    // crop is already short, so it samples most of it directly
-                    // instead of taking a further 54% cut sized for a full
-                    // card - an earlier attempt trimmed the crop without that
-                    // flag and got "Ten" for almost everything because that
-                    // cut clipped the digit itself on a crop this short.
+                    val leadingRegion = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                    )
+                    // Only the top faceUpStep sliver of leadingRegion is actually
+                    // this card — the rest is covered by the card(s) stacked on
+                    // top of it. Feed the ink-color read only that visible strip
+                    // so the covering card's color can't leak into inkRed.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -624,11 +621,10 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
-                        region = leadingHeaderRegion,
+                        region = leadingRegion,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = leadingHeaderRegion,
-                        trimmedToVisibleStrip = true
+                        inkRegion = leadingHeaderRegion
                     )
                     leadingHit = leadingHitResult
                     leadingCard = leadingHitResult.card
@@ -707,11 +703,7 @@ class GameStateDetector(
                     // Same overlap problem as the leading card: bounds reaches
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
-                    // one's. Recognize from the visible strip directly (see
-                    // the leading-card comment above for why
-                    // trimmedToVisibleStrip is needed alongside the crop
-                    // trim). Keep `bounds` (full cardHeight) only for this
-                    // slot's displayed/click position below.
+                    // one's. Keep the ink read scoped to the visible strip.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -723,26 +715,17 @@ class GameStateDetector(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
-                        region = headerRegion,
+                        region = bounds,
                         cache = newSlotCache,
                         exactCardBounds = true,
-                        inkRegion = headerRegion,
-                        trimmedToVisibleStrip = true
+                        inkRegion = headerRegion
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
-                            // resolveCardSuitWithTrace crops bitmap at whatever
-                            // region it's given, independently of the crop used
-                            // above. SuitBadgeHeuristics.locateBadge searches
-                            // for the pip adaptively rather than taking a fixed
-                            // proportion, so (unlike rankSourceMasks) it isn't
-                            // known to break on a short crop - route it through
-                            // the same trimmed strip so it isn't contaminated
-                            // by the covering card either.
                             val (resolved, trace) = resolveCardSuitWithTrace(
                                 bitmap,
-                                headerRegion,
+                                bounds,
                                 requireNotNull(slotCard),
                                 slotHit.trace
                             )
@@ -1749,8 +1732,7 @@ class GameStateDetector(
         region: BoardRegion,
         cache: MutableMap<SlotKey, CachedSlotHit>,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null,
-        trimmedToVisibleStrip: Boolean = false
+        inkRegion: BoardRegion? = null
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
@@ -1771,7 +1753,7 @@ class GameStateDetector(
             else -> missBoundsShifted++
         }
         val missStart = System.nanoTime()
-        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion, trimmedToVisibleStrip)
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
         recognizeMissNanos += System.nanoTime() - missStart
         recognizeCacheMisses++
         val entry = CachedSlotHit(fingerprint, region, hit)
