@@ -293,7 +293,14 @@ class CardRecognizer(
         bitmap: Bitmap,
         region: BoardRegion,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null
+        inkRegion: BoardRegion? = null,
+        // True when the caller already trimmed `region` down to just this
+        // card's own visible strip (a tableau cascade card partially covered
+        // by the next one) rather than a full card-height crop. Distinct
+        // from exactCardBounds, which the waste "tight region" also sets but
+        // whose crop is genuinely full-card-height (waste has nothing
+        // stacked on top of it) and needs rankSourceMasks' original ROI.
+        trimmedToVisibleStrip: Boolean = false
     ): RecognitionHit {
         ensureLoaded()
         if (region.width < 6f || region.height < 6f) {
@@ -352,7 +359,7 @@ class CardRecognizer(
                     val suitCandidates = suitCandidatesForInk(inkRed)
                     val suitSourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
                     val suitScoreMap = suitScoresFromMasks(suitSourceMasks, suitCandidates)
-                    val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
+                    val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds, trimmedToVisibleStrip)
                     val (suit, suitTraceRaw) =
                         inferSuitWithTrace(crop, inkRed, suitScoreMap, suitSourceMasks)
                     // Diagnostic-only: expose the raw whole-card ink ratio behind
@@ -479,7 +486,8 @@ class CardRecognizer(
             // gate here too instead of always scoring all 4 suits.
             val suitCandidates = suitCandidatesForInk(inkRed)
             val suitSourceMasks = crop?.let { suitBadgeMasks(it, preferLocatedBadge = true) }
-            val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
+            val rankScoreMap =
+                crop?.let { rankTemplateScoreMap(it, exactCardBounds, trimmedToVisibleStrip) }.orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
             val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
@@ -848,8 +856,40 @@ class CardRecognizer(
         return if (ocrTrace != null) trace.withPost(ocrTrace) else trace
     }
 
-    private fun rankSourceMasks(crop: Bitmap, exactCardBounds: Boolean): List<LongArray> {
+    private fun rankSourceMasks(
+        crop: Bitmap,
+        exactCardBounds: Boolean,
+        trimmedToVisibleStrip: Boolean = false
+    ): List<LongArray> {
         val sourceMasks = mutableListOf<LongArray>()
+        if (trimmedToVisibleStrip) {
+            // Three earlier attempts at this crop (all reverted) only ever
+            // adjusted height and kept the 70%-of-width ROI below. Measured
+            // directly against golden pixels: on a card's visible header
+            // strip the rank digit's ink is a single contiguous run that
+            // always ends by ~30% of card width, and the neighboring suit
+            // pip never starts before ~70% - on a full ~193px card the 54%
+            // height cut kept the pip below the sampled box entirely, so
+            // 70% width was harmless; once the crop is trimmed to the
+            // ~45-54px visible strip, that same 70% width now reaches the
+            // pip's left edge. A merged digit+pip ink blob reads as a wide
+            // two-glyph shape and matches "Ten" - the only two-character
+            // rank - almost regardless of the true digit. That is the actual
+            // root cause behind every previous attempt here; none of them
+            // touched width. 50% leaves a wide margin on both sides (digit
+            // ends ~30%, pip starts ~70%). Two height fractions because a
+            // tall glyph like "8" measured using close to the full trimmed
+            // strip while "6" needed noticeably less - maxOf over template
+            // scores lets either framing win.
+            val w = (crop.width * 0.50f).toInt().coerceIn(8, crop.width)
+            for (hFraction in listOf(0.70f, 0.90f)) {
+                val h = (crop.height * hFraction).toInt().coerceIn(8, crop.height)
+                val roi = Bitmap.createBitmap(crop, 0, 0, w, h)
+                sourceMasks += inkMask(roi)
+                roi.recycle()
+            }
+            return sourceMasks
+        }
         val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
         val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
         Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
@@ -874,10 +914,11 @@ class CardRecognizer(
 
     private fun rankTemplateScoreMap(
         crop: Bitmap,
-        exactCardBounds: Boolean
+        exactCardBounds: Boolean,
+        trimmedToVisibleStrip: Boolean = false
     ): Map<Rank, Float> {
         if (bitmapRankTemplates.isEmpty()) return emptyMap()
-        val sourceMasks = rankSourceMasks(crop, exactCardBounds)
+        val sourceMasks = rankSourceMasks(crop, exactCardBounds, trimmedToVisibleStrip)
         return bitmapRankTemplates.mapValues { (_, templateMasks) ->
             templateMasks.maxOf { templateMask ->
                 sourceMasks.maxOf { source -> maskScore(source, templateMask) }
