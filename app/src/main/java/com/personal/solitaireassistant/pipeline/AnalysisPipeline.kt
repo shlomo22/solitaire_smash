@@ -59,6 +59,8 @@ class AnalysisPipeline(
     private var lastStableState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
+    private var pendingSuggestionCandidate: Move? = null
+    private var pendingSuggestionStreak = 0
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -170,6 +172,8 @@ class AnalysisPipeline(
         recentStates.clear()
         sessionRejected.clear()
         lastFrameFingerprint = null
+        pendingSuggestionCandidate = null
+        pendingSuggestionStreak = 0
         synchronized(snapshotLock) {
             lastDetection = null
             lastFrameBitmap?.recycle()
@@ -551,6 +555,7 @@ class AnalysisPipeline(
             )
             return
         }
+        val best = applySuggestionStickiness(ranked, best)
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
@@ -704,6 +709,56 @@ class AnalysisPipeline(
                 }
             }.trimEnd()
         )
+    }
+
+    /**
+     * Damps single-frame flicker in which move is "best". A real device log
+     * showed the arrow swap back and forth every ~750ms for 20+ seconds
+     * between two moves on an otherwise-static board: one card's rank read
+     * toggled between two values frame to frame, and that one card sat mid-
+     * run in a tableau column - when read one way the whole run was a valid
+     * sequence (unlocking a big column-clearing move), when read the other
+     * way the run broke and that move vanished *entirely* (not just dropped
+     * in score - it became flat-out illegal), leaving only a smaller
+     * fallback. The existing signature-based stability gate doesn't catch
+     * this because the board's full signature also changes every frame here
+     * (it's part of what's flickering), so reliableFirstHit bypasses the
+     * wait.
+     *
+     * Rather than fix the specific misread (recognition-side, not this
+     * pipeline's job), require a newly-best move to win 2 consecutive frames
+     * before actually committing to it. Critically, the streak still counts
+     * even on a frame where the previously-shown move has vanished outright
+     * (an earlier version of this only counted frames where the old move
+     * was still ranked, which never happens in the real flicker case above -
+     * the big move doesn't lose the top spot, it disappears, so that
+     * version's fast-path always fired and the fix did nothing). On such a
+     * frame we still have to show *something* legal, so we fall back to
+     * `best` for display without resetting the pending streak - the eventual
+     * commit only happens once the same answer wins 2 frames running.
+     */
+    private fun applySuggestionStickiness(
+        ranked: List<ScoredMove>,
+        best: ScoredMove
+    ): ScoredMove {
+        val previous = lastSuggestion?.scored
+        if (previous == null || best.move == previous.move) {
+            pendingSuggestionCandidate = null
+            pendingSuggestionStreak = 0
+            return best
+        }
+        if (pendingSuggestionCandidate == best.move) {
+            pendingSuggestionStreak++
+        } else {
+            pendingSuggestionCandidate = best.move
+            pendingSuggestionStreak = 1
+        }
+        if (pendingSuggestionStreak >= 2) {
+            pendingSuggestionCandidate = null
+            pendingSuggestionStreak = 0
+            return best
+        }
+        return ranked.firstOrNull { it.move == previous.move } ?: best
     }
 
     private fun endpointsFor(
