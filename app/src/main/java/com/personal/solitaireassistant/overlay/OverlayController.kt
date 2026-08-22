@@ -201,6 +201,17 @@ class OverlayController(
         if (reviewMode) hideLabelButton()
     }
 
+    /**
+     * Full hide for frames where we're not actually looking at the game board at all
+     * (NOT_PLAY_SCREEN / NO_BOARD) - unlike [hideArrowTemporarily], this also drops the
+     * Label button. That button previously only got cleared via [reviewMode], so it kept
+     * showing over the home screen / other apps / anything not recognized as live play,
+     * since those frames don't set reviewMode - they're a completely separate signal.
+     */
+    fun hideAllChrome() = runOnMain {
+        hideOverlayChrome()
+    }
+
     private fun hideOverlayChrome() {
         cancelBlink()
         arrowView?.clearArrow()

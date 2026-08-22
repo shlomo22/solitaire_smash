@@ -378,7 +378,7 @@ class AnalysisPipeline(
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
-            overlayController.hideArrowTemporarily()
+            overlayController.hideAllChrome()
             val msg = "Waiting for game board… ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(
@@ -400,7 +400,7 @@ class AnalysisPipeline(
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
-            overlayController.hideArrowTemporarily()
+            overlayController.hideAllChrome()
             val msg = "No board (${detectionRaw.diagnostics.lastOrNull()}) ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(

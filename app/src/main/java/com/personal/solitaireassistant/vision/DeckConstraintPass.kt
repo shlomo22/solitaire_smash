@@ -335,11 +335,20 @@ object DeckConstraintPass {
         } ?: return null
         val altScore = scores[pick.suit] ?: 0f
         val minGain = if (requireShapeAgreement) 0.10f else 0.04f
+        // Same fix as resolvePartnerSuitSwaps's CONFIDENT_CURRENT_SUIT_FLOOR: a real
+        // device trace showed a waste Four of Diamonds with trace.suitScore=1.00 (the
+        // ORIGINAL recognition's own confident number) still get reassigned to Four of
+        // Hearts here, because when only one alternate suit exists (the common
+        // same-color-duplicate case), this "should we even reassign" guard used a
+        // freshly re-derived currentScore that came back lower than 1.00 for the same
+        // crop - the two suitTemplateScores calls aren't guaranteed to agree. Prefer
+        // the entry's original, already-validated suit score when we have one.
+        val trustedCurrentScore = entry.originalSuitScore ?: currentScore
         val chosen = when {
             candidates.size == 1 &&
                 entry.confidence >= 0.70f &&
-                currentScore >= altScore + 0.08f &&
-                currentScore >= 0.58f -> null
+                trustedCurrentScore >= altScore + 0.08f &&
+                trustedCurrentScore >= 0.58f -> null
             candidates.size == 1 -> pick
             altScore >= currentScore + minGain -> pick
             !requireShapeAgreement &&
