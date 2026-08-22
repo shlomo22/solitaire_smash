@@ -21,7 +21,8 @@ object DeckConstraintPass {
         var card: Card,
         val confidence: Float,
         val recognizedIndex: Int,
-        val originalDiagnostic: String
+        val originalDiagnostic: String,
+        val originalSuitScore: Float?
     )
 
     fun apply(
@@ -87,7 +88,8 @@ object DeckConstraintPass {
                 card = card.copy(rank = rank, suit = suit),
                 confidence = slot.confidence,
                 recognizedIndex = recognizedIndex,
-                originalDiagnostic = slot.diagnostic
+                originalDiagnostic = slot.diagnostic,
+                originalSuitScore = slot.trace.suitScore
             )
         }
         return entries
@@ -127,6 +129,30 @@ object DeckConstraintPass {
             // ink-ratio signal. Only reconsider a pair when at least one
             // side was already flagged uncertain by that tiebreak.
             if (!first.card.suitAmbiguous && !second.card.suitAmbiguous) return@forEach
+            // Two real device traces (both after the suitAmbiguous gate above)
+            // caught this pass flipping a card whose ORIGINAL suit read was
+            // already strong: waste Four of Diamonds (trace.suitScore=1.00)
+            // got flipped to Four of Hearts, and tableau Seven of Spades
+            // (trace.suitScore=0.83) got flipped to Seven of Clubs - purely
+            // because summing with an uncertain partner's scores crossed the
+            // swap threshold below. The first attempt at this guard
+            // re-scored both sides fresh via suitTemplateScores on
+            // entry.bounds and compared THAT number to a floor, but a real
+            // device Evaluate run showed the 4D case still swap even after
+            // that fix shipped - this pass's own rescore evidently comes
+            // back lower than the original recognition's number for at
+            // least some crops (the two calls aren't guaranteed to agree:
+            // different call site, possibly a different badge-location
+            // result). Use the ORIGINAL recognition's own suitScore (stored
+            // on the slot's trace at the time it was actually recognized -
+            // literally the number the mismatch trace prints as
+            // "suit=source@X") instead of re-deriving a possibly-different
+            // one here.
+            if ((first.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR ||
+                (second.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR
+            ) {
+                return@forEach
+            }
 
             val suits = if (first.card.suit.isRed) {
                 setOf(Suit.Hearts, Suit.Diamonds)
@@ -135,22 +161,6 @@ object DeckConstraintPass {
             }
             val firstScores = recognizer.suitTemplateScores(bitmap, first.bounds, suits)
             val secondScores = recognizer.suitTemplateScores(bitmap, second.bounds, suits)
-            // Two more real device traces (both after the suitAmbiguous gate
-            // above) caught this pass flipping a card whose OWN current-suit
-            // score was already strong on this exact rescoring - a waste
-            // Four of Diamonds at suit-png 0.96 (vs 0.82 for Hearts) got
-            // flipped to Four of Hearts, and a tableau Seven of Spades at
-            // 0.91 (vs 0.86 for Clubs) got flipped to Seven of Clubs -
-            // purely because summing with an uncertain partner's scores
-            // crossed the swap threshold below. A side this pass's own
-            // scoring already finds confident shouldn't be up for
-            // reassignment just because its partner is unsure; only the
-            // actually-weak side should be reconsidered.
-            if (suitScore(firstScores, first.card.suit) >= CONFIDENT_CURRENT_SUIT_FLOOR ||
-                suitScore(secondScores, second.card.suit) >= CONFIDENT_CURRENT_SUIT_FLOOR
-            ) {
-                return@forEach
-            }
             val firstAlt = partnerSuit(first.card.suit)
             val secondAlt = partnerSuit(second.card.suit)
             val direct =
@@ -378,5 +388,11 @@ object DeckConstraintPass {
 
     private const val RED_SUIT_SWAP_THRESHOLD = 0.10f
     private const val BLACK_SUIT_SWAP_THRESHOLD = 0.10f
-    private const val CONFIDENT_CURRENT_SUIT_FLOOR = 0.82f
+    // The two real cases this guards against had original trace.suitScore of
+    // 1.00 (waste Four of Diamonds) and 0.83 (tableau Seven of Spades) -
+    // genuinely ambiguous reads seen throughout this project's real device
+    // logs (suit-ambiguous / black-tiebreak2 "ambiguous" branches) cluster
+    // well below 0.70. 0.75 sits with real margin on both sides instead of
+    // right at the edge of the 0.83 case.
+    private const val CONFIDENT_CURRENT_SUIT_FLOOR = 0.75f
 }
