@@ -350,10 +350,22 @@ object DeckConstraintPass {
         // itself was a confident 1.00, so the whole branch short-circuited to false
         // before trustedCurrentScore was ever consulted and the card still got
         // reassigned. Suit trust should be judged by the suit score alone.
+        //
+        // Comparing trustedCurrentScore against altScore (below) still mixes scales
+        // when originalSuitScore is set: altScore comes from the FRESH
+        // suitTemplateScores call a few lines up, and a real trace (tableau Seven of
+        // Spades, originalSuitScore=0.83) showed that fresh call return a HIGHER
+        // number (0.86) for the alternate suit than the original recognition ever
+        // reported for the true one - so the margin check below still let it swap to
+        // Seven of Clubs despite 0.83 being well above CONFIDENT_CURRENT_SUIT_FLOOR.
+        // When we have a genuine original score, judge it against that same absolute
+        // floor already validated in resolvePartnerSuitSwaps instead of a margin
+        // against a differently-scaled fresh number.
         val chosen = when {
+            candidates.size == 1 && trustedCurrentScore >= CONFIDENT_CURRENT_SUIT_FLOOR -> null
             candidates.size == 1 &&
-                trustedCurrentScore >= altScore + 0.08f &&
-                trustedCurrentScore >= 0.58f -> null
+                currentScore >= altScore + 0.08f &&
+                currentScore >= 0.58f -> null
             candidates.size == 1 -> pick
             altScore >= currentScore + minGain -> pick
             !requireShapeAgreement &&
