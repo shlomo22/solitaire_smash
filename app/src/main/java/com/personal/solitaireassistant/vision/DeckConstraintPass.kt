@@ -344,9 +344,14 @@ object DeckConstraintPass {
         // crop - the two suitTemplateScores calls aren't guaranteed to agree. Prefer
         // the entry's original, already-validated suit score when we have one.
         val trustedCurrentScore = entry.originalSuitScore ?: currentScore
+        // entry.confidence >= 0.70f used to gate this branch too, but that field is
+        // the card's overall/rank confidence, not a suit signal - on the real 4D case
+        // it sat at 0.69 (a weak OCR-assisted rank read) even though the suit read
+        // itself was a confident 1.00, so the whole branch short-circuited to false
+        // before trustedCurrentScore was ever consulted and the card still got
+        // reassigned. Suit trust should be judged by the suit score alone.
         val chosen = when {
             candidates.size == 1 &&
-                entry.confidence >= 0.70f &&
                 trustedCurrentScore >= altScore + 0.08f &&
                 trustedCurrentScore >= 0.58f -> null
             candidates.size == 1 -> pick
