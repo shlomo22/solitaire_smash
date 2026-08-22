@@ -135,6 +135,22 @@ object DeckConstraintPass {
             }
             val firstScores = recognizer.suitTemplateScores(bitmap, first.bounds, suits)
             val secondScores = recognizer.suitTemplateScores(bitmap, second.bounds, suits)
+            // Two more real device traces (both after the suitAmbiguous gate
+            // above) caught this pass flipping a card whose OWN current-suit
+            // score was already strong on this exact rescoring - a waste
+            // Four of Diamonds at suit-png 0.96 (vs 0.82 for Hearts) got
+            // flipped to Four of Hearts, and a tableau Seven of Spades at
+            // 0.91 (vs 0.86 for Clubs) got flipped to Seven of Clubs -
+            // purely because summing with an uncertain partner's scores
+            // crossed the swap threshold below. A side this pass's own
+            // scoring already finds confident shouldn't be up for
+            // reassignment just because its partner is unsure; only the
+            // actually-weak side should be reconsidered.
+            if (suitScore(firstScores, first.card.suit) >= CONFIDENT_CURRENT_SUIT_FLOOR ||
+                suitScore(secondScores, second.card.suit) >= CONFIDENT_CURRENT_SUIT_FLOOR
+            ) {
+                return@forEach
+            }
             val firstAlt = partnerSuit(first.card.suit)
             val secondAlt = partnerSuit(second.card.suit)
             val direct =
@@ -362,4 +378,5 @@ object DeckConstraintPass {
 
     private const val RED_SUIT_SWAP_THRESHOLD = 0.10f
     private const val BLACK_SUIT_SWAP_THRESHOLD = 0.10f
+    private const val CONFIDENT_CURRENT_SUIT_FLOOR = 0.82f
 }
