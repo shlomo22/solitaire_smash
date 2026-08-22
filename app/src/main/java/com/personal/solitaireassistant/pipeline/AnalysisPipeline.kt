@@ -531,9 +531,9 @@ class AnalysisPipeline(
         val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
             isFoundationMoveTrusted(move, state, detection)
         }
-        val best = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
+        val rawBest = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
         val selectMs = System.currentTimeMillis() - selectStartedMs
-        if (best == null) {
+        if (rawBest == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
             lastSuggestionSignature = null
@@ -555,7 +555,7 @@ class AnalysisPipeline(
             )
             return
         }
-        val best = applySuggestionStickiness(ranked, best)
+        val best = applySuggestionStickiness(ranked, rawBest)
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
