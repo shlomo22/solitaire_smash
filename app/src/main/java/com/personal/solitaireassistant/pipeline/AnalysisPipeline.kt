@@ -765,6 +765,10 @@ class AnalysisPipeline(
             is Move.WasteToFoundation -> {
                 pileRegion(PileRef.Waste) to pileRegion(PileRef.Foundation(move.toFoundation))
             }
+            is Move.FoundationToTableau -> {
+                pileRegion(PileRef.Foundation(move.fromFoundation)) to
+                    pileRegion(PileRef.Tableau(move.toColumn))
+            }
             Move.DrawStock, Move.RecycleWaste -> {
                 pileRegion(PileRef.Stock) to pileRegion(PileRef.Waste)
             }
@@ -794,6 +798,19 @@ class AnalysisPipeline(
         state: GameState,
         detection: DetectionResult
     ): Boolean {
+        if (move is Move.FoundationToTableau) {
+            val movingCard = state.foundations.getOrNull(move.fromFoundation)?.lastOrNull()
+                ?: return false
+            if (movingCard.suitAmbiguous) return false
+            if (slotHasPartnerSuitDeckConstraintSwap(
+                    detection.recognizedSlots,
+                    PileRef.Foundation(move.fromFoundation)
+                )
+            ) {
+                return false
+            }
+            return true
+        }
         val foundationIndex = when (move) {
             is Move.TableauToFoundation -> move.toFoundation
             is Move.WasteToFoundation -> move.toFoundation

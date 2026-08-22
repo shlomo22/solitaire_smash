@@ -11,6 +11,7 @@ object KlondikeRules {
         is Move.TableauToFoundation -> applyTableauToFoundation(state, move)
         is Move.WasteToTableau -> applyWasteToTableau(state, move)
         is Move.WasteToFoundation -> applyWasteToFoundation(state, move)
+        is Move.FoundationToTableau -> applyFoundationToTableau(state, move)
         Move.DrawStock -> applyDraw(state)
         Move.RecycleWaste -> applyRecycle(state)
     }
@@ -53,6 +54,15 @@ object KlondikeRules {
             }
             foundationIndexFor(state, wasteTop)?.let { foundation ->
                 moves += Move.WasteToFoundation(foundation)
+            }
+        }
+
+        for (foundation in state.foundations.indices) {
+            val top = state.foundations[foundation].lastOrNull() ?: continue
+            for (to in 0 until 7) {
+                if (top.canStackOnTableau(state.tableauTop(to))) {
+                    moves += Move.FoundationToTableau(foundation, to)
+                }
             }
         }
 
@@ -156,6 +166,20 @@ object KlondikeRules {
             waste = state.waste.dropLast(1),
             foundations = foundations
         )
+    }
+
+    private fun applyFoundationToTableau(
+        state: GameState,
+        move: Move.FoundationToTableau
+    ): GameState? {
+        val foundation = state.foundations[move.fromFoundation]
+        val card = foundation.lastOrNull() ?: return null
+        if (!card.canStackOnTableau(state.tableauTop(move.toColumn))) return null
+        val foundations = state.foundations.toMutableList()
+        foundations[move.fromFoundation] = foundation.dropLast(1)
+        val tableau = state.tableau.toMutableList()
+        tableau[move.toColumn] = tableau[move.toColumn] + card
+        return state.copy(tableau = tableau, foundations = foundations)
     }
 
     private fun applyDraw(state: GameState): GameState? {
