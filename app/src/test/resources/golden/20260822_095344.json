@@ -266,7 +266,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Four",
+        "rank": "Three",
         "suit": "Diamonds"
       }
     },
