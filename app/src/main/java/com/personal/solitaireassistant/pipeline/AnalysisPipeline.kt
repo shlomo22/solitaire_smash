@@ -555,7 +555,7 @@ class AnalysisPipeline(
             )
             return
         }
-        val best = applySuggestionStickiness(ranked, rawBest)
+        val best = applySuggestionStickiness(ranked, rawBest) ?: return
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
@@ -737,10 +737,26 @@ class AnalysisPipeline(
      * `best` for display without resetting the pending streak - the eventual
      * commit only happens once the same answer wins 2 frames running.
      */
+    /**
+     * Returns null to mean "hold the current display, don't touch the overlay this
+     * frame" - the caller must treat that as a no-op, not fall back to [best].
+     *
+     * A real device log (multi-card Tableau->Tableau run vs. loose-card
+     * Tableau->Foundation, alternating every frame) showed this still flicker even
+     * after the streak damping below: one buried, non-exposed card in the run
+     * (tableau:5:2) misread as Ace of Diamonds for a single isolated frame instead
+     * of its stable Nine of Diamonds read (held on ~30 surrounding frames) - just
+     * one frame was enough to break isValidRun() for the whole run and make the
+     * previous move genuinely ILLEGAL that frame, not merely lower-ranked. The old
+     * code's `?: best` fallback treated "previous move absent from ranked" the same
+     * as "streak exhausted, adopt best" and jumped immediately. Now a vanished
+     * previous move gets the same 2-frame grace period as adopting a new one: hold
+     * the prior display instead of reacting to a single anomalous frame.
+     */
     private fun applySuggestionStickiness(
         ranked: List<ScoredMove>,
         best: ScoredMove
-    ): ScoredMove {
+    ): ScoredMove? {
         val previous = lastSuggestion?.scored
         if (previous == null || best.move == previous.move) {
             pendingSuggestionCandidate = null
@@ -758,7 +774,14 @@ class AnalysisPipeline(
             pendingSuggestionStreak = 0
             return best
         }
-        return ranked.firstOrNull { it.move == previous.move } ?: best
+        val stillRanked = ranked.firstOrNull { it.move == previous.move }
+        if (stillRanked == null) {
+            fileLogger.append(
+                "HOLD prev=${previous.move.label} vanished from ranked " +
+                    "(raw=${best.move.label} streak=$pendingSuggestionStreak/2)"
+            )
+        }
+        return stillRanked
     }
 
     private fun endpointsFor(
