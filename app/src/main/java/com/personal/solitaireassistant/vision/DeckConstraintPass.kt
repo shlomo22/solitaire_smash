@@ -115,6 +115,18 @@ object DeckConstraintPass {
             }
             if (first.card.suit.isRed != second.card.suit.isRed) return@forEach
             if (first.card.suit == second.card.suit) return@forEach
+            // Two same-rank, same-color cards with different suits (a Seven
+            // of Spades and a Seven of Clubs, say) is the ordinary, valid
+            // board state - not a collision to resolve. A real device log
+            // showed a tiebreak-confirmed 0.84-confidence Seven of Spades
+            // (CardRecognizer's own black-suit tiebreak had already run and
+            // committed, neither entry suitAmbiguous) get flipped to Seven
+            // of Clubs here purely because the swapped score sum edged out
+            // the direct sum on this pass's own cruder suitTemplateScores
+            // comparison, which - unlike the tiebreak - has no shape-veto or
+            // ink-ratio signal. Only reconsider a pair when at least one
+            // side was already flagged uncertain by that tiebreak.
+            if (!first.card.suitAmbiguous && !second.card.suitAmbiguous) return@forEach
 
             val suits = if (first.card.suit.isRed) {
                 setOf(Suit.Hearts, Suit.Diamonds)

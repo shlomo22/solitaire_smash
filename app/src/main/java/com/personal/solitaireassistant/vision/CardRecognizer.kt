@@ -1766,7 +1766,19 @@ class CardRecognizer(
         }
         val top = best ?: return null
         if (top.second < 0.48f) return null
-        if (top.second - second < 0.035f && top.second < 0.68f) return null
+        // Previously only applied below 0.68, on the assumption a high top
+        // score is inherently reliable regardless of runner-up closeness. A
+        // real cascade card scored Six 0.83 vs Five 0.82 - a real card
+        // reconstructed from cascade geometry rather than measured
+        // directly, so the source crop was shifted a few px from where the
+        // template assumes it is a real card's actual position. Both are
+        // well above 0.68 but only 0.01 apart, and this let the wrong one
+        // win outright with no chance for the caller's OCR tiebreak (which
+        // read the correct digit) to ever run. Apply the same closeness
+        // check regardless of the top score, matching the Two/Seven
+        // tiebreak below, which already declines unconditionally on a close
+        // score.
+        if (top.second - second < 0.035f) return null
         // Clipped Smash Q matches the "0" in Ten. Prefer Queen unless Ten
         // wins by a clear two-glyph margin.
         if (top.first == Rank.Ten &&
