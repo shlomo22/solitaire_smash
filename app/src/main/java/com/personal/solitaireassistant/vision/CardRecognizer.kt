@@ -1766,19 +1766,21 @@ class CardRecognizer(
         }
         val top = best ?: return null
         if (top.second < 0.48f) return null
-        // Previously only applied below 0.68, on the assumption a high top
-        // score is inherently reliable regardless of runner-up closeness. A
-        // real cascade card scored Six 0.83 vs Five 0.82 - a real card
-        // reconstructed from cascade geometry rather than measured
-        // directly, so the source crop was shifted a few px from where the
-        // template assumes it is a real card's actual position. Both are
-        // well above 0.68 but only 0.01 apart, and this let the wrong one
-        // win outright with no chance for the caller's OCR tiebreak (which
-        // read the correct digit) to ever run. Apply the same closeness
-        // check regardless of the top score, matching the Two/Seven
-        // tiebreak below, which already declines unconditionally on a close
-        // score.
-        if (top.second - second < 0.035f) return null
+        // Applying this margin check regardless of the top score was tried
+        // and reverted: a real device Evaluate run (v1.3.68/69) showed it
+        // decline the bitmap-rank match on dozens of genuinely-correct,
+        // high-confidence reads (0.84 vs 0.82, 0.85 vs 0.83, etc. - two
+        // visually similar ranks landing close together is common even when
+        // the top one is right), each falling through to weaker OCR/glyph
+        // fallbacks that mostly missed - accuracy dropped from 97%
+        // (1031/1068) to 91% (975/1068), with a new "FaceUp -> Unknown (37)"
+        // bucket that hadn't existed before. The single case this was meant
+        // to fix (a geometrically-reconstructed cascade card scoring Six
+        // 0.83 vs Five 0.82) is a real but narrow case; the unconditional
+        // margin check costs far more than it fixes. Reverted to only
+        // applying below 0.68, where a close margin is a genuine sign of
+        // ambiguity rather than two merely-similar high scores.
+        if (top.second - second < 0.035f && top.second < 0.68f) return null
         // Clipped Smash Q matches the "0" in Ten. Prefer Queen unless Ten
         // wins by a clear two-glyph margin.
         if (top.first == Rank.Ten &&
