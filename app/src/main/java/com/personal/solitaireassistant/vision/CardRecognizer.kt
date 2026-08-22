@@ -1180,15 +1180,31 @@ class CardRecognizer(
             val topConfirmsLeader = best?.first != null &&
                 topLeader == best!!.first &&
                 topMargin >= TOP_BLACK_SUIT_MARGIN
+            // A sweep across every waste-pile black-suit golden sample (Ace, Jack,
+            // Three, two Kings, Five of Spades vs. Eight, Four, Six of Clubs) showed
+            // the geometric shape heuristic (peak-width/lobe/valley measurements, not
+            // template silhouette matching) resolve every genuine case with margin
+            // ~1.3 - over 3x BLACK_SHAPE_MIN_MARGIN and well past every other shape
+            // threshold in this file (TOP_BLACK_SHAPE_VETO_MARGIN=0.28). At this
+            // waste badge scale the coarse 48x48 Dice template match is unreliable in
+            // both directions: full AND top-half scores agreed on the wrong suit for
+            // every misread Spade, so topConfirmsLeader's "both signals agree"
+            // protection was reinforcing that shared error instead of catching a
+            // genuine shape-heuristic mistake (the QC/10C cases it was built for).
+            // A margin this decisive is a different regime - trust it even when
+            // topConfirmsLeader would otherwise block the override.
+            val shapeDecisive = shape != null && shape.margin >= BLACK_SHAPE_DECISIVE_MARGIN
             if (shape != null &&
                 shape.margin >= BLACK_SHAPE_MIN_MARGIN &&
-                !topConfirmsLeader &&
+                (!topConfirmsLeader || shapeDecisive) &&
                 (fullMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
             ) {
                 blackDebug?.invoke(
                     "full=C${"%.2f".format(clubScore)}/S${"%.2f".format(spadeScore)}," +
                         "top=C${"%.2f".format(topClub)}/S${"%.2f".format(topSpade)}," +
-                        "branch=wideMarginShapeOverride->${shape.suit}"
+                        "branch=${
+                            if (topConfirmsLeader) "wideMarginShapeOverrideDecisive" else "wideMarginShapeOverride"
+                        }->${shape.suit}"
                 )
                 best = shape.suit to max(clubScore, spadeScore) + 0.03f
                 second = min(clubScore, spadeScore)
@@ -2181,6 +2197,16 @@ class CardRecognizer(
         /** Full-badge margin at or below this → defer to top-half tiebreaker. */
         const val BLACK_SUIT_TOP_TIEBREAK_MAX = 0.055f
         const val BLACK_SHAPE_MIN_MARGIN = 0.40f
+        /**
+         * Shape margin decisive enough to override topConfirmsLeader in the
+         * wide-full-margin branch (see bestBitmapSuit). A sweep of every waste-pile
+         * black-suit golden sample put every genuine Spade at margin ~1.3 and every
+         * genuine Clubs badge either below BLACK_SHAPE_MIN_MARGIN entirely or well
+         * under this - similar to BLACK_TOP_CLUB_STRONG_SPADE_SHAPE_MARGIN's own
+         * confirmed split (Spades~1.08, Clubs~0.50) in a different branch. Sits with
+         * real margin above both that precedent and the observed Clubs ceiling.
+         */
+        const val BLACK_SHAPE_DECISIVE_MARGIN = 0.90f
         const val TOP_BLACK_FRACTION = 0.45f
         const val TOP_BLACK_SUIT_MARGIN = 0.04f
         /** Shape margin to override a thin spade template win on club badges. */
