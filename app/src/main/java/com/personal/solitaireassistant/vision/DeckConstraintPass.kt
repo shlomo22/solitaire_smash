@@ -361,8 +361,21 @@ object DeckConstraintPass {
         // When we have a genuine original score, judge it against that same absolute
         // floor already validated in resolvePartnerSuitSwaps instead of a margin
         // against a differently-scaled fresh number.
+        //
+        // That floor alone caused a regression on the very next device run: a real
+        // Jack of Spades (originalSuitScore=0.75, right at the floor) had originally
+        // been misread as Jack of Clubs by CardRecognizer's own shape-veto override,
+        // even though the raw suit scores at read time already favored Spades
+        // (S:0.92 vs C:0.87) - the shape veto was itself the mistake here, not this
+        // pass. Blocking reassignment unconditionally at the floor threw away that
+        // "the alternate is dramatically better" signal entirely. Keep the floor as
+        // the default, but still allow a swap when the fresh alternate score clears
+        // it by a wide enough margin to indicate the original read was genuinely
+        // wrong rather than just close/noisy.
         val chosen = when {
-            candidates.size == 1 && trustedCurrentScore >= CONFIDENT_CURRENT_SUIT_FLOOR -> null
+            candidates.size == 1 &&
+                trustedCurrentScore >= CONFIDENT_CURRENT_SUIT_FLOOR &&
+                altScore < trustedCurrentScore + STRONG_ALT_OVERRIDE_MARGIN -> null
             candidates.size == 1 &&
                 currentScore >= altScore + 0.08f &&
                 currentScore >= 0.58f -> null
@@ -421,4 +434,12 @@ object DeckConstraintPass {
     // well below 0.70. 0.75 sits with real margin on both sides instead of
     // right at the edge of the 0.83 case.
     private const val CONFIDENT_CURRENT_SUIT_FLOOR = 0.75f
+    // How much higher a freshly re-derived alternate-suit score must be than a
+    // trusted original score before it's allowed to override CONFIDENT_CURRENT_SUIT_FLOOR
+    // in bestAlternateAssignment. The real case that needed this: a Jack of Spades
+    // misread as Jack of Clubs by a shape-veto at original-recognition time
+    // (originalSuitScore=0.75, right at the floor) while the fresh rescore of the
+    // same crop favored Spades by 0.17 (0.92 vs 0.75) - a gap too wide to be normal
+    // measurement noise between the two calls.
+    private const val STRONG_ALT_OVERRIDE_MARGIN = 0.15f
 }
