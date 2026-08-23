@@ -39,7 +39,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "king",
+        "rank": "King",
         "suit": "Spades"
       }
     },
