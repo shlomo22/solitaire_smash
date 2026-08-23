@@ -1,5 +1,5 @@
 {
-  "id": "20260819_202405",
+  "id": "20260823_182407",
   "frameSize": {
     "w": 1080,
     "h": 2340
@@ -35,13 +35,12 @@
       "engine": {
         "kind": "FaceUp",
         "rank": "Four",
-        "suit": "Clubs",
-        "suitAmbiguous": true
+        "suit": "Clubs"
       },
       "truth": {
         "kind": "FaceUp",
         "rank": "Four",
-        "suit": "Spades"
+        "suit": "Clubs"
       }
     },
     {
@@ -55,14 +54,10 @@
         "b": 713.7000122070312
       },
       "engine": {
-        "kind": "FaceUp",
-        "rank": "Ace",
-        "suit": "Clubs"
+        "kind": "Empty"
       },
       "truth": {
-        "kind": "FaceUp",
-        "rank": "Ace",
-        "suit": "Clubs"
+        "kind": "Empty"
       }
     },
     {
@@ -129,12 +124,12 @@
       "engine": {
         "kind": "FaceUp",
         "rank": "King",
-        "suit": "Clubs"
+        "suit": "Hearts"
       },
       "truth": {
         "kind": "FaceUp",
         "rank": "King",
-        "suit": "Clubs"
+        "suit": "Hearts"
       }
     },
     {
@@ -166,13 +161,13 @@
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Queen",
-        "suit": "Spades"
+        "rank": "Six",
+        "suit": "Diamonds"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Queen",
-        "suit": "Spades"
+        "rank": "Six",
+        "suit": "Diamonds"
       }
     },
     {
@@ -181,19 +176,40 @@
       "inferred": false,
       "bounds": {
         "l": 171.8434295654297,
-        "t": 937.541259765625,
+        "t": 930.957275390625,
         "r": 309.52801513671875,
-        "b": 1130.2996826171875
+        "b": 1123.7156982421875
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Clubs"
+        "rank": "Five",
+        "suit": "Spades"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Clubs"
+        "rank": "Five",
+        "suit": "Spades"
+      }
+    },
+    {
+      "pile": "tableau:1",
+      "index": 3,
+      "inferred": false,
+      "bounds": {
+        "l": 171.8434295654297,
+        "t": 983.435791015625,
+        "r": 309.52801513671875,
+        "b": 1176.1942138671875
+      },
+      "engine": {
+        "kind": "FaceUp",
+        "rank": "Four",
+        "suit": "Hearts"
+      },
+      "truth": {
+        "kind": "FaceUp",
+        "rank": "Four",
+        "suit": "Hearts"
       }
     },
     {
@@ -219,57 +235,19 @@
       "inferred": false,
       "bounds": {
         "l": 321.5006103515625,
-        "t": 882.054443359375,
+        "t": 885.9099731445312,
         "r": 459.1851501464844,
-        "b": 1074.812744140625
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:2",
-      "index": 2,
-      "inferred": false,
-      "bounds": {
-        "l": 321.5006103515625,
-        "t": 926.3888549804688,
-        "r": 459.1851501464844,
-        "b": 1119.147216796875
+        "b": 1078.6683349609375
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Ace",
-        "suit": "Diamonds"
+        "rank": "Nine",
+        "suit": "Clubs"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Three",
-        "suit": "Spades"
-      }
-    },
-    {
-      "pile": "tableau:2",
-      "index": 3,
-      "inferred": false,
-      "bounds": {
-        "l": 321.5006103515625,
-        "t": 983.4358520507812,
-        "r": 459.1851501464844,
-        "b": 1176.1942138671875
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Two",
-        "suit": "Hearts"
-      },
-      "truth": {
-        "kind": "FaceUp",
-        "rank": "Two",
-        "suit": "Hearts"
+        "rank": "Nine",
+        "suit": "Clubs"
       }
     },
     {
@@ -278,73 +256,18 @@
       "inferred": false,
       "bounds": {
         "l": 471.1577453613281,
-        "t": 837.7200317382812,
+        "t": 840.015380859375,
         "r": 608.8423461914062,
-        "b": 1030.478515625
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:3",
-      "index": 1,
-      "inferred": false,
-      "bounds": {
-        "l": 471.1577453613281,
-        "t": 882.054443359375,
-        "r": 608.8423461914062,
-        "b": 1074.8128662109375
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:3",
-      "index": 2,
-      "inferred": false,
-      "bounds": {
-        "l": 471.1577453613281,
-        "t": 926.388916015625,
-        "r": 608.8423461914062,
-        "b": 1119.1473388671875
+        "b": 1032.7738037109375
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Ace",
+        "rank": "Nine",
         "suit": "Spades"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Three",
-        "suit": "Hearts"
-      }
-    },
-    {
-      "pile": "tableau:3",
-      "index": 3,
-      "inferred": false,
-      "bounds": {
-        "l": 471.1577453613281,
-        "t": 983.435791015625,
-        "r": 608.8423461914062,
-        "b": 1176.1942138671875
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Two",
-        "suit": "Spades"
-      },
-      "truth": {
-        "kind": "FaceUp",
-        "rank": "Two",
+        "rank": "Nine",
         "suit": "Spades"
       }
     },
@@ -405,19 +328,57 @@
       "inferred": false,
       "bounds": {
         "l": 620.8148803710938,
-        "t": 983.4357299804688,
+        "t": 970.7234497070312,
         "r": 758.49951171875,
-        "b": 1176.1942138671875
+        "b": 1163.48193359375
+      },
+      "engine": {
+        "kind": "FaceDown"
+      },
+      "truth": {
+        "kind": "FaceDown"
+      }
+    },
+    {
+      "pile": "tableau:4",
+      "index": 4,
+      "inferred": false,
+      "bounds": {
+        "l": 620.8148803710938,
+        "t": 1015.057861328125,
+        "r": 758.49951171875,
+        "b": 1207.81640625
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Six",
+        "rank": "Three",
         "suit": "Hearts"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Six",
+        "rank": "Three",
         "suit": "Hearts"
+      }
+    },
+    {
+      "pile": "tableau:4",
+      "index": 5,
+      "inferred": false,
+      "bounds": {
+        "l": 620.8148803710938,
+        "t": 1080.961669921875,
+        "r": 758.49951171875,
+        "b": 1273.72021484375
+      },
+      "engine": {
+        "kind": "FaceUp",
+        "rank": "Two",
+        "suit": "Spades"
+      },
+      "truth": {
+        "kind": "FaceUp",
+        "rank": "Two",
+        "suit": "Spades"
       }
     },
     {
@@ -494,15 +455,19 @@
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
-        "t": 1015.0576782226562,
+        "t": 1015.0577392578125,
         "r": 908.1566162109375,
-        "b": 1207.8160400390625
+        "b": 1207.816162109375
       },
       "engine": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Ten",
+        "suit": "Spades"
       },
       "truth": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Ten",
+        "suit": "Spades"
       }
     },
     {
@@ -511,15 +476,19 @@
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
-        "t": 1059.39208984375,
+        "t": 1063.9605712890625,
         "r": 908.1566162109375,
-        "b": 1252.1505126953125
+        "b": 1256.718994140625
       },
       "engine": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Nine",
+        "suit": "Diamonds"
       },
       "truth": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Nine",
+        "suit": "Diamonds"
       }
     },
     {
@@ -528,17 +497,19 @@
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
-        "t": 1103.7265625,
+        "t": 1112.86328125,
         "r": 908.1566162109375,
-        "b": 1296.4849853515625
+        "b": 1305.6217041015625
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Diamonds"
+        "rank": "Eight",
+        "suit": "Clubs"
       },
       "truth": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Eight",
+        "suit": "Clubs"
       }
     },
     {
@@ -547,38 +518,19 @@
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
-        "t": 1157.698974609375,
+        "t": 1178.487548828125,
         "r": 908.1566162109375,
-        "b": 1350.4573974609375
+        "b": 1371.2459716796875
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Jack",
+        "rank": "Seven",
         "suit": "Hearts"
       },
       "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:5",
-      "index": 8,
-      "inferred": false,
-      "bounds": {
-        "l": 770.4720458984375,
-        "t": 1080.961669921875,
-        "r": 908.1566162109375,
-        "b": 1273.7200927734375
-      },
-      "engine": {
         "kind": "FaceUp",
-        "rank": "Nine",
-        "suit": "Diamonds"
-      },
-      "truth": {
-        "kind": "FaceUp",
-        "rank": "Nine",
-        "suit": "Diamonds"
+        "rank": "Seven",
+        "suit": "Hearts"
       }
     },
     {
@@ -672,9 +624,9 @@
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
-        "t": 1059.39208984375,
+        "t": 1059.3922119140625,
         "r": 1057.813720703125,
-        "b": 1252.1505126953125
+        "b": 1252.150634765625
       },
       "engine": {
         "kind": "FaceDown"
@@ -689,17 +641,19 @@
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
-        "t": 1103.7265625,
+        "t": 1103.7266845703125,
         "r": 1057.813720703125,
-        "b": 1296.4849853515625
+        "b": 1296.485107421875
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Queen",
-        "suit": "Clubs"
+        "rank": "Jack",
+        "suit": "Spades"
       },
       "truth": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Three",
+        "suit": "Clubs"
       }
     },
     {
@@ -714,13 +668,13 @@
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Five",
-        "suit": "Spades"
+        "rank": "Two",
+        "suit": "Diamonds"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Five",
-        "suit": "Spades"
+        "rank": "Two",
+        "suit": "Diamonds"
       }
     }
   ]
