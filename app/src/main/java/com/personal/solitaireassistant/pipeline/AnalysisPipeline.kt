@@ -814,6 +814,21 @@ class AnalysisPipeline(
         }
         val stillRanked = ranked.firstOrNull { it.move == previous.move }
         if (stillRanked == null) {
+            val previousSourcedFromWaste =
+                previous.move is Move.WasteToFoundation || previous.move is Move.WasteToTableau
+            if (previousSourcedFromWaste) {
+                // Waste is the fastest-changing, always-fully-visible pile - unlike the
+                // buried-tableau-card misread this damping was built for, a vanished
+                // waste-sourced move almost always means the player already drew past
+                // it. Holding here left a stale arrow anchored to the old waste
+                // position while the visible card underneath had already moved on to
+                // something unrelated - on screen this reads as the arrow connecting
+                // two nonsensical ranks (e.g. "J -> 3"), since the endpoints are fixed
+                // pixel positions, not the cards they were computed for.
+                pendingSuggestionCandidate = null
+                pendingSuggestionStreak = 0
+                return best
+            }
             fileLogger.append(
                 "HOLD prev=${previous.move.label} vanished from ranked " +
                     "(raw=${best.move.label} streak=$pendingSuggestionStreak/2)"
