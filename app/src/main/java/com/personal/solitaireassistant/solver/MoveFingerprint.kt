@@ -30,6 +30,11 @@ object MoveFingerprint {
             val foundationTop = state.foundations[move.toFoundation].lastOrNull()
             "${waste.id}->F${foundationTop?.id ?: "EMPTY"}"
         }
+        is Move.FoundationToTableau -> {
+            val card = requireNotNull(state.foundations[move.fromFoundation].lastOrNull())
+            val target = state.tableauTop(move.toColumn)
+            "${card.id}->${target?.id ?: "EMPTY"}"
+        }
         Move.DrawStock -> "DRAW"
         Move.RecycleWaste -> "RECYCLE"
     }

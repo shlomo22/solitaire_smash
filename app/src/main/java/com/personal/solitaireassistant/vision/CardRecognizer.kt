@@ -51,6 +51,10 @@ class CardRecognizer(
     private val minConfidence: Float = 0.65f
 ) {
     private val bitmapRankTemplates = mutableMapOf<Rank, MutableList<LongArray>>()
+    // Same rank templates, content-cropped before the 48x48 ink-mask resample.
+    // Only used for trimmedToVisibleStrip cascade cards - see the comment on
+    // tightContentCrop for why the untrimmed templates don't work there.
+    private val bitmapRankTemplatesTrimmed = mutableMapOf<Rank, MutableList<LongArray>>()
     private val bitmapSuitTemplates = mutableMapOf<Suit, MutableList<LongArray>>()
     private val rankTemplates = mutableMapOf<Rank, Mat>()
     private val suitTemplates = mutableMapOf<Suit, MutableList<Mat>>()
@@ -69,6 +73,7 @@ class CardRecognizer(
         loaded = true
         Rank.entries.forEach { rank ->
             val templates = mutableListOf<LongArray>()
+            val trimmedTemplates = mutableListOf<LongArray>()
             val prefix = "rank_${rank.name.lowercase()}"
             val templateNames = context.assets.list("templates")
                 .orEmpty()
@@ -81,10 +86,35 @@ class CardRecognizer(
             templateNames.forEach { name ->
                 loadBitmap("templates/$name")?.let { bitmap ->
                     templates += inkMask(bitmap)
+                    // Cap to the top 75% of the template's own height before
+                    // tight-cropping, for the trimmed variant only. Queen's
+                    // template is a real outlier: its tail (Q vs O) makes it
+                    // ~13% taller than the other rank templates, but a
+                    // trimmed cascade card's source crop is hard-capped at
+                    // faceUpStep*0.9 in GameStateDetector and never has room
+                    // to show that tail at all - the real on-screen glyph
+                    // there is a plain oval with no visible tail. Comparing
+                    // that oval against a template that includes the tail
+                    // scored Queen behind Ace on a real golden crop; capping
+                    // the template to the achievable oval-only shape fixed
+                    // it (swept 1.0 down to 0.55: everything from 0.65-0.85
+                    // works, 0.55 breaks a different rank, so 0.75 sits with
+                    // margin on both sides).
+                    val cappedHeight = (bitmap.height * 0.75f).toInt().coerceAtLeast(8)
+                    val capped = if (cappedHeight < bitmap.height) {
+                        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, cappedHeight)
+                    } else {
+                        bitmap
+                    }
+                    val tight = tightContentCrop(capped)
+                    trimmedTemplates += inkMask(tight)
+                    if (tight !== capped) tight.recycle()
+                    if (capped !== bitmap) capped.recycle()
                     bitmap.recycle()
                 }
             }
             if (templates.isNotEmpty()) bitmapRankTemplates[rank] = templates
+            if (trimmedTemplates.isNotEmpty()) bitmapRankTemplatesTrimmed[rank] = trimmedTemplates
         }
         Suit.entries.forEach { suit ->
             val prefix = "suit_${suit.name.lowercase()}"
@@ -293,7 +323,14 @@ class CardRecognizer(
         bitmap: Bitmap,
         region: BoardRegion,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null
+        inkRegion: BoardRegion? = null,
+        // True when the caller already trimmed `region` down to just this
+        // card's own visible strip (a tableau cascade card partially covered
+        // by the next one) rather than a full card-height crop. Distinct
+        // from exactCardBounds, which the waste "tight region" also sets but
+        // whose crop is genuinely full-card-height (waste has nothing
+        // stacked on top of it) and needs rankSourceMasks' original ROI.
+        trimmedToVisibleStrip: Boolean = false
     ): RecognitionHit {
         ensureLoaded()
         if (region.width < 6f || region.height < 6f) {
@@ -330,6 +367,30 @@ class CardRecognizer(
         if (openCvReady) {
             val crop = crop(bitmap, region)
             if (crop != null) {
+                // region/crop stay full cardHeight so the coarse color gates
+                // above (looksFaceDown/looksEmpty/looksFaceUp) keep seeing a
+                // full card's worth of pixels - trimming region itself made
+                // those gates misfire on genuinely face-up cascade cards
+                // (boundary bleed from the covering card is a much bigger
+                // fraction of a ~44px strip than of a ~193px card). Rank
+                // matching still needs the covering card's content kept out,
+                // so derive a separate, shorter bitmap here from inkRegion's
+                // already-correct boundaries (expressed as a fraction of
+                // crop's own height) and use it only for rank scoring, not
+                // suit or the color gates.
+                var rankCrop: Bitmap? = null
+                val effectiveRankCrop = if (trimmedToVisibleStrip && inkRegion != null && region.height > 0f) {
+                    val heightFraction =
+                        ((inkRegion.bottom - inkRegion.top) / region.height).coerceIn(0.05f, 1f)
+                    val h = (crop.height * heightFraction).toInt().coerceIn(8, crop.height)
+                    if (h < crop.height) {
+                        Bitmap.createBitmap(crop, 0, 0, crop.width, h).also { rankCrop = it }
+                    } else {
+                        crop
+                    }
+                } else {
+                    crop
+                }
                 try {
                     // Never override a clear white face-up with the face-down template —
                     // on-device logs showed foundations matching face-down-template.
@@ -352,7 +413,8 @@ class CardRecognizer(
                     val suitCandidates = suitCandidatesForInk(inkRed)
                     val suitSourceMasks = suitBadgeMasks(crop, preferLocatedBadge = true)
                     val suitScoreMap = suitScoresFromMasks(suitSourceMasks, suitCandidates)
-                    val rankScoreMap = rankTemplateScoreMap(crop, exactCardBounds)
+                    val rankScoreMap =
+                        rankTemplateScoreMap(effectiveRankCrop, exactCardBounds, trimmedToVisibleStrip)
                     val (suit, suitTraceRaw) =
                         inferSuitWithTrace(crop, inkRed, suitScoreMap, suitSourceMasks)
                     // Diagnostic-only: expose the raw whole-card ink ratio behind
@@ -364,7 +426,8 @@ class CardRecognizer(
                             (if (inkRegion != null) ",inkRegion=header" else "")
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-                    val rankResolution = resolveRankFromCrop(crop, rankScoreMap)
+                    val rankResolution =
+                        resolveRankFromCrop(effectiveRankCrop, rankScoreMap, trimmedToVisibleStrip)
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -467,6 +530,7 @@ class CardRecognizer(
                         )
                     }
                 } finally {
+                    rankCrop?.takeUnless { it.isRecycled }?.recycle()
                     if (!crop.isRecycled) crop.recycle()
                 }
             }
@@ -474,15 +538,36 @@ class CardRecognizer(
 
         // Color + glyph path (Robolectric / OpenCV-less, and OpenCV miss fallback).
         val crop = crop(bitmap, region)
+        var rankCropFallback: Bitmap? = null
         try {
             // Same reasoning as the OpenCV path above: trust the ink-region
             // gate here too instead of always scoring all 4 suits.
             val suitCandidates = suitCandidatesForInk(inkRed)
             val suitSourceMasks = crop?.let { suitBadgeMasks(it, preferLocatedBadge = true) }
-            val rankScoreMap = crop?.let { rankTemplateScoreMap(it, exactCardBounds) }.orEmpty()
+            // Same region/crop-stays-full-height reasoning as the OpenCV path
+            // above - derive a separate shorter bitmap for rank matching only.
+            val effectiveRankCrop = if (crop != null &&
+                trimmedToVisibleStrip && inkRegion != null && region.height > 0f
+            ) {
+                val heightFraction =
+                    ((inkRegion.bottom - inkRegion.top) / region.height).coerceIn(0.05f, 1f)
+                val h = (crop.height * heightFraction).toInt().coerceIn(8, crop.height)
+                if (h < crop.height) {
+                    Bitmap.createBitmap(crop, 0, 0, crop.width, h).also { rankCropFallback = it }
+                } else {
+                    crop
+                }
+            } else {
+                crop
+            }
+            val rankScoreMap =
+                effectiveRankCrop?.let { rankTemplateScoreMap(it, exactCardBounds, trimmedToVisibleStrip) }
+                    .orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = crop?.let { resolveRankFromCrop(it, rankScoreMap) }
+            val rankResolution = effectiveRankCrop?.let {
+                resolveRankFromCrop(it, rankScoreMap, trimmedToVisibleStrip)
+            }
             val rank = rankResolution?.rank
             val bitmapSuit = if (crop != null && suitSourceMasks != null) {
                 bestBitmapSuit(crop, inkRed, suitSourceMasks)
@@ -598,6 +683,7 @@ class CardRecognizer(
                 trace = trace
             )
         } finally {
+            rankCropFallback?.takeUnless { it.isRecycled }?.recycle()
             crop?.takeUnless { it.isRecycled }?.recycle()
         }
     }
@@ -707,6 +793,7 @@ class CardRecognizer(
         emptyTemplate?.release()
         faceDownTemplate?.release()
         bitmapRankTemplates.clear()
+        bitmapRankTemplatesTrimmed.clear()
         bitmapSuitTemplates.clear()
         rankTemplates.clear()
         suitTemplates.clear()
@@ -736,7 +823,8 @@ class CardRecognizer(
 
     private fun resolveRankFromCrop(
         crop: Bitmap,
-        rankScoreMap: Map<Rank, Float>
+        rankScoreMap: Map<Rank, Float>,
+        trimmedToVisibleStrip: Boolean = false
     ): RankResolution {
         val bitmapRankHit = bestBitmapRank(rankScoreMap)
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
@@ -751,10 +839,26 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = bestRank(crop)
-        val glyph = RankInkHeuristics.guess(crop)
+        val rankHit = bestRank(crop, trimmedToVisibleStrip)
+        // RankInkHeuristics.guess reads the large glyph in a card's CENTER -
+        // on a tableau cascade card trimmed to just its own ~45-54px visible
+        // header strip there is no center glyph, only the small corner digit
+        // (and mostly blank space below it). Its center-band math then lands
+        // on the bottom of that corner digit plus blank space, a shape that
+        // matches nothing real; the "Ten" rule is the loosest one it has
+        // (aspect>1.18, density 0.10-0.30, no other constraint), so it kept
+        // winning almost regardless of the true digit. This was the actual
+        // cause behind all four attempts at this bug so far - none of them
+        // touched this heuristic, which is entirely separate from
+        // rankSourceMasks/rankTemplateScoreMap.
+        val glyph = if (trimmedToVisibleStrip) null else RankInkHeuristics.guess(crop)
         val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
-            rankCornerOcr?.attempt(crop)
+            val profile = if (trimmedToVisibleStrip) {
+                RankCornerOcr.CornerRoiProfile.TRIMMED
+            } else {
+                RankCornerOcr.CornerRoiProfile.DEFAULT
+            }
+            rankCornerOcr?.attempt(crop, profile)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
         } else {
             null
@@ -789,7 +893,14 @@ class CardRecognizer(
     ): Boolean {
         if (bitmapHit != null && bitmapHit.second >= 0.68f) return false
         val candidates = rankCandidates(bitmapHit, rankHit, glyph)
-        if (candidates.isEmpty()) return false
+        // No template/glyph candidate at all is the strongest case for OCR,
+        // not the weakest - this used to decline it, treating "nothing to
+        // tiebreak" the same as "no need to tiebreak". A fresh device log
+        // showed dozens of trimmed cascade cards stuck at rank=null with no
+        // ocr= attempt anywhere in their trace, while the diagnostic-only
+        // probe (same card, untrimmed truth bounds) read the digit fine -
+        // the real pipeline's OCR was never even given a chance.
+        if (candidates.isEmpty()) return true
 
         val sorted = candidates.sortedByDescending { it.second }
         if (sorted[0].second < 0.68f) return true
@@ -848,8 +959,49 @@ class CardRecognizer(
         return if (ocrTrace != null) trace.withPost(ocrTrace) else trace
     }
 
-    private fun rankSourceMasks(crop: Bitmap, exactCardBounds: Boolean): List<LongArray> {
+    private fun rankSourceMasks(
+        crop: Bitmap,
+        exactCardBounds: Boolean,
+        trimmedToVisibleStrip: Boolean = false
+    ): List<LongArray> {
         val sourceMasks = mutableListOf<LongArray>()
+        if (trimmedToVisibleStrip) {
+            // Three earlier attempts at this crop (all reverted) only ever
+            // adjusted height and kept the 70%-of-width ROI below. Measured
+            // directly against golden pixels: on a card's visible header
+            // strip the rank digit's ink is a single contiguous run that
+            // always ends by ~30% of card width, and the neighboring suit
+            // pip never starts before ~70% - on a full ~193px card the 54%
+            // height cut kept the pip below the sampled box entirely, so
+            // 70% width was harmless; once the crop is trimmed to the
+            // ~45-54px visible strip, that same 70% width now reaches the
+            // pip's left edge. A merged digit+pip ink blob reads as a wide
+            // two-glyph shape and matches "Ten" - the only two-character
+            // rank - almost regardless of the true digit. That is the actual
+            // root cause behind every previous attempt here; none of them
+            // touched width. 50% leaves a wide margin on both sides (digit
+            // ends ~30%, pip starts ~70%). Two height fractions because a
+            // tall glyph like "8" measured using close to the full trimmed
+            // strip while "6" needed noticeably less - maxOf over template
+            // scores lets either framing win.
+            // The 50%-width ROI above is deliberately wider than the digit
+            // itself (keeps the suit pip out); inkMask then stretches that
+            // extra whitespace right along with the digit into the 48x48
+            // grid, shrinking the digit's relative size compared to the
+            // snugly-cropped rank templates. Content-crop to the digit's own
+            // ink before the resample so both sides get framed the same way
+            // - see tightContentCrop for the measured before/after.
+            val w = (crop.width * 0.50f).toInt().coerceIn(8, crop.width)
+            for (hFraction in listOf(0.70f, 0.90f)) {
+                val h = (crop.height * hFraction).toInt().coerceIn(8, crop.height)
+                val roi = Bitmap.createBitmap(crop, 0, 0, w, h)
+                val tight = tightContentCrop(roi)
+                sourceMasks += inkMask(tight)
+                if (tight !== roi) tight.recycle()
+                roi.recycle()
+            }
+            return sourceMasks
+        }
         val w = (crop.width * 0.70f).toInt().coerceIn(8, crop.width)
         val h = (crop.height * 0.54f).toInt().coerceAtLeast(8)
         Bitmap.createBitmap(crop, 0, 0, w, h.coerceAtMost(crop.height)).let { roi ->
@@ -874,11 +1026,13 @@ class CardRecognizer(
 
     private fun rankTemplateScoreMap(
         crop: Bitmap,
-        exactCardBounds: Boolean
+        exactCardBounds: Boolean,
+        trimmedToVisibleStrip: Boolean = false
     ): Map<Rank, Float> {
-        if (bitmapRankTemplates.isEmpty()) return emptyMap()
-        val sourceMasks = rankSourceMasks(crop, exactCardBounds)
-        return bitmapRankTemplates.mapValues { (_, templateMasks) ->
+        val templates = if (trimmedToVisibleStrip) bitmapRankTemplatesTrimmed else bitmapRankTemplates
+        if (templates.isEmpty()) return emptyMap()
+        val sourceMasks = rankSourceMasks(crop, exactCardBounds, trimmedToVisibleStrip)
+        return templates.mapValues { (_, templateMasks) ->
             templateMasks.maxOf { templateMask ->
                 sourceMasks.maxOf { source -> maskScore(source, templateMask) }
             }
@@ -1026,15 +1180,31 @@ class CardRecognizer(
             val topConfirmsLeader = best?.first != null &&
                 topLeader == best!!.first &&
                 topMargin >= TOP_BLACK_SUIT_MARGIN
+            // A sweep across every waste-pile black-suit golden sample (Ace, Jack,
+            // Three, two Kings, Five of Spades vs. Eight, Four, Six of Clubs) showed
+            // the geometric shape heuristic (peak-width/lobe/valley measurements, not
+            // template silhouette matching) resolve every genuine case with margin
+            // ~1.3 - over 3x BLACK_SHAPE_MIN_MARGIN and well past every other shape
+            // threshold in this file (TOP_BLACK_SHAPE_VETO_MARGIN=0.28). At this
+            // waste badge scale the coarse 48x48 Dice template match is unreliable in
+            // both directions: full AND top-half scores agreed on the wrong suit for
+            // every misread Spade, so topConfirmsLeader's "both signals agree"
+            // protection was reinforcing that shared error instead of catching a
+            // genuine shape-heuristic mistake (the QC/10C cases it was built for).
+            // A margin this decisive is a different regime - trust it even when
+            // topConfirmsLeader would otherwise block the override.
+            val shapeDecisive = shape != null && shape.margin >= BLACK_SHAPE_DECISIVE_MARGIN
             if (shape != null &&
                 shape.margin >= BLACK_SHAPE_MIN_MARGIN &&
-                !topConfirmsLeader &&
+                (!topConfirmsLeader || shapeDecisive) &&
                 (fullMargin < BLACK_SUIT_MARGIN * 1.6f || shape.suit == best?.first)
             ) {
                 blackDebug?.invoke(
                     "full=C${"%.2f".format(clubScore)}/S${"%.2f".format(spadeScore)}," +
                         "top=C${"%.2f".format(topClub)}/S${"%.2f".format(topSpade)}," +
-                        "branch=wideMarginShapeOverride->${shape.suit}"
+                        "branch=${
+                            if (topConfirmsLeader) "wideMarginShapeOverrideDecisive" else "wideMarginShapeOverride"
+                        }->${shape.suit}"
                 )
                 best = shape.suit to max(clubScore, spadeScore) + 0.03f
                 second = min(clubScore, spadeScore)
@@ -1612,6 +1782,20 @@ class CardRecognizer(
         }
         val top = best ?: return null
         if (top.second < 0.48f) return null
+        // Applying this margin check regardless of the top score was tried
+        // and reverted: a real device Evaluate run (v1.3.68/69) showed it
+        // decline the bitmap-rank match on dozens of genuinely-correct,
+        // high-confidence reads (0.84 vs 0.82, 0.85 vs 0.83, etc. - two
+        // visually similar ranks landing close together is common even when
+        // the top one is right), each falling through to weaker OCR/glyph
+        // fallbacks that mostly missed - accuracy dropped from 97%
+        // (1031/1068) to 91% (975/1068), with a new "FaceUp -> Unknown (37)"
+        // bucket that hadn't existed before. The single case this was meant
+        // to fix (a geometrically-reconstructed cascade card scoring Six
+        // 0.83 vs Five 0.82) is a real but narrow case; the unconditional
+        // margin check costs far more than it fixes. Reverted to only
+        // applying below 0.68, where a close margin is a genuine sign of
+        // ambiguity rather than two merely-similar high scores.
         if (top.second - second < 0.035f && top.second < 0.68f) return null
         // Clipped Smash Q matches the "0" in Ten. Prefer Queen unless Ten
         // wins by a clear two-glyph margin.
@@ -1645,6 +1829,121 @@ class CardRecognizer(
             return null
         }
         return top
+    }
+
+    private class InkComponent(var size: Int, var left: Int, var top: Int, var right: Int, var bottom: Int)
+
+    /**
+     * Crop to the union of "significant" connected ink blobs (with a small
+     * margin) - components at least sizeThreshold of the largest one's pixel
+     * count. inkMask always stretches whatever bitmap it's given to fill a
+     * 48x48 grid, so two crops with different amounts of surrounding
+     * whitespace end up warping the same glyph to different relative sizes.
+     * Rank template PNGs are already snug around the digit (ink fills ~90%
+     * of the frame), but rankSourceMasks' trimmedToVisibleStrip ROI is
+     * deliberately wider than the digit (50% of card width, to keep the
+     * suit pip out) - the digit there only fills ~35-40% of the frame
+     * width. A real golden crop of "8" scored 0.50 against its own rank_eight
+     * template that way (tied for last among all ranks); content-cropping
+     * both sides to the same framing before the resample brought it to
+     * 0.89, a clear win over every other rank.
+     *
+     * Two earlier attempts here were both wrong in opposite directions.
+     * Bounding-box-of-all-ink regressed a real card: a single stray red
+     * pixel bled in from the card above at the very top of the ROI, and the
+     * box stretched to include it, reintroducing the "digit doesn't fill
+     * the frame" problem this function exists to fix - just from
+     * contamination instead of margin. Switching to the single largest
+     * connected component fixed that, but broke "10" - Solitaire's only
+     * two-character rank - because "1" and "0" are two separate components
+     * with no touching pixels, and "1" alone has more ink than the (thinner,
+     * ring-shaped) "0", so the single-largest rule silently dropped "0"
+     * entirely, leaving just a bare "1" to match against. A size-relative
+     * threshold keeps both real digit strokes (comparable sizes) while still
+     * discarding a stray speck (a handful of pixels next to a whole digit).
+     */
+    private fun tightContentCrop(bitmap: Bitmap, margin: Int = 2, sizeThreshold: Float = 0.20f): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        val ink = BooleanArray(width * height)
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            ink[i] = SmashColorAnalyzer.isRedInk(r, g, b) ||
+                SmashColorAnalyzer.isBlackInk(r, g, b) ||
+                SmashColorAnalyzer.isGenericDarkInk(r, g, b)
+        }
+        val visited = BooleanArray(width * height)
+        val components = mutableListOf<InkComponent>()
+        val queueX = IntArray(width * height)
+        val queueY = IntArray(width * height)
+        for (startY in 0 until height) {
+            for (startX in 0 until width) {
+                val startIndex = startY * width + startX
+                if (!ink[startIndex] || visited[startIndex]) continue
+                var head = 0
+                var tail = 0
+                queueX[tail] = startX
+                queueY[tail] = startY
+                tail++
+                visited[startIndex] = true
+                var size = 0
+                var minX = startX
+                var minY = startY
+                var maxX = startX
+                var maxY = startY
+                while (head < tail) {
+                    val cx = queueX[head]
+                    val cy = queueY[head]
+                    head++
+                    size++
+                    if (cx < minX) minX = cx
+                    if (cx > maxX) maxX = cx
+                    if (cy < minY) minY = cy
+                    if (cy > maxY) maxY = cy
+                    for (dy in -1..1) {
+                        for (dx in -1..1) {
+                            if (dx == 0 && dy == 0) continue
+                            val nx = cx + dx
+                            val ny = cy + dy
+                            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+                            val nIndex = ny * width + nx
+                            if (ink[nIndex] && !visited[nIndex]) {
+                                visited[nIndex] = true
+                                queueX[tail] = nx
+                                queueY[tail] = ny
+                                tail++
+                            }
+                        }
+                    }
+                }
+                components += InkComponent(size, minX, minY, maxX, maxY)
+            }
+        }
+        if (components.isEmpty()) return bitmap
+        val maxSize = components.maxOf { it.size }
+        val minKeptSize = maxSize * sizeThreshold
+        var bestLeft = width
+        var bestTop = height
+        var bestRight = -1
+        var bestBottom = -1
+        components.forEach { component ->
+            if (component.size >= minKeptSize) {
+                if (component.left < bestLeft) bestLeft = component.left
+                if (component.top < bestTop) bestTop = component.top
+                if (component.right > bestRight) bestRight = component.right
+                if (component.bottom > bestBottom) bestBottom = component.bottom
+            }
+        }
+        val left = (bestLeft - margin).coerceIn(0, width - 1)
+        val top = (bestTop - margin).coerceIn(0, height - 1)
+        val right = (bestRight + margin + 1).coerceIn(left + 1, width)
+        val bottom = (bestBottom + margin + 1).coerceIn(top + 1, height)
+        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
     }
 
     private fun inkMask(bitmap: Bitmap): LongArray {
@@ -1709,13 +2008,27 @@ class CardRecognizer(
         return matchTemplate(crop, tmpl, badgeOnly = false) >= 0.72f
     }
 
-    private fun bestRank(crop: Bitmap): Pair<Rank, Float>? {
+    private fun bestRank(crop: Bitmap, trimmedToVisibleStrip: Boolean = false): Pair<Rank, Float>? {
         if (rankTemplates.isEmpty()) return null
         var best: Pair<Rank, Float>? = null
         var second = 0f
         for ((rank, template) in rankTemplates) {
-            val center = matchTemplate(crop, template, badgeOnly = false)
-            val badge = matchTemplate(crop, template, badgeOnly = true)
+            // matchTemplate's "center" ROI targets the large center rank
+            // glyph on a full card. A tableau cascade card's crop is already
+            // trimmed to just its own visible header strip, which has no
+            // center glyph at all - only the small corner badge, which the
+            // badgeOnly ROI below already covers. Scoring the (nonexistent)
+            // center content there produced spurious matches; see the
+            // resolveRankFromCrop comment on RankInkHeuristics for the
+            // identical failure mode in a sibling heuristic.
+            val center = if (trimmedToVisibleStrip) 0f else matchTemplate(crop, template, badgeOnly = false)
+            val badge = if (trimmedToVisibleStrip) {
+                listOf(0.70f, 0.90f).maxOf { fraction ->
+                    matchTemplate(crop, template, badgeOnly = true, badgeHeightFraction = fraction)
+                }
+            } else {
+                matchTemplate(crop, template, badgeOnly = true)
+            }
             val score = max(center, badge)
             when {
                 best == null || score > best.second -> {
@@ -1748,7 +2061,20 @@ class CardRecognizer(
         crop: Bitmap,
         template: Mat,
         badgeOnly: Boolean,
-        suitPip: Boolean = false
+        suitPip: Boolean = false,
+        // matchTemplate's badgeOnly ROI (h=42% of crop) is calibrated for a
+        // full ~193px card's corner badge. On an already-trimmed ~44-54px
+        // cascade-card crop (bestRank's only trimmedToVisibleStrip caller),
+        // 42% shrinks to ~18-23px - often too short for the rank digit. This
+        // silently starved bestRank of any usable score for cascade cards
+        // (confirmed via a fresh device log: rankScoreMap - a separate,
+        // already-fixed ink-mask path - had real if noisy candidates, but
+        // bestRank's own score stayed empty, so needsOcrTiebreak saw no
+        // candidates at all and never even tried OCR). Same fractions
+        // rankSourceMasks already validated against real golden pixels: a
+        // tall glyph like "8" needs close to the full trimmed strip, "6"
+        // needs noticeably less - callers try both and take the max.
+        badgeHeightFraction: Float = 0.42f
     ): Float {
         val src = Mat()
         val gray = Mat()
@@ -1774,7 +2100,7 @@ class CardRecognizer(
                 )
             } else if (badgeOnly) {
                 val w = (gray.cols() * 0.50).toInt().coerceAtLeast(8)
-                val h = (gray.rows() * 0.42).toInt().coerceAtLeast(8)
+                val h = (gray.rows() * badgeHeightFraction).toInt().coerceAtLeast(8)
                 Mat(gray, Rect(0, 0, w.coerceAtMost(gray.cols()), h.coerceAtMost(gray.rows())))
             } else {
                 val x = (gray.cols() * 0.08).toInt()
@@ -1871,6 +2197,16 @@ class CardRecognizer(
         /** Full-badge margin at or below this → defer to top-half tiebreaker. */
         const val BLACK_SUIT_TOP_TIEBREAK_MAX = 0.055f
         const val BLACK_SHAPE_MIN_MARGIN = 0.40f
+        /**
+         * Shape margin decisive enough to override topConfirmsLeader in the
+         * wide-full-margin branch (see bestBitmapSuit). A sweep of every waste-pile
+         * black-suit golden sample put every genuine Spade at margin ~1.3 and every
+         * genuine Clubs badge either below BLACK_SHAPE_MIN_MARGIN entirely or well
+         * under this - similar to BLACK_TOP_CLUB_STRONG_SPADE_SHAPE_MARGIN's own
+         * confirmed split (Spades~1.08, Clubs~0.50) in a different branch. Sits with
+         * real margin above both that precedent and the observed Clubs ceiling.
+         */
+        const val BLACK_SHAPE_DECISIVE_MARGIN = 0.90f
         const val TOP_BLACK_FRACTION = 0.45f
         const val TOP_BLACK_SUIT_MARGIN = 0.04f
         /** Shape margin to override a thin spade template win on club badges. */

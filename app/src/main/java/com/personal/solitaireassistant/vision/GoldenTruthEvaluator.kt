@@ -17,7 +17,9 @@ data class GoldenEvalReport(
     val redSuitConfusions: List<Pair<String, Int>>,
     val blackSuitConfusions: List<Pair<String, Int>>,
     val mismatches: List<String>,
-    val mismatchDiagnostics: List<String> = emptyList()
+    val mismatchDiagnostics: List<String> = emptyList(),
+    /** Golden ids present on disk but unparseable, so not evaluated at all. */
+    val unreadableSampleIds: List<String> = emptyList()
 ) {
     val accuracy: Float
         get() = if (slotCount == 0) 0f else matchedSlots.toFloat() / slotCount
@@ -29,6 +31,10 @@ data class GoldenEvalReport(
             "Accuracy: ${"%.0f".format(accuracy * 100f)}% ($matchedSlots/$slotCount)",
             "Rank errors: $rankErrors  Suit errors: $suitErrors  Occupancy: $occupancyErrors  Missing: $missingSlots"
         )
+        if (unreadableSampleIds.isNotEmpty()) {
+            lines += "SKIPPED ${unreadableSampleIds.size} unreadable sample(s) - not evaluated:"
+            unreadableSampleIds.forEach { lines += "  $it.json" }
+        }
         if (confusions.isNotEmpty()) {
             lines += "Confusions:"
             confusions.take(8).forEach { (pair, count) ->
@@ -96,6 +102,14 @@ object GoldenTruthEvaluator {
         samples.forEach { sample ->
             val bitmap = store.loadBitmap(sample.id) ?: return@forEach
             try {
+                // Samples are independent snapshots, not consecutive frames of one
+                // game - detector.detect() otherwise reuses recognizeCached's
+                // frame-to-frame slotHitCache across them, which is correct for
+                // the live capture pipeline (same board, unchanged regions) but
+                // wrong here: a coincidental fingerprint+bounds match against an
+                // unrelated earlier sample would silently serve that sample's
+                // stale hit instead of genuinely recognizing this one.
+                detector.clearSlotCache()
                 compareSample(
                     sample = sample,
                     bitmap = bitmap,
@@ -135,7 +149,8 @@ object GoldenTruthEvaluator {
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
             mismatches = mismatches,
-            mismatchDiagnostics = mismatchDiagnostics
+            mismatchDiagnostics = mismatchDiagnostics,
+            unreadableSampleIds = store.listUnreadableIds()
         )
     }
 
@@ -155,6 +170,9 @@ object GoldenTruthEvaluator {
         val mismatches = mutableListOf<String>()
         val mismatchDiagnostics = mutableListOf<String>()
         samples.forEach { (sample, bitmap) ->
+            // See the matching comment in evaluate(store, detector) above: these
+            // are independent snapshots, not consecutive frames of one game.
+            detector.clearSlotCache()
             compareSample(
                 sample = sample,
                 bitmap = bitmap,
@@ -206,7 +224,8 @@ object GoldenTruthEvaluator {
         redSuitConfusionMap: Map<String, Int>,
         blackSuitConfusionMap: Map<String, Int>,
         mismatches: List<String>,
-        mismatchDiagnostics: List<String>
+        mismatchDiagnostics: List<String>,
+        unreadableSampleIds: List<String> = emptyList()
     ): GoldenEvalReport {
         val confusions = confusionMap.entries
             .sortedByDescending { it.value }
@@ -229,7 +248,8 @@ object GoldenTruthEvaluator {
             redSuitConfusions = redSuitConfusions,
             blackSuitConfusions = blackSuitConfusions,
             mismatches = mismatches,
-            mismatchDiagnostics = mismatchDiagnostics
+            mismatchDiagnostics = mismatchDiagnostics,
+            unreadableSampleIds = unreadableSampleIds
         )
     }
 
@@ -262,6 +282,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = null,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -282,6 +303,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = detected,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -334,6 +356,7 @@ object GoldenTruthEvaluator {
                         sampleId = sample.id,
                         truthSlot = truthSlot,
                         detected = detected,
+                        allDetected = detection.recognizedSlots,
                         bitmap = bitmap,
                         detector = detector
                     )
@@ -346,6 +369,7 @@ object GoldenTruthEvaluator {
         sampleId: String,
         truthSlot: GoldenSlot,
         detected: RecognizedSlot?,
+        allDetected: List<RecognizedSlot> = emptyList(),
         bitmap: Bitmap,
         detector: GameStateDetector
     ): String {
@@ -357,24 +381,19 @@ object GoldenTruthEvaluator {
         }
         val parts = mutableListOf("$sampleId ${truthSlot.pile} $label")
         if (detected != null) {
-            val rankPart = buildString {
-                append("rank=")
-                append(detected.trace.rankSource ?: "?")
-                detected.trace.rankScore?.let { append("@${"%.2f".format(it)}") }
-                detected.trace.rankTemplates?.let { append(" {$it}") }
-            }
-            parts += rankPart
-            val suitPart = buildString {
-                append("suit=")
-                append(detected.trace.suitSource ?: "?")
-                detected.trace.suitScore?.let { append("@${"%.2f".format(it)}") }
-                detected.trace.suitTemplates?.let { append(" {$it}") }
-            }
-            parts += suitPart
-            if (detected.trace.postSteps.isNotEmpty()) {
-                parts += "post=[${detected.trace.postSteps.joinToString("; ")}]"
-            }
-            parts += "diag=${detected.diagnostic}"
+            parts += formatSlotTraceParts(detected)
+        }
+        // A detected slot the evaluator excludes as unreliable (inferred=true,
+        // see findMatchingSlot) is invisible above: a MISSING truth slot shows
+        // nothing about what the real recognizer saw at that position, and an
+        // occupancy/rank/suit mismatch shows only the wrong neighboring slot
+        // it fell back to instead. Surface the nearest excluded candidate's
+        // own trace too, so a rejected-but-real attempt (low confidence,
+        // unresolved rank, ambiguous suit) can be told apart from a position
+        // with no attempt at all. Purely diagnostic - findMatchingSlot still
+        // ignores inferred slots for scoring, so this cannot change results.
+        findNearestInferredSlot(allDetected, truthSlot)?.let { inferredSlot ->
+            parts += "inferred=[${formatSlotTraceParts(inferredSlot).joinToString(" | ")}]"
         }
         if (expected.kind == SlotKind.FaceUp) {
             val probe = if (truthSlot.pile == "waste") {
@@ -387,6 +406,27 @@ object GoldenTruthEvaluator {
         return parts.joinToString(" | ")
     }
 
+    private fun formatSlotTraceParts(slot: RecognizedSlot): List<String> {
+        val rankPart = buildString {
+            append("rank=")
+            append(slot.trace.rankSource ?: "?")
+            slot.trace.rankScore?.let { append("@${"%.2f".format(it)}") }
+            slot.trace.rankTemplates?.let { append(" {$it}") }
+        }
+        val suitPart = buildString {
+            append("suit=")
+            append(slot.trace.suitSource ?: "?")
+            slot.trace.suitScore?.let { append("@${"%.2f".format(it)}") }
+            slot.trace.suitTemplates?.let { append(" {$it}") }
+        }
+        val parts = mutableListOf(rankPart, suitPart)
+        if (slot.trace.postSteps.isNotEmpty()) {
+            parts += "post=[${slot.trace.postSteps.joinToString("; ")}]"
+        }
+        parts += "diag=${slot.diagnostic}"
+        return parts
+    }
+
     fun findMatchingSlot(
         detected: List<RecognizedSlot>,
         truth: GoldenSlot
@@ -396,6 +436,24 @@ object GoldenTruthEvaluator {
         val cy = truth.bounds.centerY
         return detected
             .filter { it.pile == pile && !it.inferred }
+            .minByOrNull { hypot(it.bounds.centerX - cx, it.bounds.centerY - cy) }
+            ?.takeIf { match ->
+                hypot(
+                    match.bounds.centerX - cx,
+                    match.bounds.centerY - cy
+                ) < MATCH_DISTANCE_PX
+            }
+    }
+
+    private fun findNearestInferredSlot(
+        detected: List<RecognizedSlot>,
+        truth: GoldenSlot
+    ): RecognizedSlot? {
+        val pile = runCatching { parsePileRefKey(truth.pile) }.getOrNull() ?: return null
+        val cx = truth.bounds.centerX
+        val cy = truth.bounds.centerY
+        return detected
+            .filter { it.pile == pile && it.inferred }
             .minByOrNull { hypot(it.bounds.centerX - cx, it.bounds.centerY - cy) }
             ?.takeIf { match ->
                 hypot(

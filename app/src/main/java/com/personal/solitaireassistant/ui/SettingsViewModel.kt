@@ -96,20 +96,17 @@ class SettingsViewModel(
 
     fun closeGoldenReview() {
         showGoldenReview.value = false
-        CaptureService.setGoldenReviewActive(false)
     }
 
     fun discardGoldenReview() {
         PendingSnapshotHolder.clear()
         showGoldenReview.value = false
-        CaptureService.setGoldenReviewActive(false)
     }
 
     fun saveGoldenReview(truths: List<SlotGuess>) {
         val snapshot = PendingSnapshotHolder.peek() ?: run {
             transient.value = "Snapshot was lost"
             showGoldenReview.value = false
-            CaptureService.setGoldenReviewActive(false)
             return
         }
         viewModelScope.launch {
@@ -123,7 +120,6 @@ class SettingsViewModel(
                 }
             )
             showGoldenReview.value = false
-            CaptureService.setGoldenReviewActive(false)
             withContext(Dispatchers.IO) {
                 store.save(snapshot.bitmap, sample)
             }

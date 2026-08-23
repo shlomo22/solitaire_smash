@@ -115,6 +115,26 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshGoldenCount()
+        // The move-suggestion arrow/Label/Cancel chrome is a system-wide
+        // TYPE_APPLICATION_OVERLAY window - it floats above every app,
+        // including this Activity's own Settings/Golden-Truth screens, with
+        // no awareness of which app the user is actually looking at. A real
+        // device log showed it stay visible on top of the Settings screen
+        // for minutes because the underlying capture was still genuinely
+        // watching a real, ongoing Solitaire Smash game the whole time (so
+        // the existing isLivePlayScreen gate never had a reason to hide it)
+        // - the arrow just isn't relevant here regardless of what's being
+        // detected. Reuse the same reviewMode hide this app already applies
+        // during golden-truth card review, but drive it from this
+        // Activity's own foreground state instead: hidden whenever this
+        // screen is what the user is looking at, restored once they leave
+        // (e.g. Start launches Solitaire Smash and this Activity pauses).
+        CaptureService.setGoldenReviewActive(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        CaptureService.setGoldenReviewActive(false)
     }
 
     private fun maybeOpenGoldenReview(intent: Intent?) {

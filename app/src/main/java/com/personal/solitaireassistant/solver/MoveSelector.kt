@@ -169,6 +169,15 @@ object MoveSelector {
                 score += 25.0
                 reasons += "clear-waste"
             }
+            is Move.FoundationToTableau -> {
+                // A last-resort move: pulling a card back off a foundation only
+                // makes sense when it genuinely unlocks progress elsewhere
+                // (a reveal, an unstuck run). The reveal/lookahead bonuses
+                // above already reward that; this flat cost keeps it from
+                // ever winning just because it happens to be *a* legal move.
+                score -= 60.0
+                reasons += "pull-from-foundation"
+            }
             Move.DrawStock -> {
                 if (hasProductiveWasteMove(before)) {
                     score -= 30.0
@@ -375,11 +384,26 @@ object MoveSelector {
         before: GameState,
         after: GameState,
         move: Move
-    ): Boolean {
-        if (move !is Move.TableauToTableau) return false
-        val undoCandidates = MoveGenerator.generate(after).filterIsInstance<Move.TableauToTableau>()
-        return undoCandidates.any { undo ->
-            KlondikeRules.apply(after, undo)?.tableau == before.tableau
+    ): Boolean = when (move) {
+        is Move.TableauToTableau -> {
+            val undoCandidates = MoveGenerator.generate(after).filterIsInstance<Move.TableauToTableau>()
+            undoCandidates.any { undo ->
+                KlondikeRules.apply(after, undo)?.tableau == before.tableau
+            }
         }
+        is Move.FoundationToTableau -> {
+            // Pulling a card off a foundation and immediately being able to
+            // send it right back to the same spot, with nothing else on the
+            // board changed, is pure churn - the "pull-from-foundation"
+            // penalty above already discourages it, but a move that also
+            // reveals a card or otherwise helps still needs this to avoid
+            // treating the round-trip itself as free progress.
+            val undoCandidates = MoveGenerator.generate(after).filterIsInstance<Move.TableauToFoundation>()
+            undoCandidates.any { undo ->
+                val undone = KlondikeRules.apply(after, undo)
+                undone?.tableau == before.tableau && undone.foundations == before.foundations
+            }
+        }
+        else -> false
     }
 }

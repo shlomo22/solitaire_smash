@@ -9,6 +9,11 @@ import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -30,6 +35,19 @@ class GameStateDetector(
     private val recognizer = CardRecognizer(context, minConfidence)
     private var slotHitCache = mutableMapOf<SlotKey, CachedSlotHit>()
 
+    // Dedicated pool for parallel tableau-column recognition (see detect()'s
+    // computeColumn), rather than the shared Dispatchers.Default: detect()
+    // is also invoked from GoldenTruthEvaluator via
+    // withContext(Dispatchers.Default), and nesting runBlocking on that same
+    // shared pool would block one of its own worker threads while trying to
+    // schedule more work onto it. A small dedicated pool sidesteps that
+    // entirely instead of relying on Dispatchers.Default's blocking-aware
+    // scheduling to sort it out.
+    private val columnExecutor = Executors.newFixedThreadPool(
+        (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 7)
+    )
+    private val columnDispatcher = columnExecutor.asCoroutineDispatcher()
+
     // Diagnostic-only: per-detect() timing, reset at the top of detect().
     // Not thread-safe, but the pipeline only ever runs one detect() at a time.
     private var recognizeCacheHits = 0
@@ -45,6 +63,31 @@ class GameStateDetector(
         val fingerprint: Long,
         val bounds: BoardRegion,
         val hit: RecognitionHit
+    )
+
+    // Per-column-local accumulator for recognizeCached's diagnostic counters.
+    // Tableau columns run concurrently (see detect()'s computeColumn), so each
+    // gets its own instance instead of incrementing the instance fields
+    // directly - merged back into them sequentially once every column
+    // finishes.
+    private class RecognizeStats {
+        var hits = 0
+        var misses = 0
+        var missNanos = 0L
+        var missNoPrior = 0
+        var missFingerprint = 0
+        var missBounds = 0
+    }
+
+    private class TableauColumnResult(
+        val col: Int,
+        val cards: List<Card>,
+        val locations: List<CardLocation>,
+        val diagnostics: List<String>,
+        val recognizedSlots: List<RecognizedSlot>,
+        val cacheEntries: Map<SlotKey, CachedSlotHit>,
+        val stats: RecognizeStats,
+        val elapsedNanos: Long
     )
 
     @Suppress("UNUSED_PARAMETER")
@@ -421,9 +464,24 @@ class GameStateDetector(
             diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard}"
         }
 
-        locator.tableauColumnRegions(board).forEachIndexed { col, columnRegion ->
+        // Each column is recognized independently of the others (its own
+        // region, its own slot indices), so the whole per-column body below
+        // runs as a local function whose diagnostics/recognizedSlots/cache/
+        // counters are all column-local - declared fresh here, they shadow
+        // the detect()-level lists of the same name for the rest of this
+        // function, so every `diagnostics +=` / `recognizedSlots +=` below
+        // is untouched from the previous sequential version. Real device
+        // logs showed one or two long cascades dominating a frame's time
+        // (up to ~1.3s) while the rest finish in a couple of ms, so running
+        // all 7 concurrently on a dedicated pool (columnDispatcher, below)
+        // lets the frame finish in roughly the slowest column's time instead
+        // of the sum of all 7.
+        val computeColumn = fun(col: Int, columnRegion: BoardRegion): TableauColumnResult {
             val columnStartNanos = System.nanoTime()
-            try {
+            val diagnostics = mutableListOf<String>()
+            val recognizedSlots = mutableListOf<RecognizedSlot>()
+            val localCache = mutableMapOf<SlotKey, CachedSlotHit>()
+            val stats = RecognizeStats()
             val cards = mutableListOf<Card>()
             val locs = mutableListOf<CardLocation>()
             val cardWidth = columnRegion.width
@@ -488,7 +546,8 @@ class GameStateDetector(
                     pile = PileRef.Tableau(col),
                     index = 0,
                     region = faceRegion,
-                    cache = newSlotCache
+                    cache = localCache,
+                    stats = stats
                 )
                 val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
                 var card = cardFromHit(hit) ?: Card(
@@ -545,12 +604,28 @@ class GameStateDetector(
                         columnRegion.right,
                         (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
                     )
+                    // A full cardHeight-tall peek reaches well past the next
+                    // downStep-wide slice - a real device log showed this
+                    // picking up a confidently-recognized card several slices
+                    // below firstFaceTop (e.g. bottomTop 21-29px away vs a
+                    // ~193px-tall peek) and wrongly treating THIS position as
+                    // its start, converting a still-face-down card into a
+                    // phantom face-up one. Cap the peek at one downStep so a
+                    // hit here can only belong to a card actually exposed at
+                    // this position.
+                    val peekBounds = BoardRegion(
+                        columnRegion.left,
+                        firstFaceTop,
+                        columnRegion.right,
+                        (firstFaceTop + downStep).coerceAtMost(columnRegion.bottom)
+                    )
                     val boundaryHit = recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 100 + faceDownCount,
-                        region = bounds,
-                        cache = newSlotCache
+                        region = peekBounds,
+                        cache = localCache,
+                        stats = stats
                     )
                     if (boundaryStats.whiteRatio > 0.12f &&
                         !boundaryHit.isFaceDown &&
@@ -595,6 +670,21 @@ class GameStateDetector(
                     // this card — the rest is covered by the card(s) stacked on
                     // top of it. Feed the ink-color read only that visible strip
                     // so the covering card's color can't leak into inkRed.
+                    //
+                    // leadingRegion itself stays full cardHeight: a fifth
+                    // attempt trimmed it down (matching leadingHeaderRegion)
+                    // and a real device log showed FaceUp->FaceDown mismatches
+                    // spike (Occupancy 9->29, Missing 1->18) - the coarse
+                    // looksFaceDown/looksEmpty color gates in recognize() run
+                    // on this same region's stats, and a few pixels of teal
+                    // bleed from the covering card at the boundary is a much
+                    // larger fraction of a ~44px strip than of a ~193px card,
+                    // tipping genuinely face-up cards into the face-down gate.
+                    // trimmedToVisibleStrip (passed below) tells recognize() to
+                    // derive its own smaller sub-crop internally, from
+                    // leadingRegion's already-correct crop, using inkRegion's
+                    // proportions - narrower fix than trimming the region the
+                    // color gates see.
                     val leadingHeaderRegion = BoardRegion(
                         columnRegion.left,
                         firstFaceTop,
@@ -607,9 +697,11 @@ class GameStateDetector(
                         pile = PileRef.Tableau(col),
                         index = 200,
                         region = leadingRegion,
-                        cache = newSlotCache,
+                        cache = localCache,
                         exactCardBounds = true,
-                        inkRegion = leadingHeaderRegion
+                        inkRegion = leadingHeaderRegion,
+                        trimmedToVisibleStrip = true,
+                        stats = stats
                     )
                     leadingHit = leadingHitResult
                     leadingCard = leadingHitResult.card
@@ -688,7 +780,13 @@ class GameStateDetector(
                     // Same overlap problem as the leading card: bounds reaches
                     // down through cardHeight, but everything past the next
                     // card's header start is that next card's face, not this
-                    // one's. Keep the ink read scoped to the visible strip.
+                    // one's. Keep `bounds` (full cardHeight) as the region
+                    // recognizeCached sees - trimming it made the coarse
+                    // looksFaceDown color gate misfire on genuinely face-up
+                    // cards (see the leading-card comment above). Only
+                    // trimmedToVisibleStrip + inkRegion tell recognize() to
+                    // build its own smaller sub-crop internally for rank
+                    // matching specifically.
                     val headerRegion = BoardRegion(
                         columnRegion.left,
                         top,
@@ -701,16 +799,22 @@ class GameStateDetector(
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
                         region = bounds,
-                        cache = newSlotCache,
+                        cache = localCache,
                         exactCardBounds = true,
-                        inkRegion = headerRegion
+                        inkRegion = headerRegion,
+                        trimmedToVisibleStrip = true,
+                        stats = stats
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
+                            // Independent crop from whatever region it's given;
+                            // locateBadge searches adaptively for the pip
+                            // rather than a fixed proportion, so route it
+                            // through the same trimmed strip too.
                             val (resolved, trace) = resolveCardSuitWithTrace(
                                 bitmap,
-                                bounds,
+                                headerRegion,
                                 requireNotNull(slotCard),
                                 slotHit.trace
                             )
@@ -725,10 +829,23 @@ class GameStateDetector(
                                 inferred = false
                             )
                         } else {
+                            // Keep the real attempt's own rank/suit/post trace instead
+                            // of discarding it to RecognitionTrace.EMPTY. Previously a
+                            // card that failed isReliableRead left zero information
+                            // about why - "inferred-cascade" masked whatever rank/suit
+                            // read and confidence actually got rejected, making these
+                            // cases undebuggable from analysis.log alone. Golden
+                            // matching still excludes inferred=true slots entirely
+                            // (GoldenTruthEvaluator.findMatchingSlot), so surfacing
+                            // this cannot change what gets scored - it only makes a
+                            // rejected read visible instead of invisible.
                             ResolvedCascadeSlot(
                                 card = geometricFallback,
-                                trace = RecognitionTrace.EMPTY,
-                                diagnostic = "inferred-cascade",
+                                trace = slotHit.trace.withPost(
+                                    "rejected:known=${slotCard?.known}," +
+                                        "conf=${"%.2f".format(slotHit.confidence)}"
+                                ),
+                                diagnostic = "inferred-cascade:${slotHit.diagnostic}",
                                 confidence = if (geometricFallback.known) 0.55f else 0.20f,
                                 inferred = true
                             )
@@ -747,6 +864,7 @@ class GameStateDetector(
                             engine = slotGuessFromCard(cascadeCard),
                             confidence = cascadeConfidence,
                             diagnostic = cascadeDiagnostic,
+                            trace = cascadeTrace,
                             inferred = true
                         )
                     } else {
@@ -799,8 +917,6 @@ class GameStateDetector(
                     inferred = false
                 )
             }
-            tableau[col] = cards
-            locations[PileRef.Tableau(col)] = locs
             faceRegion?.let {
                 diagnostics += "tableau$col.region=${"%.1f".format(it.top)}-${"%.1f".format(it.bottom)}"
             }
@@ -812,9 +928,42 @@ class GameStateDetector(
                 }
             }
             diagnostics += "tableau$col=$summary"
-            } finally {
-                tableauColumnNanos[col] = System.nanoTime() - columnStartNanos
-            }
+            return TableauColumnResult(
+                col = col,
+                cards = cards,
+                locations = locs,
+                diagnostics = diagnostics,
+                recognizedSlots = recognizedSlots,
+                cacheEntries = localCache,
+                stats = stats,
+                elapsedNanos = System.nanoTime() - columnStartNanos
+            )
+        }
+
+        // OCR (ML Kit) and the OpenCV/bitmap templates are lazily loaded on
+        // first use behind a non-thread-safe `loaded` flag; the sequential
+        // stock/waste/foundation recognize() calls above already force that
+        // init before any column runs, but make it explicit here too so this
+        // parallel dispatch never depends on incidental call ordering above.
+        recognizer.ensureLoaded()
+        val columnResults = runBlocking(columnDispatcher) {
+            locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
+                async { computeColumn(col, columnRegion) }
+            }.awaitAll()
+        }
+        columnResults.forEach { result ->
+            tableau[result.col] = result.cards
+            locations[PileRef.Tableau(result.col)] = result.locations
+            diagnostics += result.diagnostics
+            recognizedSlots += result.recognizedSlots
+            newSlotCache.putAll(result.cacheEntries)
+            recognizeCacheHits += result.stats.hits
+            recognizeCacheMisses += result.stats.misses
+            recognizeMissNanos += result.stats.missNanos
+            missNoPriorEntry += result.stats.missNoPrior
+            missFingerprintChanged += result.stats.missFingerprint
+            missBoundsShifted += result.stats.missBounds
+            tableauColumnNanos[result.col] = result.elapsedNanos
         }
 
         val wasteConfidence = if (wasteCandidatesDisagree) {
@@ -1165,6 +1314,7 @@ class GameStateDetector(
 
     fun release() {
         recognizer.release()
+        columnExecutor.shutdown()
     }
 
     fun attemptCornerRankOcr(
@@ -1717,30 +1867,48 @@ class GameStateDetector(
         region: BoardRegion,
         cache: MutableMap<SlotKey, CachedSlotHit>,
         exactCardBounds: Boolean = false,
-        inkRegion: BoardRegion? = null
+        inkRegion: BoardRegion? = null,
+        trimmedToVisibleStrip: Boolean = false,
+        // Non-null when called from a parallel tableau column (see
+        // detect()'s computeColumn): routes the diagnostic counters below
+        // into a column-local accumulator instead of the instance fields,
+        // which would otherwise race across columns running on different
+        // threads at once.
+        stats: RecognizeStats? = null
     ): RecognitionHit {
         val key = SlotKey(pile, index)
         val fingerprint = regionFingerprint(bitmap, region)
+        // slotHitCache holds the previous frame's results, fully built
+        // before this detect() call started and reassigned only once, after
+        // every tableau column has finished - safe to read here regardless
+        // of which thread a parallel column runs on.
         val previous = slotHitCache[key]
         if (previous != null &&
             previous.fingerprint == fingerprint &&
             regionsSimilar(previous.bounds, region)
         ) {
             cache[key] = previous
-            recognizeCacheHits++
+            if (stats != null) stats.hits++ else recognizeCacheHits++
             return previous.hit
         }
         // Diagnostic-only: which reason this miss falls into, so a cache
         // that's oddly cold can be told apart from genuine board changes.
         when {
-            previous == null -> missNoPriorEntry++
-            previous.fingerprint != fingerprint -> missFingerprintChanged++
-            else -> missBoundsShifted++
+            previous == null -> if (stats != null) stats.missNoPrior++ else missNoPriorEntry++
+            previous.fingerprint != fingerprint ->
+                if (stats != null) stats.missFingerprint++ else missFingerprintChanged++
+            else -> if (stats != null) stats.missBounds++ else missBoundsShifted++
         }
         val missStart = System.nanoTime()
-        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion)
-        recognizeMissNanos += System.nanoTime() - missStart
-        recognizeCacheMisses++
+        val hit = recognizer.recognize(bitmap, region, exactCardBounds, inkRegion, trimmedToVisibleStrip)
+        val missElapsed = System.nanoTime() - missStart
+        if (stats != null) {
+            stats.missNanos += missElapsed
+            stats.misses++
+        } else {
+            recognizeMissNanos += missElapsed
+            recognizeCacheMisses++
+        }
         val entry = CachedSlotHit(fingerprint, region, hit)
         cache[key] = entry
         return hit

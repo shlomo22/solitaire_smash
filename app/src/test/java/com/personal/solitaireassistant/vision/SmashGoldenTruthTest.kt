@@ -201,7 +201,16 @@ class SmashGoldenTruthTest {
                 pngStream?.close()
                 return@mapNotNull null
             }
-            val sample = jsonStream.bufferedReader().use { GoldenTruthJson.fromJson(it.readText()) }
+            // Name the offending file. A hand-edited golden with a bad enum
+            // spelling ("king" for "King") surfaced here only as a bare
+            // IllegalArgumentException from Enum.valueOf with no clue which
+            // of 35 files produced it.
+            val sample = jsonStream.bufferedReader().use { reader ->
+                val text = reader.readText()
+                runCatching { GoldenTruthJson.fromJson(text) }.getOrElse { cause ->
+                    throw IllegalStateException("Bad golden json: golden/$id.json - ${cause.message}", cause)
+                }
+            }
             val bitmap = pngStream.use { BitmapFactory.decodeStream(it)!! }
             sample to bitmap
         }

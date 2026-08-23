@@ -59,6 +59,8 @@ class AnalysisPipeline(
     private var lastStableState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
+    private var pendingSuggestionCandidate: Move? = null
+    private var pendingSuggestionStreak = 0
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -170,6 +172,8 @@ class AnalysisPipeline(
         recentStates.clear()
         sessionRejected.clear()
         lastFrameFingerprint = null
+        pendingSuggestionCandidate = null
+        pendingSuggestionStreak = 0
         synchronized(snapshotLock) {
             lastDetection = null
             lastFrameBitmap?.recycle()
@@ -374,7 +378,7 @@ class AnalysisPipeline(
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
-            overlayController.hideArrowTemporarily()
+            overlayController.hideAllChrome()
             val msg = "Waiting for game board… ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(
@@ -396,7 +400,7 @@ class AnalysisPipeline(
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
-            overlayController.hideArrowTemporarily()
+            overlayController.hideAllChrome()
             val msg = "No board (${detectionRaw.diagnostics.lastOrNull()}) ${elapsedMs}ms"
             statusSink(msg)
             logOutcome(
@@ -527,9 +531,9 @@ class AnalysisPipeline(
         val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
             isFoundationMoveTrusted(move, state, detection)
         }
-        val best = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
+        val rawBest = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
         val selectMs = System.currentTimeMillis() - selectStartedMs
-        if (best == null) {
+        if (rawBest == null) {
             overlayController.hideArrowTemporarily()
             lastSuggestion = null
             lastSuggestionSignature = null
@@ -551,6 +555,7 @@ class AnalysisPipeline(
             )
             return
         }
+        val best = applySuggestionStickiness(ranked, rawBest) ?: return
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
@@ -706,6 +711,79 @@ class AnalysisPipeline(
         )
     }
 
+    /**
+     * Damps single-frame flicker in which move is "best". A real device log
+     * showed the arrow swap back and forth every ~750ms for 20+ seconds
+     * between two moves on an otherwise-static board: one card's rank read
+     * toggled between two values frame to frame, and that one card sat mid-
+     * run in a tableau column - when read one way the whole run was a valid
+     * sequence (unlocking a big column-clearing move), when read the other
+     * way the run broke and that move vanished *entirely* (not just dropped
+     * in score - it became flat-out illegal), leaving only a smaller
+     * fallback. The existing signature-based stability gate doesn't catch
+     * this because the board's full signature also changes every frame here
+     * (it's part of what's flickering), so reliableFirstHit bypasses the
+     * wait.
+     *
+     * Rather than fix the specific misread (recognition-side, not this
+     * pipeline's job), require a newly-best move to win 2 consecutive frames
+     * before actually committing to it. Critically, the streak still counts
+     * even on a frame where the previously-shown move has vanished outright
+     * (an earlier version of this only counted frames where the old move
+     * was still ranked, which never happens in the real flicker case above -
+     * the big move doesn't lose the top spot, it disappears, so that
+     * version's fast-path always fired and the fix did nothing). On such a
+     * frame we still have to show *something* legal, so we fall back to
+     * `best` for display without resetting the pending streak - the eventual
+     * commit only happens once the same answer wins 2 frames running.
+     */
+    /**
+     * Returns null to mean "hold the current display, don't touch the overlay this
+     * frame" - the caller must treat that as a no-op, not fall back to [best].
+     *
+     * A real device log (multi-card Tableau->Tableau run vs. loose-card
+     * Tableau->Foundation, alternating every frame) showed this still flicker even
+     * after the streak damping below: one buried, non-exposed card in the run
+     * (tableau:5:2) misread as Ace of Diamonds for a single isolated frame instead
+     * of its stable Nine of Diamonds read (held on ~30 surrounding frames) - just
+     * one frame was enough to break isValidRun() for the whole run and make the
+     * previous move genuinely ILLEGAL that frame, not merely lower-ranked. The old
+     * code's `?: best` fallback treated "previous move absent from ranked" the same
+     * as "streak exhausted, adopt best" and jumped immediately. Now a vanished
+     * previous move gets the same 2-frame grace period as adopting a new one: hold
+     * the prior display instead of reacting to a single anomalous frame.
+     */
+    private fun applySuggestionStickiness(
+        ranked: List<ScoredMove>,
+        best: ScoredMove
+    ): ScoredMove? {
+        val previous = lastSuggestion?.scored
+        if (previous == null || best.move == previous.move) {
+            pendingSuggestionCandidate = null
+            pendingSuggestionStreak = 0
+            return best
+        }
+        if (pendingSuggestionCandidate == best.move) {
+            pendingSuggestionStreak++
+        } else {
+            pendingSuggestionCandidate = best.move
+            pendingSuggestionStreak = 1
+        }
+        if (pendingSuggestionStreak >= 2) {
+            pendingSuggestionCandidate = null
+            pendingSuggestionStreak = 0
+            return best
+        }
+        val stillRanked = ranked.firstOrNull { it.move == previous.move }
+        if (stillRanked == null) {
+            fileLogger.append(
+                "HOLD prev=${previous.move.label} vanished from ranked " +
+                    "(raw=${best.move.label} streak=$pendingSuggestionStreak/2)"
+            )
+        }
+        return stillRanked
+    }
+
     private fun endpointsFor(
         move: Move,
         detection: DetectionResult
@@ -765,6 +843,10 @@ class AnalysisPipeline(
             is Move.WasteToFoundation -> {
                 pileRegion(PileRef.Waste) to pileRegion(PileRef.Foundation(move.toFoundation))
             }
+            is Move.FoundationToTableau -> {
+                pileRegion(PileRef.Foundation(move.fromFoundation)) to
+                    pileRegion(PileRef.Tableau(move.toColumn))
+            }
             Move.DrawStock, Move.RecycleWaste -> {
                 pileRegion(PileRef.Stock) to pileRegion(PileRef.Waste)
             }
@@ -794,6 +876,19 @@ class AnalysisPipeline(
         state: GameState,
         detection: DetectionResult
     ): Boolean {
+        if (move is Move.FoundationToTableau) {
+            val movingCard = state.foundations.getOrNull(move.fromFoundation)?.lastOrNull()
+                ?: return false
+            if (movingCard.suitAmbiguous) return false
+            if (slotHasPartnerSuitDeckConstraintSwap(
+                    detection.recognizedSlots,
+                    PileRef.Foundation(move.fromFoundation)
+                )
+            ) {
+                return false
+            }
+            return true
+        }
         val foundationIndex = when (move) {
             is Move.TableauToFoundation -> move.toFoundation
             is Move.WasteToFoundation -> move.toFoundation

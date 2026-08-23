@@ -31,11 +31,29 @@ class RankCornerOcr {
         /** Fanned waste cards: wider corner window for clipped rank glyphs. */
         WASTE,
         /** Region is already a rank-corner patch; skip inner ROI crop. */
-        DIRECT
+        DIRECT,
+        /**
+         * Caller already trimmed the crop down to a tableau cascade card's
+         * own visible header strip (well under half a full card's height).
+         * DEFAULT's 25% height fraction assumes a full ~193px card, which on
+         * an already-trimmed ~44-54px crop shrinks to ~11px - too short for
+         * ML Kit to read anything, which is why this profile's absence made
+         * the real recognition path silently OCR-miss on crops the
+         * diagnostic probe (run on full, untrimmed truth bounds) read fine.
+         */
+        TRIMMED
     }
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
+    // Tableau columns now recognize concurrently (GameStateDetector.detect's
+    // computeColumn), and this single ML Kit client is shared across all of
+    // them as a rare rank-tiebreak fallback. ML Kit's client isn't documented
+    // as safe for concurrent process() calls from multiple threads, so
+    // serialize access here rather than risk it - OCR is already the rare,
+    // non-hot path (only reached when template/glyph matching disagrees), so
+    // this costs nothing in the common case where no column needs it.
+    @Synchronized
     fun attempt(
         crop: Bitmap,
         profile: CornerRoiProfile = CornerRoiProfile.DEFAULT
@@ -94,6 +112,17 @@ class RankCornerOcr {
             val (widthFraction, heightFraction) = when (profile) {
                 CornerRoiProfile.DEFAULT -> 0.35f to 0.25f
                 CornerRoiProfile.WASTE -> 0.45f to 0.32f
+                // Width fraction validated for rankSourceMasks' trimmedToVisibleStrip
+                // branch against real golden pixels: digit ink always ends by ~30%
+                // of card width with the pip not starting before ~71%. Height uses
+                // the full available crop (>=1.0 always clamps to h via coerceIn
+                // below) rather than rankSourceMasks' own 0.90: a side-by-side pixel
+                // crop of a real "10" showed 0.90 clipping the bottom of the digit,
+                // which template matching tolerates but ML Kit's text detector does
+                // not - the caller's effectiveRankCrop already keeps a safety margin
+                // before the covering card (inkRegion = faceUpStep*0.9), so there is
+                // no need for OCR's own ROI to shrink further inside that.
+                CornerRoiProfile.TRIMMED -> 0.50f to 1.0f
                 CornerRoiProfile.DIRECT -> return null
             }
             val roiW = (w * widthFraction).toInt().coerceIn(8, w)

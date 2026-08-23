@@ -32,6 +32,14 @@ sealed class Move {
         override val label: String = "Waste -> Foundation ${toFoundation + 1}"
     }
 
+    data class FoundationToTableau(
+        val fromFoundation: Int,
+        val toColumn: Int
+    ) : Move() {
+        override val label: String =
+            "Foundation ${fromFoundation + 1} -> Tableau ${toColumn + 1}"
+    }
+
     data object DrawStock : Move() {
         override val label: String = "Draw from stock"
     }

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,9 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
@@ -48,7 +45,6 @@ import com.personal.solitaireassistant.game.Suit
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.SlotKind
-import kotlin.math.min
 
 @Composable
 fun GoldenReviewScreen(
@@ -72,18 +68,15 @@ fun GoldenReviewScreen(
     ) {
         Text("Confirm recognized cards", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Tap a badge or row to correct rank and suit. Inferred cascade cards are optional.",
+            "Tap a row below to correct rank and suit. Inferred cascade cards are optional.",
             style = MaterialTheme.typography.bodySmall
         )
 
         BoardSnapshotMap(
             bitmap = bitmap,
-            slots = slots,
-            truths = truths,
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
-            onSlotClick = { editingIndex = it }
+                .weight(1f)
         )
 
         LazyColumn(
@@ -145,9 +138,6 @@ fun GoldenReviewScreen(
 @Composable
 private fun BoardSnapshotMap(
     bitmap: Bitmap,
-    slots: List<RecognizedSlot>,
-    truths: List<SlotGuess>,
-    onSlotClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
@@ -155,43 +145,12 @@ private fun BoardSnapshotMap(
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
     ) {
-        val density = LocalDensity.current
-        val boxW = with(density) { maxWidth.toPx() }
-        val boxH = with(density) { maxHeight.toPx() }
-        val scale = min(boxW / bitmap.width, boxH / bitmap.height)
-        val drawW = bitmap.width * scale
-        val drawH = bitmap.height * scale
-        val offsetX = (boxW - drawW) / 2f
-        val offsetY = (boxH - drawH) / 2f
-
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = "Frozen board",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit
         )
-
-        slots.forEachIndexed { index, slot ->
-            val guess = truths.getOrElse(index) { slot.engine }
-            if (guess.kind == SlotKind.FaceDown) return@forEachIndexed
-            val leftPx = offsetX + slot.bounds.left * scale
-            val midY = slot.bounds.top + slot.bounds.height * 0.5f
-            val topPx = (offsetY + midY * scale)
-                .coerceAtMost(offsetY + drawH - with(density) { 18.dp.toPx() })
-            val leftDp = with(density) { leftPx.toDp() }
-            val topDp = with(density) { topPx.toDp() }
-            Text(
-                text = guess.shortLabel(),
-                color = Color.White,
-                fontSize = if (slot.inferred) 9.sp else 11.sp,
-                modifier = Modifier
-                    .offset(leftDp, topDp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(badgeColor(guess, slot.inferred))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                    .clickable { onSlotClick(index) }
-            )
-        }
     }
 }
 
