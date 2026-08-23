@@ -777,6 +777,22 @@ class GameStateDetector(
                         cascadeRankCountNote = "leadingUnknown"
                     }
                 }
+                // firstFaceTop above accumulates forward from columnRegion.top using
+                // downStep (faceDownOverlap=0.23), which a real golden sample showed
+                // can drift ~30px off the real card position once a column has several
+                // face-down cards - enough to misread the first exposed card entirely
+                // (a King of Hearts read as an Eight of Spades). faceRegion.top is the
+                // one position in this column that's actually measured rather than
+                // accumulated (the fully-exposed bottom card), so re-anchor every
+                // exposed slot to it, stepping backward by the now-finalized faceUpCount
+                // using faceUpStep - already calibrated correctly for the exposed run,
+                // unlike downStep. Only affects multi-card exposed runs (faceUpCount>1);
+                // a single exposed card is read straight from faceRegion already, so
+                // leave it untouched.
+                val rawFirstFaceTop = firstFaceTop
+                if (faceUpCount > 1) {
+                    firstFaceTop = faceRegion.top - (faceUpCount - 1) * faceUpStep
+                }
                 // Diagnostic-only: geometric faceUpCount is a real-pixel-distance
                 // divided by an assumed per-card step, which can drift over a long
                 // cascade and land every slot below the drift point on the wrong
@@ -787,6 +803,7 @@ class GameStateDetector(
                 // elsewhere in the column would otherwise carry none of this.
                 val cascadeDiagnosticPost =
                     "cascade:firstFaceTop=${"%.1f".format(firstFaceTop)}," +
+                        "rawFirstFaceTop=${"%.1f".format(rawFirstFaceTop)}," +
                         "bottomTop=${"%.1f".format(faceRegion.top)}," +
                         "faceUpStep=${"%.2f".format(faceUpStep)}," +
                         "geomCount=$geometricFaceUpCount,finalCount=$faceUpCount," +
@@ -822,8 +839,11 @@ class GameStateDetector(
                         columnRegion.right,
                         (top + faceUpStep * 0.9f).coerceAtMost(columnRegion.bottom)
                     )
-                    val precomputedHit = if (exposedIndex == 0) leadingHit else null
-                    val slotHit = precomputedHit ?: recognizeCached(
+                    // leadingHit was recognized at rawFirstFaceTop, which firstFaceTop
+                    // may have since moved away from (see the re-anchor above) - always
+                    // recognize fresh here rather than reusing that now-possibly-stale
+                    // read for exposedIndex 0.
+                    val slotHit = recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 300 + col * 16 + exposedIndex,
