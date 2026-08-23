@@ -688,6 +688,14 @@ class GameStateDetector(
                     .coerceIn(1, Rank.entries.size)
                 val geometricFaceUpCount = faceUpCount
                 var cascadeRankCountNote = "n/a"
+                // True when the bottom card (measured directly from faceRegion) and
+                // the leading/most-covered card (read independently at firstFaceTop)
+                // agree on exactly how many cards this run should have - a
+                // doubly-anchored geometric consensus, not just one card's own
+                // confidence score. See its use below: a weak middle-of-run read
+                // that contradicts this consensus is more likely wrong than the
+                // consensus is.
+                var rankCountConsistent = false
                 if (card.known) {
                     val leadingRegion = BoardRegion(
                         columnRegion.left,
@@ -773,6 +781,7 @@ class GameStateDetector(
                         ) {
                             faceUpCount = rankCount
                         }
+                        rankCountConsistent = rankCount == faceUpCount
                     } else {
                         cascadeRankCountNote = "leadingUnknown"
                     }
@@ -835,8 +844,22 @@ class GameStateDetector(
                         stats = stats
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
+                    // A read can clear isReliableRead's bar on confidence alone while
+                    // still contradicting a stronger signal: the bottom and leading
+                    // cards of this same run independently agreeing on exactly how
+                    // many cards it has. Only let a weak (<0.75) mid-run read override
+                    // that consensus if it actually agrees with what the consensus
+                    // predicts for this slot - otherwise trust the geometric fallback.
+                    val disagreesWithTrustedGeometry = rankCountConsistent &&
+                        geometricFallback.known &&
+                        slotHit.confidence < STRONG_DIRECT_READ_FLOOR &&
+                        slotCard != null &&
+                        (slotCard.rank != geometricFallback.rank ||
+                            slotCard.suit.isRed != geometricFallback.suit.isRed)
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
-                        if (TableauCascadeSupport.isReliableRead(slotHit, slotCard)) {
+                        if (TableauCascadeSupport.isReliableRead(slotHit, slotCard) &&
+                            !disagreesWithTrustedGeometry
+                        ) {
                             // Independent crop from whatever region it's given;
                             // locateBadge searches adaptively for the pip
                             // rather than a fixed proportion, so route it
@@ -2040,6 +2063,18 @@ class GameStateDetector(
         // that a genuine tie is more likely than a bad read, and a structurally
         // weaker recheck (narrower crop) shouldn't be allowed to break it.
         private const val STRONG_AMBIGUOUS_SUIT_FLOOR = 0.80f
+        // See the exposedIndex loop in computeColumn: below this, a mid-cascade
+        // slot's own direct read isn't trusted over a doubly-anchored geometric
+        // consensus (bottom card + leading card agreeing on the run's rank
+        // count) that disagrees with it. TableauCascadeSupport.MIN_READ_CONFIDENCE
+        // (0.55) alone was letting reads like rank-png@0.60 with the true rank
+        // not even in the top-4 candidates win outright over a fallback that
+        // would have been correct, on a real golden sample (Ten/Nine/Eight/Seven
+        // read as Ten/Ten~/Ten~/Queen when the run's own endpoints agreed on a
+        // clean Ten-through-Six run). A read at or above this bar is still
+        // trusted even when it disagrees with geometry, since the geometry
+        // could occasionally be the one that's wrong.
+        private const val STRONG_DIRECT_READ_FLOOR = 0.75f
     }
 }
 
