@@ -35,6 +35,15 @@ class GameStateDetector(
     private val recognizer = CardRecognizer(context, minConfidence)
     private var slotHitCache = mutableMapOf<SlotKey, CachedSlotHit>()
 
+    /** Memoized waste rank-OCR result; see the OCR call in [detect]. */
+    private data class CachedWasteOcr(
+        val fingerprint: Long,
+        val regions: List<BoardRegion>,
+        val result: RankCornerOcr.AttemptResult
+    )
+
+    private var cachedWasteOcr: CachedWasteOcr? = null
+
     // Dedicated pool for parallel tableau-column recognition (see detect()'s
     // computeColumn), rather than the shared Dispatchers.Default: detect()
     // is also invoked from GoldenTruthEvaluator via
@@ -97,6 +106,7 @@ class GameStateDetector(
 
     fun clearSlotCache() {
         slotHitCache.clear()
+        cachedWasteOcr = null
     }
 
     fun detect(bitmap: Bitmap): DetectionResult {
@@ -227,7 +237,26 @@ class GameStateDetector(
                 add(legacyWasteRegion)
                 addAll(locator.wasteOcrCardRegions(board))
             }
-            recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+            // OCR is the most expensive single step in the serial (pre-tableau)
+            // stretch of detect(): a blocking ML Kit call, median ~47ms and up to
+            // ~430ms on real frames. It used to re-run on every frame that had any
+            // waste card at all - even when the waste pixels were identical to the
+            // previous frame's. A real device log put 37% of all waste-OCR time
+            // (3.3s of 8.9s) into re-reading an unchanged waste pile, ~62ms per
+            // such frame. Memoize on a fingerprint of exactly the regions handed
+            // to OCR, so an unchanged waste is free while any real change still
+            // re-reads. Same idea as the per-slot cache, just around the one step
+            // that dominates this part of the frame.
+            val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
+                acc * 31L + regionFingerprint(bitmap, region)
+            }
+            val reusable = cachedWasteOcr?.takeIf { cached ->
+                cached.fingerprint == ocrFingerprint &&
+                    cached.regions.size == wasteOcrRegions.size &&
+                    cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
+            }
+            reusable?.result ?: recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+                .also { cachedWasteOcr = CachedWasteOcr(ocrFingerprint, wasteOcrRegions, it) }
         } else {
             null
         }

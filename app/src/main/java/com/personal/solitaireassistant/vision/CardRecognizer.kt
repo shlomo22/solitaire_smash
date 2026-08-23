@@ -68,6 +68,17 @@ class CardRecognizer(
     var ocrReady: Boolean = false
         private set
 
+    // Templates are loaded lazily on first use, but recognize() is called from
+    // up to 7 tableau columns at once (GameStateDetector.detect's computeColumn).
+    // This body sets loaded=true BEFORE populating the template maps, so without
+    // mutual exclusion a second thread arriving mid-load would see loaded==true,
+    // return early, and match against still-empty maps - every card on that frame
+    // silently unrecognizable. It only stays hidden today because the sequential
+    // stock/waste reads happen to finish loading before any column starts, which
+    // is an accident of ordering rather than a guarantee. @Synchronized makes the
+    // early flag set safe: a second caller blocks at the method entry until the
+    // first has fully finished loading, then sees loaded==true and returns.
+    @Synchronized
     fun ensureLoaded() {
         if (loaded) return
         loaded = true
