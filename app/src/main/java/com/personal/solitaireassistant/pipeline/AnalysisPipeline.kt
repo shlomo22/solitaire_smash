@@ -61,6 +61,7 @@ class AnalysisPipeline(
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private var pendingSuggestionCandidate: Move? = null
     private var pendingSuggestionStreak = 0
+    private var sawFreshDeal = false
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -183,7 +184,43 @@ class AnalysisPipeline(
         pendingFrame.getAndSet(null)?.bitmap?.recycle()
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
+        sawFreshDeal = false
         fileLogger.append("=== pipeline cleared ===")
+    }
+
+    /**
+     * User-rejected suggestions are fingerprinted by card identity alone
+     * (MoveFingerprint), not board position, and rejectedMoveStore persists to
+     * disk with no expiry - a real board showed a legal, reveal-producing
+     * Tableau->Tableau move (4S onto 5D) missing entirely from the ranked move
+     * list, most likely because that exact card pairing had been rejected in
+     * some earlier, unrelated deal and stayed permanently blacklisted since.
+     * Klondike deals are random each game, so a rejection from one stuck
+     * position says nothing about a completely different deal. Detect the
+     * start of a fresh deal (standard 1..7 face-down-plus-one layout, nothing
+     * on foundations or waste yet) and reset both the persistent and
+     * in-session rejection sets there, so old rejections only ever apply
+     * within the deal that produced them.
+     */
+    private fun maybeResetRejectionsForNewDeal(state: GameState) {
+        val fresh = looksLikeFreshDeal(state)
+        if (fresh && !sawFreshDeal) {
+            sessionRejected.clear()
+            rejectedMoveStore.clear()
+            fileLogger.append("=== new deal detected - rejected-move history cleared ===")
+        }
+        sawFreshDeal = fresh
+    }
+
+    private fun looksLikeFreshDeal(state: GameState): Boolean {
+        if (state.foundations.any { it.isNotEmpty() }) return false
+        if (state.waste.isNotEmpty()) return false
+        if (state.tableau.size != 7) return false
+        return state.tableau.withIndex().all { (index, column) ->
+            column.size == index + 1 &&
+                column.dropLast(1).all { !it.faceUp } &&
+                column.last().faceUp
+        }
     }
 
     private fun peekCurrentFrame(): PendingSnapshot? = synchronized(snapshotLock) {
@@ -425,6 +462,7 @@ class AnalysisPipeline(
         } else {
             detectionRaw
         }
+        maybeResetRejectionsForNewDeal(state)
 
         val signature = buildString {
             append(state.waste.joinToString { it.id })
