@@ -1556,6 +1556,24 @@ class GameStateDetector(
         ) {
             return card to trace
         }
+        // resolveBlackSuit below re-scores against a narrower crop (region, usually
+        // the trimmed rank-header strip) than the first pass used - its badge
+        // locator clamps its pip search band to a 12px floor on a crop this short,
+        // which can truncate a club's lobes down to just its top curve and produce
+        // much weaker, noisier scores than the first pass got from the fuller crop
+        // it was recognized on. A real golden sample showed this: first pass
+        // C0.90/S0.91 (correctly declined as a genuine tie), second pass C0.58/
+        // S0.62 on the narrow crop - and that weaker, less reliable read still won
+        // outright and flipped a clean King of Clubs to King of Spades. When the
+        // first pass already had strong absolute signal on both candidates, trust
+        // its ambiguous verdict instead of letting a structurally weaker recheck
+        // override it.
+        if (!card.suit.isRed &&
+            card.suitAmbiguous &&
+            parseBlackSuitTemplateMax(trace.suitTemplates) >= STRONG_AMBIGUOUS_SUIT_FLOOR
+        ) {
+            return card to trace
+        }
         val beforeSuit = card.suit
         val beforeAmbiguous = card.suitAmbiguous
         val resolved: Card
@@ -2016,7 +2034,32 @@ class GameStateDetector(
 
     companion object {
         private const val pileFingerprintSeed = -0x6c62272e07bb0142L
+        // See resolveCardSuitWithTrace: below this, the first pass's own black-
+        // suit scores are too weak to trust its "ambiguous" verdict over a second
+        // opinion; at or above it, both candidates already scored high enough
+        // that a genuine tie is more likely than a bad read, and a structurally
+        // weaker recheck (narrower crop) shouldn't be allowed to break it.
+        private const val STRONG_AMBIGUOUS_SUIT_FLOOR = 0.80f
     }
+}
+
+/**
+ * Parses a [RecognitionTrace.suitTemplates] string like "S:0.91 C:0.90" (see
+ * [RecognitionTrace.formatSuitScores]) and returns the higher of the Clubs/
+ * Spades scores, ignoring Hearts/Diamonds entries. Returns 0f if the string is
+ * null, empty, or has no parseable Clubs/Spades entry.
+ */
+private fun parseBlackSuitTemplateMax(suitTemplates: String?): Float {
+    if (suitTemplates.isNullOrBlank()) return 0f
+    return suitTemplates.split(" ")
+        .mapNotNull { entry ->
+            val parts = entry.split(":")
+            if (parts.size != 2) return@mapNotNull null
+            val code = parts[0]
+            if (code != "C" && code != "S") return@mapNotNull null
+            parts[1].toFloatOrNull()
+        }
+        .maxOrNull() ?: 0f
 }
 
 private data class ResolvedCascadeSlot(
