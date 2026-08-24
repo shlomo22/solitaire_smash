@@ -91,6 +91,24 @@ data class RecognitionTrace(
             Suit.Clubs -> "C"
             Suit.Spades -> "S"
         }
+
+        /** Parses [formatSuitScores] output, e.g. `"D:0.86 H:0.76"`. */
+        fun parseSuitScores(suitTemplates: String?): Map<Suit, Float> {
+            if (suitTemplates.isNullOrBlank()) return emptyMap()
+            return suitTemplates.split(" ").mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size != 2) return@mapNotNull null
+                val suit = when (parts[0]) {
+                    "H" -> Suit.Hearts
+                    "D" -> Suit.Diamonds
+                    "C" -> Suit.Clubs
+                    "S" -> Suit.Spades
+                    else -> return@mapNotNull null
+                }
+                val score = parts[1].toFloatOrNull() ?: return@mapNotNull null
+                suit to score
+            }.toMap()
+        }
     }
 }
 

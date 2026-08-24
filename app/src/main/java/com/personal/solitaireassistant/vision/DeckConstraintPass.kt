@@ -22,7 +22,8 @@ object DeckConstraintPass {
         val confidence: Float,
         val recognizedIndex: Int,
         val originalDiagnostic: String,
-        val originalSuitScore: Float?
+        val originalSuitScore: Float?,
+        val originalSuitTemplates: String?
     )
 
     fun apply(
@@ -91,7 +92,8 @@ object DeckConstraintPass {
                 confidence = slot.confidence,
                 recognizedIndex = recognizedIndex,
                 originalDiagnostic = slot.diagnostic,
-                originalSuitScore = slot.trace.suitScore
+                originalSuitScore = slot.trace.suitScore,
+                originalSuitTemplates = slot.trace.suitTemplates
             )
         }
         return entries
@@ -134,7 +136,6 @@ object DeckConstraintPass {
             ) {
                 return@forEach
             }
-            if (entry.card.suit.isRed) return@forEach
             val partner = partnerSuit(entry.card.suit)
             val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
@@ -363,10 +364,7 @@ object DeckConstraintPass {
         entry: Entry,
         usedIds: Set<String>
     ): Card {
-        val candidates = Suit.entries.mapNotNull { suit ->
-            val card = entry.card.copy(suit = suit, suitAmbiguous = false)
-            if (card.id in usedIds) null else suit to card
-        }
+        val candidates = duplicateReplacementCandidates(entry, usedIds)
         if (candidates.isEmpty()) {
             return entry.card.copy(suitAmbiguous = true)
         }
@@ -375,18 +373,94 @@ object DeckConstraintPass {
             entry.bounds,
             candidates.map { it.first }.toSet()
         )
+        val traceScores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)
+        val traceLeader = candidates.maxByOrNull { traceScores[it.first] ?: 0f }
+        val traceLeaderScore = traceScores[traceLeader?.first] ?: 0f
+        if (traceLeaderScore >= 0.55f) {
+            val traceRunnerUp = candidates
+                .filter { it.first != traceLeader?.first }
+                .maxOfOrNull { traceScores[it.first] ?: 0f } ?: 0f
+            if (traceLeaderScore - traceRunnerUp >= COLOR_FAMILY_MARGIN) {
+                return requireNotNull(traceLeader).second
+            }
+        }
         val shapeBonus = buildMap {
             redShapeGuess(bitmap, entry.bounds)?.suit?.let { put(it, 0.08f) }
             blackShapeGuess(bitmap, entry.bounds)?.suit?.let { put(it, 0.08f) }
         }
         val best = candidates.maxByOrNull { (suit, _) ->
-            (scores[suit] ?: 0f) + (shapeBonus[suit] ?: 0f)
+            effectiveDuplicateSuitScore(
+                traced = traceScores[suit] ?: 0f,
+                fresh = scores[suit] ?: 0f
+            ) + (shapeBonus[suit] ?: 0f)
         } ?: return entry.card.copy(suitAmbiguous = true)
-        val bestScore = scores[best.first] ?: 0f
+        val bestScore = effectiveDuplicateSuitScore(
+            traced = traceScores[best.first] ?: 0f,
+            fresh = scores[best.first] ?: 0f
+        )
         if (bestScore < 0.45f) {
             return entry.card.copy(suitAmbiguous = true)
         }
         return best.second
+    }
+
+    private fun effectiveDuplicateSuitScore(traced: Float, fresh: Float): Float =
+        if (traced >= 0.60f) traced else maxOf(fresh, traced)
+
+    private fun duplicateReplacementCandidates(
+        entry: Entry,
+        usedIds: Set<String>
+    ): List<Pair<Suit, Card>> {
+        val traceScores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)
+        val redBest = maxOf(
+            traceScores[Suit.Hearts] ?: 0f,
+            traceScores[Suit.Diamonds] ?: 0f
+        )
+        val blackBest = maxOf(
+            traceScores[Suit.Clubs] ?: 0f,
+            traceScores[Suit.Spades] ?: 0f
+        )
+        val suitOrder = linkedSetOf<Suit>()
+        suitOrder.addAll(preferredSuitsForDuplicate(entry))
+        if (redBest >= 0.55f) {
+            suitOrder.addAll(listOf(Suit.Hearts, Suit.Diamonds))
+        }
+        if (blackBest >= 0.55f) {
+            suitOrder.addAll(listOf(Suit.Clubs, Suit.Spades))
+        }
+        return suitOrder.mapNotNull { suit ->
+            val card = entry.card.copy(suit = suit, suitAmbiguous = false)
+            if (card.id in usedIds) null else suit to card
+        }
+    }
+
+    /**
+     * Duplicate losers must stay in the color family the original read pointed
+     * at — a weak red Five must not escape to Five of Clubs via a noisy rescore.
+     */
+    private fun preferredSuitsForDuplicate(entry: Entry): List<Suit> {
+        val traceScores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)
+        if (traceScores.isNotEmpty()) {
+            val redBest = maxOf(
+                traceScores[Suit.Hearts] ?: 0f,
+                traceScores[Suit.Diamonds] ?: 0f
+            )
+            val blackBest = maxOf(
+                traceScores[Suit.Clubs] ?: 0f,
+                traceScores[Suit.Spades] ?: 0f
+            )
+            when {
+                redBest >= blackBest + COLOR_FAMILY_MARGIN ->
+                    return listOf(Suit.Hearts, Suit.Diamonds)
+                blackBest >= redBest + COLOR_FAMILY_MARGIN ->
+                    return listOf(Suit.Clubs, Suit.Spades)
+            }
+        }
+        return if (entry.card.suit.isRed) {
+            listOf(Suit.Hearts, Suit.Diamonds)
+        } else {
+            listOf(Suit.Clubs, Suit.Spades)
+        }
     }
 
     private fun bestAlternateAssignment(
@@ -516,6 +590,7 @@ object DeckConstraintPass {
         }
     }
 
+    private const val COLOR_FAMILY_MARGIN = 0.03f
     private const val RED_SUIT_SWAP_THRESHOLD = 0.10f
     private const val BLACK_SUIT_SWAP_THRESHOLD = 0.10f
     // The two real cases this guards against had original trace.suitScore of

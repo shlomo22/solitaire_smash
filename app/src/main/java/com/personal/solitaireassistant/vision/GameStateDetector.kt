@@ -917,14 +917,18 @@ class GameStateDetector(
                             // (GoldenTruthEvaluator.findMatchingSlot), so surfacing
                             // this cannot change what gets scored - it only makes a
                             // rejected read visible instead of invisible.
+                            val enriched = TableauCascadeSupport.enrichGeometricFromRejectedRead(
+                                geometricFallback,
+                                slotHit
+                            )
                             ResolvedCascadeSlot(
-                                card = geometricFallback,
+                                card = enriched,
                                 trace = slotHit.trace.withPost(
                                     "rejected:known=${slotCard?.known}," +
                                         "conf=${"%.2f".format(slotHit.confidence)}"
                                 ),
                                 diagnostic = "inferred-cascade:${slotHit.diagnostic}",
-                                confidence = if (geometricFallback.known) 0.55f else 0.20f,
+                                confidence = if (enriched.known) 0.55f else 0.20f,
                                 inferred = true
                             )
                         }

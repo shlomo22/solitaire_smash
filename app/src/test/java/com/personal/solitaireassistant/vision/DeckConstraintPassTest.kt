@@ -20,6 +20,105 @@ class DeckConstraintPassTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
 
     @Test
+    fun duplicateWeakRedFiveStaysRedNotClubs() {
+        val taken = slot(
+            pile = PileRef.Tableau(2),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Clubs,
+            confidence = 0.84f,
+            diagnostic = "match-Five-Clubs@0.84"
+        )
+        val weak = slot(
+            pile = PileRef.Tableau(5),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Clubs,
+            confidence = 0.69f,
+            diagnostic = "match-Five-Clubs@0.69",
+            suitTemplates = "D:0.63 C:0.60 H:0.55 S:0.52"
+        )
+        val recognized = mutableListOf(taken.slot, weak.slot)
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                emptyList(),
+                listOf(taken.card),
+                emptyList(),
+                emptyList(),
+                listOf(weak.card),
+                emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[2].last().suit)
+            assertEquals(Suit.Diamonds, result.tableau[5].last().suit)
+            assertEquals(Suit.Diamonds, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun ambiguousRedSuitFlipsToPartnerWhenCurrentSuitDuplicated() {
+        val taken = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Hearts,
+            confidence = 0.84f,
+            diagnostic = "match-Five-Hearts@0.84"
+        )
+        val ambiguous = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Hearts,
+            confidence = 0.69f,
+            diagnostic = "match-Five-Hearts-ambiguous@0.69",
+            suitAmbiguous = true
+        )
+        val recognized = mutableListOf(taken.slot, ambiguous.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(taken.card),
+                listOf(ambiguous.card)
+            ) + List(5) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Hearts, result.tableau[0].last().suit)
+            assertEquals(Suit.Diamonds, result.tableau[1].last().suit)
+            assertEquals(Suit.Diamonds, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
     fun duplicateRedCardFlipsWeakerSlotToPartnerSuit() {
         val high = slot(
             pile = PileRef.Foundation(0),
@@ -247,7 +346,8 @@ class DeckConstraintPassTest {
         suit: Suit,
         confidence: Float,
         diagnostic: String = "test",
-        suitAmbiguous: Boolean = false
+        suitAmbiguous: Boolean = false,
+        suitTemplates: String? = null
     ): SlotFixture {
         val card = Card(rank, suit, faceUp = true, known = true, suitAmbiguous = suitAmbiguous)
         val bounds = BoardRegion(0f, 0f, 40f, 50f)
@@ -259,7 +359,8 @@ class DeckConstraintPassTest {
                 bounds = bounds,
                 engine = SlotGuess(SlotKind.FaceUp, rank, suit),
                 confidence = confidence,
-                diagnostic = diagnostic
+                diagnostic = diagnostic,
+                trace = RecognitionTrace(suitTemplates = suitTemplates)
             )
         )
     }
