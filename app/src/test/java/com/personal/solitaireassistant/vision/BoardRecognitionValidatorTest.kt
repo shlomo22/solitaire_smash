@@ -14,7 +14,7 @@ class BoardRecognitionValidatorTest {
         val state = gameState(
             tableau = listOf(
                 listOf(faceDown(), card(Rank.King, Suit.Spades)),
-                listOf(faceDown(), card(Rank.Jack, Suit.Spades), card(Rank.Queen, Suit.Hearts)),
+                listOf(faceDown(), card(Rank.Queen, Suit.Hearts), card(Rank.Jack, Suit.Spades)),
                 emptyColumn(),
                 emptyColumn(),
                 emptyColumn(),
@@ -78,13 +78,35 @@ class BoardRecognitionValidatorTest {
     }
 
     @Test
+    fun validFiveClubsFourHeartsRunHasNoCascadeBreak() {
+        val state = gameState(
+            tableau = listOf(
+                listOf(
+                    faceDown(),
+                    card(Rank.Five, Suit.Clubs),
+                    card(Rank.Four, Suit.Hearts)
+                ),
+                emptyColumn(),
+                emptyColumn(),
+                emptyColumn(),
+                emptyColumn(),
+                emptyColumn(),
+                emptyColumn()
+            )
+        )
+        assertTrue(
+            BoardRecognitionValidator.validate(state).none { it is RecognitionViolation.CascadeBreak }
+        )
+    }
+
+    @Test
     fun cascadeBreakIsReportedForInvalidPair() {
         val state = gameState(
             tableau = listOf(
                 listOf(
                     faceDown(),
                     card(Rank.Ten, Suit.Spades),
-                    card(Rank.Eight, Suit.Clubs)
+                    card(Rank.Queen, Suit.Hearts)
                 ),
                 emptyColumn(),
                 emptyColumn(),
@@ -101,7 +123,7 @@ class BoardRecognitionValidatorTest {
         assertEquals(1, breakViolation.lowerIndex)
         assertEquals(2, breakViolation.upperIndex)
         assertEquals("Ten_Spades", breakViolation.lowerCard)
-        assertEquals("Eight_Clubs", breakViolation.upperCard)
+        assertEquals("Queen_Hearts", breakViolation.upperCard)
     }
 
     @Test
@@ -110,7 +132,7 @@ class BoardRecognitionValidatorTest {
             tableau = listOf(
                 listOf(
                     card(Rank.King, Suit.Clubs, inferred = true),
-                    card(Rank.Queen, Suit.Hearts, inferred = true)
+                    card(Rank.Queen, Suit.Clubs, inferred = true)
                 ),
                 emptyColumn(),
                 emptyColumn(),

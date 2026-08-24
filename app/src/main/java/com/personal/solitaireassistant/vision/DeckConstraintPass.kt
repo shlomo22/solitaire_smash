@@ -337,20 +337,56 @@ object DeckConstraintPass {
                     .thenByDescending { it.confidence }
             ).drop(1).forEach { entry ->
                 val oldId = entry.card.id
-                val replacement = bestAlternateAssignment(
+                val replacement = resolveWeakerDuplicate(
                     bitmap = bitmap,
                     recognizer = recognizer,
                     entry = entry,
-                    usedIds = used,
-                    preferSameRank = true,
-                    requireShapeAgreement = entry.pile is PileRef.Foundation
-                ) ?: entry.card.copy(suitAmbiguous = true)
+                    usedIds = used
+                )
                 used.remove(oldId)
                 used.add(replacement.id)
                 entry.card = replacement
             }
         }
         return resolvedIndices
+    }
+
+    /**
+     * When a duplicate id loses to a stronger slot, pick the best still-free
+     * suit for the same rank using fresh template scores and shape hints.
+     * Real case: mid-cascade Five read as Clubs while the true card is
+     * Five of Diamonds; Clubs id is already taken by a confident neighbour.
+     */
+    private fun resolveWeakerDuplicate(
+        bitmap: Bitmap,
+        recognizer: CardRecognizer,
+        entry: Entry,
+        usedIds: Set<String>
+    ): Card {
+        val candidates = Suit.entries.mapNotNull { suit ->
+            val card = entry.card.copy(suit = suit, suitAmbiguous = false)
+            if (card.id in usedIds) null else suit to card
+        }
+        if (candidates.isEmpty()) {
+            return entry.card.copy(suitAmbiguous = true)
+        }
+        val scores = recognizer.suitTemplateScores(
+            bitmap,
+            entry.bounds,
+            candidates.map { it.first }.toSet()
+        )
+        val shapeBonus = buildMap {
+            redShapeGuess(bitmap, entry.bounds)?.suit?.let { put(it, 0.08f) }
+            blackShapeGuess(bitmap, entry.bounds)?.suit?.let { put(it, 0.08f) }
+        }
+        val best = candidates.maxByOrNull { (suit, _) ->
+            (scores[suit] ?: 0f) + (shapeBonus[suit] ?: 0f)
+        } ?: return entry.card.copy(suitAmbiguous = true)
+        val bestScore = scores[best.first] ?: 0f
+        if (bestScore < 0.45f) {
+            return entry.card.copy(suitAmbiguous = true)
+        }
+        return best.second
     }
 
     private fun bestAlternateAssignment(

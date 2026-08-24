@@ -371,7 +371,19 @@ class CardRecognizer(
 
         val inkRed: Boolean? = when {
             inkStats.redInkRatio > inkStats.blackInkRatio + 0.005f && inkStats.redInkRatio > 0.012f -> true
-            inkStats.blackInkRatio > inkStats.redInkRatio + 0.005f && inkStats.blackInkRatio > 0.012f -> false
+            inkStats.blackInkRatio > inkStats.redInkRatio + 0.005f && inkStats.blackInkRatio > 0.012f -> {
+                // Cascade header strips on red cards often show more black ink
+                // from the rank glyph outline than red pip ink - stay ambiguous
+                // so all four suits score when red is present but not dominant.
+                if (trimmedToVisibleStrip &&
+                    inkStats.redInkRatio > 0.02f &&
+                    inkStats.blackInkRatio - inkStats.redInkRatio < 0.20f
+                ) {
+                    null
+                } else {
+                    false
+                }
+            }
             else -> null
         }
 

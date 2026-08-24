@@ -64,17 +64,17 @@ object BoardRecognitionValidator {
                 index.takeIf { card.faceUp }
             }
             for (i in 0 until faceUpIndices.lastIndex) {
-                val lowerIndex = faceUpIndices[i]
-                val upperIndex = faceUpIndices[i + 1]
-                val lower = column[lowerIndex]
-                val upper = column[upperIndex]
-                if (!isValidTableauPair(lower, upper)) {
+                val bottomIndex = faceUpIndices[i]
+                val topIndex = faceUpIndices[i + 1]
+                val bottom = column[bottomIndex]
+                val top = column[topIndex]
+                if (!isValidTableauPair(bottom = bottom, top = top)) {
                     violations += RecognitionViolation.CascadeBreak(
                         pile = "tableau:$pileIndex",
-                        lowerIndex = lowerIndex,
-                        upperIndex = upperIndex,
-                        lowerCard = lower.id,
-                        upperCard = upper.id
+                        lowerIndex = bottomIndex,
+                        upperIndex = topIndex,
+                        lowerCard = bottom.id,
+                        upperCard = top.id
                     )
                 }
             }
@@ -82,9 +82,13 @@ object BoardRecognitionValidator {
         return violations
     }
 
-    private fun isValidTableauPair(lower: Card, upper: Card): Boolean {
-        if (!lower.known || !upper.known) return true
-        if (!lower.faceUp || !upper.faceUp) return true
-        return lower.suit.oppositeColor(upper.suit) && lower.rank.isOneBelow(upper.rank)
+    /**
+     * Column index increases toward the top of the pile. [top] sits on [bottom],
+     * matching [com.personal.solitaireassistant.game.KlondikeRules] run checks.
+     */
+    private fun isValidTableauPair(bottom: Card, top: Card): Boolean {
+        if (!bottom.known || !top.known) return true
+        if (!bottom.faceUp || !top.faceUp) return true
+        return top.suit.oppositeColor(bottom.suit) && top.rank.isOneBelow(bottom.rank)
     }
 }

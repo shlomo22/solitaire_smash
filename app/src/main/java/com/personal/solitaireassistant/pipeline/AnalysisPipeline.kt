@@ -341,6 +341,9 @@ class AnalysisPipeline(
     ) {
         val settings = settingsRef.get()
         if (!settings.autoCaptureRecognitionErrors) return
+        // Only capture on fully settled boards — skip fast-path frames that
+        // bypass the 2-frame stability gate (reliableFirstHit / fastUpdateAfterMove).
+        if (stableHits < 2) return
         if (lastErrorCaptureSignature == signature) return
         val violations = BoardRecognitionValidator.validate(state)
         if (violations.isEmpty()) return
