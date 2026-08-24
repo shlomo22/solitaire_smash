@@ -98,9 +98,10 @@ object DeckConstraintPass {
     }
 
     /**
-     * Waste black cards read confidently as Clubs while the partner Spades card is
-     * still free and the Clubs id is already taken elsewhere (e.g. waste AS vs
-     * foundation AC).
+     * Waste black cards: when assigning the current suit would duplicate a card
+     * already on the board, flip to the partner suit if that id is still free
+     * (e.g. waste AS vs foundation AC). When both partner ids are free, keep the
+     * template read — do not guess from a narrow C-vs-S margin.
      */
     private fun resolveWasteBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
@@ -111,8 +112,12 @@ object DeckConstraintPass {
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
             val partnerTaken = others.any { it.card.id == partnerCard.id }
             val currentTaken = others.any { it.card.id == entry.card.id }
-            if (currentTaken && !partnerTaken) {
-                entry.card = partnerCard
+            when {
+                currentTaken && !partnerTaken ->
+                    entry.card = partnerCard
+                partnerTaken && !currentTaken ->
+                    entry.card = entry.card.copy(suitAmbiguous = false)
+                else -> Unit
             }
         }
     }

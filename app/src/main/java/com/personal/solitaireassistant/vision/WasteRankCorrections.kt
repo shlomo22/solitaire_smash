@@ -162,30 +162,21 @@ internal object WasteRankCorrections {
     }
 
     /**
-     * Waste-only: fanned waste crops inflate Clubs template scores on black cards
-     * (device log cluster C0.83/S0.77 on genuine Spades). When corner OCR already
-     * settled rank, prefer Spades on a narrow C-vs-S margin instead of Clubs.
+     * Waste-only: when a legacy or tight crop already read Spades for [rank], trust
+     * that over the fused Clubs pick. Do not guess Spades from a narrow C-vs-S
+     * template margin alone — the C0.83/S0.77 cluster appears on genuine Clubs too.
+     * Deck-uniqueness for ambiguous waste black suits is handled later in
+     * [DeckConstraintPass.resolveWasteBlackSuitByDeckOccupancy].
      */
     fun correctBlackSuitOnWaste(
         rank: Rank,
-        currentSuit: Suit,
         legacyCard: Card?,
-        tightCard: Card?,
-        exactSuitScores: Map<Suit, Float>,
-        ocrRankTrusted: Boolean
+        tightCard: Card?
     ): Suit? {
-        if (currentSuit.isRed) return null
-        val clubScore = exactSuitScores[Suit.Clubs] ?: 0f
-        val spadeScore = exactSuitScores[Suit.Spades] ?: 0f
-
         val legacySpade = legacyCard?.takeIf { it.rank == rank && it.suit == Suit.Spades }
         val tightSpade = tightCard?.takeIf { it.rank == rank && it.suit == Suit.Spades }
         if (legacySpade != null || tightSpade != null) return Suit.Spades
-
-        if (!ocrRankTrusted || currentSuit != Suit.Clubs) return null
-        if (spadeScore < 0.70f) return null
-        if (clubScore - spadeScore > 0.08f) return null
-        return Suit.Spades
+        return null
     }
 
     /**

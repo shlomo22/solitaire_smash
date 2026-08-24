@@ -193,6 +193,48 @@ class DeckConstraintPassTest {
         }
     }
 
+    @Test
+    fun wasteBlackSuitKeepsClubsWhenPartnerSpadesAlreadyTaken() {
+        val tableauSix = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Six,
+            suit = Suit.Spades,
+            confidence = 0.88f
+        )
+        val wasteSix = slot(
+            pile = PileRef.Waste,
+            index = 0,
+            rank = Rank.Six,
+            suit = Suit.Clubs,
+            confidence = 0.83f,
+            diagnostic = "fused-Six-Clubs"
+        )
+        val recognized = mutableListOf(tableauSix.slot, wasteSix.slot)
+        val state = GameState(
+            tableau = listOf(listOf(tableauSix.card)) + List(6) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = listOf(wasteSix.card)
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Spades, result.tableau[0].last().suit)
+            assertEquals(Suit.Clubs, result.waste.last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
     private data class SlotFixture(
         val card: Card,
         val slot: RecognizedSlot

@@ -369,20 +369,11 @@ class GameStateDetector(
         } else {
             tightCard?.suit ?: baseCard?.suit
         }
-        val ocrRankTrusted = wasteOcrOverride != null ||
-            wasteSixOverride != null ||
-            wasteThreeOverride != null ||
-            (wasteOcrAttempt?.guess?.rank != null &&
-                wasteOcrAttempt.guess.rank == correctedRank &&
-                baseCard?.rank != correctedRank)
         val wasteBlackSuitOverride = correctedRank?.let { rank ->
             WasteRankCorrections.correctBlackSuitOnWaste(
                 rank = rank,
-                currentSuit = correctedSuit ?: baseCard?.suit ?: return@let null,
                 legacyCard = legacyCard,
-                tightCard = tightCard,
-                exactSuitScores = exactSuitScores,
-                ocrRankTrusted = ocrRankTrusted
+                tightCard = tightCard
             )
         }
         val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
