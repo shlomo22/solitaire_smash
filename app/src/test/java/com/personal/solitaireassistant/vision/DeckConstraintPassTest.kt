@@ -151,6 +151,48 @@ class DeckConstraintPassTest {
         }
     }
 
+    @Test
+    fun wasteBlackSuitFlipsWhenConfidentClubsDuplicateElsewhere() {
+        val foundationAce = slot(
+            pile = PileRef.Foundation(0),
+            index = 0,
+            rank = Rank.Ace,
+            suit = Suit.Clubs,
+            confidence = 0.94f
+        )
+        val wasteAce = slot(
+            pile = PileRef.Waste,
+            index = 0,
+            rank = Rank.Ace,
+            suit = Suit.Clubs,
+            confidence = 0.83f,
+            diagnostic = "fused-Ace-Clubs"
+        )
+        val recognized = mutableListOf(foundationAce.slot, wasteAce.slot)
+        val state = GameState(
+            tableau = List(7) { emptyList() },
+            foundations = listOf(listOf(foundationAce.card), emptyList(), emptyList(), emptyList()),
+            stock = emptyList(),
+            waste = listOf(wasteAce.card)
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.foundations[0].last().suit)
+            assertEquals(Suit.Spades, result.waste.last().suit)
+            assertEquals(Suit.Spades, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
     private data class SlotFixture(
         val card: Card,
         val slot: RecognizedSlot

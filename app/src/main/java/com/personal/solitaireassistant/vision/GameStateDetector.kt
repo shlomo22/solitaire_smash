@@ -369,17 +369,41 @@ class GameStateDetector(
         } else {
             tightCard?.suit ?: baseCard?.suit
         }
+        val ocrRankTrusted = wasteOcrOverride != null ||
+            wasteSixOverride != null ||
+            wasteThreeOverride != null ||
+            (wasteOcrAttempt?.guess?.rank != null &&
+                wasteOcrAttempt.guess.rank == correctedRank &&
+                baseCard?.rank != correctedRank)
+        val wasteBlackSuitOverride = correctedRank?.let { rank ->
+            WasteRankCorrections.correctBlackSuitOnWaste(
+                rank = rank,
+                currentSuit = correctedSuit ?: baseCard?.suit ?: return@let null,
+                legacyCard = legacyCard,
+                tightCard = tightCard,
+                exactSuitScores = exactSuitScores,
+                ocrRankTrusted = ocrRankTrusted
+            )
+        }
+        val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
         val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {
             val candidate = baseCard.copy(
                 rank = correctedRank,
-                suit = correctedSuit ?: baseCard.suit
+                suit = finalCorrectedSuit ?: baseCard.suit,
+                suitAmbiguous = wasteBlackSuitOverride == null && baseCard.suitAmbiguous
             )
-            resolveCardSuitWithTrace(
-                bitmap,
-                tightWasteRegion,
-                candidate,
-                RecognitionTrace.EMPTY
-            )
+            if (wasteBlackSuitOverride != null) {
+                candidate to RecognitionTrace.EMPTY.withPost(
+                    "waste-black-suit:${correctedSuit ?: baseCard.suit}->$wasteBlackSuitOverride"
+                )
+            } else {
+                resolveCardSuitWithTrace(
+                    bitmap,
+                    tightWasteRegion,
+                    candidate,
+                    RecognitionTrace.EMPTY
+                )
+            }
         } else {
             synthesizeWasteFromScores(
                 bitmap = bitmap,
@@ -428,6 +452,9 @@ class GameStateDetector(
                             wasteOcrAttempt?.trace?.let { add(it) }
                             if (wasteOcrOverride != null) {
                                 add("waste-ocr-rank:${wasteOcrOverride.name}")
+                            }
+                            if (wasteBlackSuitOverride != null) {
+                                add("waste-black-suit:${wasteBlackSuitOverride.name}")
                             }
                         }
                     ).merge(legacyWasteHit.trace).merge(tightWasteHit.trace).merge(fusionPostTrace)

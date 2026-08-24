@@ -40,6 +40,7 @@ object DeckConstraintPass {
             return state
         }
 
+        resolveWasteBlackSuitByDeckOccupancy(entries)
         resolveAmbiguousSuitByDeckOccupancy(entries)
         val resolvedByDedup = resolveDuplicateCardIds(bitmap, recognizer, entries)
         resolvePartnerSuitSwaps(bitmap, recognizer, entries, resolvedByDedup)
@@ -94,6 +95,26 @@ object DeckConstraintPass {
             )
         }
         return entries
+    }
+
+    /**
+     * Waste black cards read confidently as Clubs while the partner Spades card is
+     * still free and the Clubs id is already taken elsewhere (e.g. waste AS vs
+     * foundation AC).
+     */
+    private fun resolveWasteBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
+        entries.forEach { entry ->
+            if (entry.pile != PileRef.Waste) return@forEach
+            if (entry.card.suit.isRed) return@forEach
+            val partner = partnerSuit(entry.card.suit)
+            val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
+            val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
+            val partnerTaken = others.any { it.card.id == partnerCard.id }
+            val currentTaken = others.any { it.card.id == entry.card.id }
+            if (currentTaken && !partnerTaken) {
+                entry.card = partnerCard
+            }
+        }
     }
 
     /**

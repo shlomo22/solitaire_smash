@@ -2,6 +2,7 @@ package com.personal.solitaireassistant.vision
 
 import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.Rank
+import com.personal.solitaireassistant.game.Suit
 
 internal object WasteRankCorrections {
     private fun rankScore(exactRankScores: Map<Rank, Float>, rank: Rank): Float =
@@ -158,6 +159,33 @@ internal object WasteRankCorrections {
             if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
         }
         return null
+    }
+
+    /**
+     * Waste-only: fanned waste crops inflate Clubs template scores on black cards
+     * (device log cluster C0.83/S0.77 on genuine Spades). When corner OCR already
+     * settled rank, prefer Spades on a narrow C-vs-S margin instead of Clubs.
+     */
+    fun correctBlackSuitOnWaste(
+        rank: Rank,
+        currentSuit: Suit,
+        legacyCard: Card?,
+        tightCard: Card?,
+        exactSuitScores: Map<Suit, Float>,
+        ocrRankTrusted: Boolean
+    ): Suit? {
+        if (currentSuit.isRed) return null
+        val clubScore = exactSuitScores[Suit.Clubs] ?: 0f
+        val spadeScore = exactSuitScores[Suit.Spades] ?: 0f
+
+        val legacySpade = legacyCard?.takeIf { it.rank == rank && it.suit == Suit.Spades }
+        val tightSpade = tightCard?.takeIf { it.rank == rank && it.suit == Suit.Spades }
+        if (legacySpade != null || tightSpade != null) return Suit.Spades
+
+        if (!ocrRankTrusted || currentSuit != Suit.Clubs) return null
+        if (spadeScore < 0.70f) return null
+        if (clubScore - spadeScore > 0.08f) return null
+        return Suit.Spades
     }
 
     /**
