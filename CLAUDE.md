@@ -151,18 +151,55 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   spade pip) — confirmed by cropping and viewing the real PNG. Before concluding a
   mismatch is an app bug, crop and visually check the actual pixels; don't trust the
   truth label blindly.
+- **Golden-set batch corruption (new, worse variant of the truth-quality issue)**: a
+  26-sample "new golden" push this session included 5 files
+  (`20260824_032620`, `20260824_033921`, `20260824_034448`, `20260824_034809`,
+  `20260824_041306`) where 56-91% of every slot's truth was simply wrong — not a
+  labeling slip, but truth that looked like it belonged to a *different* board state
+  entirely. Confirmed via pixel crop on two of them: the **engine's own read matched
+  the real pixels**, truth didn't (one showed 6 real face-down cards + one Ten of
+  Hearts; truth claimed 7 different face-up cards). The other 21 files in the same
+  push were fine (0-24% mismatch, consistent with the existing baseline). Diagnostic
+  signal: compute mismatch-rate per file across a "new golden" push before trusting
+  any of it — a handful of files at 60%+ while the rest sit near the baseline rate
+  means truth/PNG pairing broke for just those files, not a recognition regression.
+  User deleted the 5 bad files and re-pushed (commit `4f4b393`); don't resurrect them.
+- **Waste-pile Six is a real, large, still-unfixed recognition gap**: across the whole
+  golden set, 13 waste samples have truth rank Six; only 2 are read correctly (85%
+  failure rate), misread mostly as Nine, sometimes Four or Eight — across different
+  suits and different sessions, so it's systemic, not one bad crop. Root-caused via a
+  faithful Python replica of `CardRecognizer.exactRankTemplateScores`
+  (`inkMask`/`maskScore`, 48×48 Dice coefficient, ±2px shift): the four existing
+  `rank_six*.png` templates score only ~0.41-0.42 against a real Six, while Nine's
+  templates score ~0.44-0.45 on that same crop — Six is losing by a persistent ~0.03
+  margin, not close to a coinflip. **Three candidate fix templates were built and
+  rejected, all for the same reason**: each was assembled from a real, pixel-verified
+  Six crop (a full corner-region crop, a tightly-isolated glyph, and a pip-masked
+  version), and each scored 0.8-1.0 against genuine Sixes — but when checked against
+  the *other* ~30 non-Six waste samples in the golden set, every one scored higher
+  than the correct rank's own template on 65-95% of them. All three were matching
+  generic card/border/ink-density structure shared by every waste crop, not the "6"
+  shape specifically. **Lesson for next attempt**: validating a new bitmap template
+  only against the rank it's meant to fix is not enough — it must also be checked
+  against a broad sample of *other* ranks for false positives, the same way a
+  geometry-constant change needs broad-not-single-sample evidence. No fix shipped;
+  the likely better lever is a `WasteRankCorrections`-style override rule using the
+  measured ~0.03 score gap (matching how existing rules already handle Four/Jack and
+  Six/Four confusions there), not another template.
 
 ## Current state (as of v1.4.20 / versionCode 91, pushed, not yet device-verified)
 
-Golden set is now 61 samples / 2041 labeled slots (grew from 41 across several
-"new golden" device pushes). Last confirmed-on-device accuracy: **95% (1942/2041)** —
-this has been the stable baseline across three back-to-back Evaluate runs this session
-(v1.4.15/86 baseline, v1.4.19/90 KC/KS suit-tiebreak change, v1.4.20's predecessor):
-confusion counts were byte-identical across those runs, confirming the KC/KS change was
-harmless but also didn't move the number (see `resolveBlackSuit`/`ambiguousBlackSuit`
-note above). v1.4.20/91 (the `Seven→Jack` / `TableauCascadeSupport.isReliableRead` fix
-above) is pushed but not yet Evaluate-verified — expected to be the first change this
-session to actually move accuracy.
+Golden set is now 77 samples / 2882 labeled slots (grew from 61 via a 26-sample "new
+golden" push, minus 5 samples deleted for batch truth corruption — see "Golden-set
+batch corruption" above). Last confirmed-on-device accuracy: **95% (1942/2041)** on the
+pre-push 61-sample set — this has been the stable baseline across three back-to-back
+Evaluate runs this session (v1.4.15/86 baseline, v1.4.19/90 KC/KS suit-tiebreak change,
+v1.4.20's predecessor): confusion counts were byte-identical across those runs,
+confirming the KC/KS change was harmless but also didn't move the number (see
+`resolveBlackSuit`/`ambiguousBlackSuit` note above). v1.4.20/91 (the `Seven→Jack` /
+`TableauCascadeSupport.isReliableRead` fix above) is pushed but not yet Evaluate-verified
+against the new 77-sample set — expected to be the first change this session to
+actually move accuracy.
 
 **One regression this session, reverted the same round**: v1.4.17/88 tried re-anchoring
 `firstFaceTop` (the position used for every exposed cascade card except the fully-visible
@@ -188,6 +225,11 @@ Remaining confusion buckets worth investigating next, in roughly descending valu
   `20260819_211539` tableau:3, a 12-card cascade with several consecutive wrong reads)
   — worth re-checking once v1.4.20 is verified, since some of these may already be
   fixed by the same `rankCountConsistent` gate.
+- Waste-pile Six misread as Nine/Four/Eight (85% failure rate, 11/13 golden samples)
+  — root-caused this session (weak `rank_six*.png` template scores, see the detailed
+  note above), but no safe fix found yet: three candidate templates were built and
+  rejected for causing broad false positives against other ranks. Next attempt should
+  try a `WasteRankCorrections` override rule instead of another template.
 
 ## Don't
 
