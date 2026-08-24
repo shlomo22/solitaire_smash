@@ -19,7 +19,10 @@ data class GoldenSlot(
     val bounds: BoardRegion,
     val engine: SlotGuess,
     val truth: SlotGuess,
-    val inferred: Boolean = false
+    val inferred: Boolean = false,
+    val confidence: Float? = null,
+    val diagnostic: String? = null,
+    val trace: RecognitionTrace? = null
 )
 
 data class RejectionMeta(
@@ -29,8 +32,20 @@ data class RejectionMeta(
     val to: BoardRegion?
 )
 
+data class ErrorCaptureMeta(
+    val stateSignature: String,
+    val stableHits: Int,
+    val detectionConfidence: Float,
+    val diagnostics: List<String>,
+    val violations: List<RecognitionViolation>
+)
+
 object GoldenTruthJson {
-    fun toJson(sample: GoldenSample, rejection: RejectionMeta? = null): String {
+    fun toJson(
+        sample: GoldenSample,
+        rejection: RejectionMeta? = null,
+        errorCapture: ErrorCaptureMeta? = null
+    ): String {
         val root = JSONObject()
         root.put("id", sample.id)
         root.put(
@@ -45,17 +60,27 @@ object GoldenTruthJson {
             meta.from?.let { root.put("arrowFrom", boundsJson(it)) }
             meta.to?.let { root.put("arrowTo", boundsJson(it)) }
         }
+        errorCapture?.let { meta ->
+            root.put("captureType", "recognition_error")
+            root.put("stateSignature", meta.stateSignature)
+            root.put("stableHits", meta.stableHits)
+            root.put("detectionConfidence", meta.detectionConfidence.toDouble())
+            root.put("diagnostics", JSONArray(meta.diagnostics))
+            root.put("violations", violationsJson(meta.violations))
+        }
         val slots = JSONArray()
         sample.slots.forEach { slot ->
-            slots.put(
-                JSONObject()
-                    .put("pile", slot.pile)
-                    .put("index", slot.index)
-                    .put("inferred", slot.inferred)
-                    .put("bounds", boundsJson(slot.bounds))
-                    .put("engine", guessJson(slot.engine))
-                    .put("truth", guessJson(slot.truth))
-            )
+            val slotJson = JSONObject()
+                .put("pile", slot.pile)
+                .put("index", slot.index)
+                .put("inferred", slot.inferred)
+                .put("bounds", boundsJson(slot.bounds))
+                .put("engine", guessJson(slot.engine))
+                .put("truth", guessJson(slot.truth))
+            slot.confidence?.let { slotJson.put("confidence", it.toDouble()) }
+            slot.diagnostic?.let { slotJson.put("diagnostic", it) }
+            slot.trace?.let { slotJson.put("trace", traceJson(it)) }
+            slots.put(slotJson)
         }
         root.put("slots", slots)
         return root.toString(2)
@@ -120,6 +145,93 @@ object GoldenTruthJson {
             suitAmbiguous = obj.optBoolean("suitAmbiguous", false)
         )
     }
+
+    private fun traceJson(trace: RecognitionTrace): JSONObject {
+        val obj = JSONObject()
+        trace.rankSource?.let { obj.put("rankSource", it) }
+        trace.rankScore?.let { obj.put("rankScore", it.toDouble()) }
+        trace.rankTemplates?.let { obj.put("rankTemplates", it) }
+        trace.suitSource?.let { obj.put("suitSource", it) }
+        trace.suitScore?.let { obj.put("suitScore", it.toDouble()) }
+        trace.suitTemplates?.let { obj.put("suitTemplates", it) }
+        if (trace.postSteps.isNotEmpty()) {
+            obj.put("postSteps", JSONArray(trace.postSteps))
+        }
+        return obj
+    }
+
+    private fun violationsJson(violations: List<RecognitionViolation>): JSONArray {
+        val array = JSONArray()
+        violations.forEach { violation ->
+            when (violation) {
+                is RecognitionViolation.DuplicateCard -> array.put(
+                    JSONObject()
+                        .put("type", "duplicate")
+                        .put("cardId", violation.cardId)
+                        .put("locations", JSONArray(violation.locations))
+                )
+                is RecognitionViolation.CascadeBreak -> array.put(
+                    JSONObject()
+                        .put("type", "cascade_break")
+                        .put("pile", violation.pile)
+                        .put("lowerIndex", violation.lowerIndex)
+                        .put("upperIndex", violation.upperIndex)
+                        .put("lower", violation.lowerCard)
+                        .put("upper", violation.upperCard)
+                )
+            }
+        }
+        return array
+    }
+
+    fun parseErrorCaptureMeta(text: String): ErrorCaptureMeta? {
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return null
+        if (root.optString("captureType") != "recognition_error") return null
+        val diagnosticsJson = root.optJSONArray("diagnostics") ?: JSONArray()
+        val diagnostics = buildList {
+            for (i in 0 until diagnosticsJson.length()) {
+                add(diagnosticsJson.getString(i))
+            }
+        }
+        val violationsArray = root.optJSONArray("violations") ?: JSONArray()
+        val violations = buildList {
+            for (i in 0 until violationsArray.length()) {
+                val obj = violationsArray.getJSONObject(i)
+                when (obj.getString("type")) {
+                    "duplicate" -> {
+                        val locationsJson = obj.getJSONArray("locations")
+                        val locations = buildList {
+                            for (j in 0 until locationsJson.length()) {
+                                add(locationsJson.getString(j))
+                            }
+                        }
+                        add(
+                            RecognitionViolation.DuplicateCard(
+                                cardId = obj.getString("cardId"),
+                                locations = locations
+                            )
+                        )
+                    }
+                    "cascade_break" -> add(
+                        RecognitionViolation.CascadeBreak(
+                            pile = obj.getString("pile"),
+                            lowerIndex = obj.getInt("lowerIndex"),
+                            upperIndex = obj.getInt("upperIndex"),
+                            lowerCard = obj.getString("lower"),
+                            upperCard = obj.getString("upper")
+                        )
+                    )
+                }
+            }
+        }
+        return ErrorCaptureMeta(
+            stateSignature = root.getString("stateSignature"),
+            stableHits = root.getInt("stableHits"),
+            detectionConfidence = root.getDouble("detectionConfidence").toFloat(),
+            diagnostics = diagnostics,
+            violations = violations
+        )
+    }
 }
 
 fun RecognizedSlot.toGoldenSlot(truth: SlotGuess = engine): GoldenSlot = GoldenSlot(
@@ -129,4 +241,16 @@ fun RecognizedSlot.toGoldenSlot(truth: SlotGuess = engine): GoldenSlot = GoldenS
     engine = engine,
     truth = truth,
     inferred = inferred
+)
+
+fun RecognizedSlot.toErrorCaptureSlot(): GoldenSlot = GoldenSlot(
+    pile = pileRefKey(pile),
+    index = index,
+    bounds = bounds,
+    engine = engine,
+    truth = engine,
+    inferred = inferred,
+    confidence = confidence,
+    diagnostic = diagnostic,
+    trace = trace
 )

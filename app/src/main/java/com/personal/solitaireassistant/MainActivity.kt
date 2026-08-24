@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
                         onInterval = viewModel::setCaptureInterval,
                         onConfidence = viewModel::setConfidence,
                         onDebugFrames = viewModel::setDebugFrames,
+                        onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
                         onOpenOverlaySettings = ::openOverlaySettings,
                         onStart = ::onStartClicked,
                         onStop = { CaptureService.stop(this) },
@@ -115,6 +116,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshGoldenCount()
+        viewModel.refreshErrorCaptureCount()
         // The move-suggestion arrow/Label/Cancel chrome is a system-wide
         // TYPE_APPLICATION_OVERLAY window - it floats above every app,
         // including this Activity's own Settings/Golden-Truth screens, with

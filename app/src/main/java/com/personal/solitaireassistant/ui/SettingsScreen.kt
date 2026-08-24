@@ -55,6 +55,7 @@ fun SettingsScreen(
     onInterval: (Long) -> Unit,
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
+    onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -216,6 +217,45 @@ fun SettingsScreen(
                         onCheckedChange = onDebugFrames
                     )
                 }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Recognition errors", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "While playing, auto-save PNG+JSON when a stable board has duplicate cards " +
+                        "or an invalid tableau cascade.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Auto-capture recognition errors")
+                    Switch(
+                        checked = settings.autoCaptureRecognitionErrors,
+                        onCheckedChange = onAutoCaptureRecognitionErrors
+                    )
+                }
+                Text("Saved captures: ${state.errorCaptureCount}")
+                Text(
+                    "Folder: ${state.errorCapturePath.ifBlank { "(unavailable)" }}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Pull: adb exec-out run-as com.personal.solitaireassistant sh -c " +
+                        "'cd files/recognition_errors && tar cf - .' > errors.tar",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
 

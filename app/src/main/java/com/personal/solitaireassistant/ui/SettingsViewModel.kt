@@ -10,6 +10,7 @@ import com.personal.solitaireassistant.capture.CaptureService
 import com.personal.solitaireassistant.capture.PendingSnapshotHolder
 import com.personal.solitaireassistant.settings.AssistantPreferences
 import com.personal.solitaireassistant.settings.AssistantSettings
+import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GoldenSample
 import com.personal.solitaireassistant.pipeline.AnalysisFileLogger
 import com.personal.solitaireassistant.vision.GoldenTruthEvaluator
@@ -30,6 +31,8 @@ data class SettingsUiState(
     val transientMessage: String = "",
     val goldenCount: Int = 0,
     val goldenPath: String = "",
+    val errorCaptureCount: Int = 0,
+    val errorCapturePath: String = "",
     val evalReport: String = "",
     val evaluating: Boolean = false,
     val showGoldenReview: Boolean = false
@@ -40,28 +43,33 @@ class SettingsViewModel(
     private val preferences: AssistantPreferences
 ) : AndroidViewModel(application) {
     private val store = GoldenTruthStore(application)
+    private val errorCaptureStore = ErrorCaptureStore(application)
     private val transient = MutableStateFlow("")
     private val goldenCount = MutableStateFlow(store.count())
+    private val errorCaptureCount = MutableStateFlow(errorCaptureStore.count())
     private val evalReport = MutableStateFlow("")
     private val evaluating = MutableStateFlow(false)
     private val showGoldenReview = MutableStateFlow(false)
 
     val uiState: StateFlow<SettingsUiState> = combine(
-        combine(preferences.settings, transient, goldenCount) { settings, message, count ->
-            Triple(settings, message, count)
-        },
+        preferences.settings,
+        transient,
+        goldenCount,
+        errorCaptureCount,
         combine(evalReport, evaluating, showGoldenReview) { report, running, review ->
             Triple(report, running, review)
         }
-    ) { left, right ->
+    ) { settings, message, count, errorCount, eval ->
         SettingsUiState(
-            settings = left.first,
-            transientMessage = left.second,
-            goldenCount = left.third,
+            settings = settings,
+            transientMessage = message,
+            goldenCount = count,
             goldenPath = store.pathForDisplay(),
-            evalReport = right.first,
-            evaluating = right.second,
-            showGoldenReview = right.third
+            errorCaptureCount = errorCount,
+            errorCapturePath = errorCaptureStore.pathForDisplay(),
+            evalReport = eval.first,
+            evaluating = eval.second,
+            showGoldenReview = eval.third
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
@@ -79,6 +87,10 @@ class SettingsViewModel(
 
     fun setDebugFrames(enabled: Boolean) {
         viewModelScope.launch { preferences.updateDebugSaveFrames(enabled) }
+    }
+
+    fun setAutoCaptureRecognitionErrors(enabled: Boolean) {
+        viewModelScope.launch { preferences.updateAutoCaptureRecognitionErrors(enabled) }
     }
 
     fun setTransientMessage(message: String) {
@@ -153,6 +165,10 @@ class SettingsViewModel(
 
     fun refreshGoldenCount() {
         goldenCount.value = store.count()
+    }
+
+    fun refreshErrorCaptureCount() {
+        errorCaptureCount.value = errorCaptureStore.count()
     }
 }
 

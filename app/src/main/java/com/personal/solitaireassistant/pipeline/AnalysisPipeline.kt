@@ -20,13 +20,18 @@ import com.personal.solitaireassistant.settings.RejectedMoveStore
 import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
+import com.personal.solitaireassistant.vision.ErrorCaptureMeta
+import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GameStateDetector
 import com.personal.solitaireassistant.vision.GoldenSample
+import com.personal.solitaireassistant.vision.BoardRecognitionValidator
 import com.personal.solitaireassistant.vision.RecognizedSlot
+import com.personal.solitaireassistant.vision.RecognitionViolation
 import com.personal.solitaireassistant.vision.RejectedSnapshotStore
 import com.personal.solitaireassistant.vision.RejectionMeta
 import com.personal.solitaireassistant.vision.SlotKind
 import com.personal.solitaireassistant.vision.recognitionTraceLines
+import com.personal.solitaireassistant.vision.toErrorCaptureSlot
 import com.personal.solitaireassistant.vision.toGoldenSlot
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -41,6 +46,7 @@ class AnalysisPipeline(
     private val fileLogger = AnalysisFileLogger(appContext)
     private val rejectedMoveStore = RejectedMoveStore(appContext)
     private val rejectedSnapshotStore = RejectedSnapshotStore(appContext)
+    private val errorCaptureStore = ErrorCaptureStore(appContext)
     private val rejectionExecutor = Executors.newSingleThreadExecutor()
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
@@ -62,6 +68,7 @@ class AnalysisPipeline(
     private var pendingSuggestionCandidate: Move? = null
     private var pendingSuggestionStreak = 0
     private var sawFreshDeal = false
+    private var lastErrorCaptureSignature: String? = null
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -185,6 +192,7 @@ class AnalysisPipeline(
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
         sawFreshDeal = false
+        lastErrorCaptureSignature = null
         fileLogger.append("=== pipeline cleared ===")
     }
 
@@ -320,6 +328,65 @@ class AnalysisPipeline(
             } catch (e: Exception) {
                 Log.w(TAG, "Failed saving rejection snapshot", e)
                 fileLogger.append("REJECTION_SNAPSHOT_FAILED id=$id error=${e.message}")
+            } finally {
+                snapshot.bitmap.recycle()
+            }
+        }
+    }
+
+    private fun maybeCaptureRecognitionErrors(
+        detection: DetectionResult,
+        state: GameState,
+        signature: String
+    ) {
+        val settings = settingsRef.get()
+        if (!settings.autoCaptureRecognitionErrors) return
+        if (lastErrorCaptureSignature == signature) return
+        val violations = BoardRecognitionValidator.validate(state)
+        if (violations.isEmpty()) return
+        val snapshot = peekCurrentFrame() ?: return
+        saveErrorCaptureAsync(
+            snapshot = snapshot,
+            detection = detection,
+            signature = signature,
+            violations = violations
+        )
+    }
+
+    private fun saveErrorCaptureAsync(
+        snapshot: PendingSnapshot,
+        detection: DetectionResult,
+        signature: String,
+        violations: List<RecognitionViolation>
+    ) {
+        val id = errorCaptureStore.nextId()
+        val sample = GoldenSample(
+            id = id,
+            frameWidth = snapshot.bitmap.width,
+            frameHeight = snapshot.bitmap.height,
+            slots = snapshot.slots.map { it.toErrorCaptureSlot() }
+        )
+        val meta = ErrorCaptureMeta(
+            stateSignature = signature,
+            stableHits = stableHits,
+            detectionConfidence = detection.confidence,
+            diagnostics = detection.diagnostics,
+            violations = violations
+        )
+        val violationSummary = violations.joinToString(",") { it.summary() }
+        lastErrorCaptureSignature = signature
+        rejectionExecutor.execute {
+            try {
+                errorCaptureStore.save(snapshot.bitmap, sample, meta)
+                fileLogger.append(
+                    "ERROR_CAPTURE id=$id path=${errorCaptureStore.dir().absolutePath} " +
+                        "violations=$violationSummary"
+                )
+                statusSink("Saved recognition error $id")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed saving recognition error capture", e)
+                lastErrorCaptureSignature = null
+                fileLogger.append("ERROR_CAPTURE_FAILED id=$id error=${e.message}")
             } finally {
                 snapshot.bitmap.recycle()
             }
@@ -540,6 +607,11 @@ class AnalysisPipeline(
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
         }
+        maybeCaptureRecognitionErrors(
+            detection = detection,
+            state = state,
+            signature = signature
+        )
         showBestSuggestion(
             detection = detection,
             signature = signature,

@@ -96,6 +96,72 @@ class GoldenTruthJsonTest {
     }
 
     @Test
+    fun errorCaptureMetadataAndExtendedSlotsRoundTrip() {
+        val sample = GoldenSample(
+            id = "error_20260824_221530",
+            frameWidth = 1080,
+            frameHeight = 2340,
+            slots = listOf(
+                GoldenSlot(
+                    pile = "waste",
+                    index = 0,
+                    bounds = BoardRegion(100f, 200f, 180f, 320f),
+                    engine = SlotGuess(SlotKind.FaceUp, Rank.Six, Suit.Spades),
+                    truth = SlotGuess(SlotKind.FaceUp, Rank.Six, Suit.Spades),
+                    inferred = false,
+                    confidence = 0.67f,
+                    diagnostic = "match-Six-Spades@0.67",
+                    trace = RecognitionTrace(
+                        rankSource = "rank-png",
+                        rankScore = 0.71f,
+                        rankTemplates = "Six=0.42 Nine=0.44",
+                        suitSource = "suit-png",
+                        suitScore = 0.88f,
+                        postSteps = listOf("black-tiebreak:club")
+                    )
+                )
+            )
+        )
+        val meta = ErrorCaptureMeta(
+            stateSignature = "Six_Spades|-|-",
+            stableHits = 3,
+            detectionConfidence = 0.84f,
+            diagnostics = listOf("board-found", "live-play"),
+            violations = listOf(
+                RecognitionViolation.DuplicateCard(
+                    cardId = "King_Spades",
+                    locations = listOf("tableau:2:1", "tableau:4:0")
+                ),
+                RecognitionViolation.CascadeBreak(
+                    pile = "tableau:3",
+                    lowerIndex = 4,
+                    upperIndex = 3,
+                    lowerCard = "Eight_Clubs",
+                    upperCard = "Ten_Spades"
+                )
+            )
+        )
+        val json = GoldenTruthJson.toJson(sample, errorCapture = meta)
+        assertTrue(json.contains("\"captureType\": \"recognition_error\""))
+        assertTrue(json.contains("\"confidence\": 0.67"))
+        assertTrue(json.contains("\"rankSource\": \"rank-png\""))
+
+        val parsedSample = GoldenTruthJson.fromJson(json)
+        assertEquals(sample.id, parsedSample.id)
+        assertEquals(1, parsedSample.slots.size)
+
+        val parsedMeta = GoldenTruthJson.parseErrorCaptureMeta(json)
+        requireNotNull(parsedMeta)
+        assertEquals(meta.stateSignature, parsedMeta.stateSignature)
+        assertEquals(meta.stableHits, parsedMeta.stableHits)
+        assertEquals(meta.detectionConfidence, parsedMeta.detectionConfidence, 0.001f)
+        assertEquals(meta.diagnostics, parsedMeta.diagnostics)
+        assertEquals(2, parsedMeta.violations.size)
+        assertTrue(parsedMeta.violations[0] is RecognitionViolation.DuplicateCard)
+        assertTrue(parsedMeta.violations[1] is RecognitionViolation.CascadeBreak)
+    }
+
+    @Test
     fun fixtureTruthLabelsUseEachCardAtMostOnce() {
         val readme = javaClass.classLoader!!.getResource("golden/README.md")
             ?: error("golden/README.md missing from test resources")
