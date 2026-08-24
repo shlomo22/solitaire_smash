@@ -84,6 +84,47 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   it corrupted a correct 0.84-confidence Seven-of-Spades into Seven-of-Clubs this way.
   Now only reconsiders a pair when at least one side's `suitAmbiguous` flag was already
   set.
+- **Black-suit ambiguous tiebreak has two independent passes, and the second one is not
+  where the wrong answer usually comes from.** `CardRecognizer.ambiguousBlackSuit()` (the
+  *first* pass, inside the main `recognize()` call) computes `blackSuitScoresFromCrop` and
+  tries `resolveBlackSuitLeader`; when that genuinely can't pick a side (e.g.
+  `branch=lowTopMargin-noShape->ambiguous`, a real near-tie like `full=C0.90/S0.91`), it
+  does **not** stay unresolved — it falls through to `bestBitmapSuitLoose`, and failing
+  that, a bare `if (scores.fullSpade >= scores.fullClub) Suit.Spades else Suit.Clubs`
+  coinflip. That coinflip is what actually picks the suit stored on the card
+  (`suitAmbiguous=true`, but a concrete suit is already assigned). A *second* pass,
+  `GameStateDetector.resolveCardSuitWithTrace`/`resolveBlackSuit`, re-fires afterward on
+  whatever region the caller passed (for tableau cascade cards, the ~44px trimmed
+  rank-header strip) any time a card comes back ambiguous, and normally either confirms
+  or overrides the first pass's answer. Confirmed this session (golden sample
+  `20260819_211539` tableau:2, King of Clubs pixel-verified, misread as King of Spades):
+  gating the second pass to skip re-checking when the first pass already had a strong
+  absolute score (`STRONG_AMBIGUOUS_SUIT_FLOOR = 0.80f` in `GameStateDetector`) is a
+  real, harmless improvement in principle, but it was a **no-op** for this exact case —
+  the wrong "Spades" was already locked in by the first pass's own coinflip fallback
+  before the second pass ever ran. If you're chasing a black-suit-ambiguous miss, check
+  `diag=match-<rank>-<suit>-ambiguous@...` (set once, at the *first* pass) before
+  assuming a fix aimed at the second-pass recheck will change it. The likely next lever
+  is either the first pass's own `bestBitmapSuitLoose`/coinflip fallback, or teaching
+  `DeckConstraintPass` to break a genuine sub-0.02-margin tie using deck-uniqueness
+  (e.g. "is there already a King of Spades elsewhere on the board?") — not yet
+  attempted.
+- **`TableauCascadeSupport.isReliableRead`** gates whether a mid-cascade slot uses its
+  own direct rank/suit read or falls back to `geometricCascadeCard` (bottom-card rank +
+  arithmetic distance). It used to check only a flat `MIN_READ_CONFIDENCE = 0.55f` —
+  root-caused this session (golden sample `20260818_080819` tableau:6, a genuine
+  Ten(♠)-Nine(♦)-Eight(♣)-Seven(♦)-Six(♣) run): the bottom card (Six) and the leading/
+  most-covered card (Ten) are read correctly and independently, and agree cleanly on a
+  5-card run, but 3 of the 4 covered middle cards still get misread (various Ten/Jack/
+  Queen guesses at confidence 0.57–0.65, one with the true rank not even in the top-4
+  candidates) because 0.55 alone doesn't know a better, doubly-anchored answer already
+  exists. Fixed by computing `rankCountConsistent` (true when the bottom and leading
+  cards' rank arithmetic already agrees on the run length) and, when a mid-run read both
+  contradicts what that consensus predicts *and* stays below a stricter
+  `STRONG_DIRECT_READ_FLOOR = 0.75f`, preferring the geometric fallback instead. A read
+  that's either strong (≥0.75) or already agrees with the consensus is untouched. Pushed
+  as v1.4.20/91, not yet device-verified — this is the likely fix for the `Seven→Jack`
+  bucket and probably other silent mid-run misreads sharing the same mechanism.
 - **`GoldenTruthEvaluator`** — the Evaluate-button harness. `findMatchingSlot` matches
   truth to detected slots by pile + nearest centroid (80px), excluding inferred slots.
   **Known artifact, not a bug to chase**: when the rightful card's own read gets
@@ -92,6 +133,17 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   error (established case: `8D vs 7C` at a specific tableau:3 slot, persisted unchanged
   through many fix rounds — confirmed via Python replica that the real scores are
   genuinely weak there, the system is correctly declining to guess).
+- **`AnalysisPipeline.applySuggestionStickiness`** damps single-frame arrow flicker: when
+  the previously-shown move drops out of the ranked list, it holds the *old* arrow on
+  screen for up to 2 frames before adopting the new best move (built for a genuinely
+  static board where a buried tableau card's rank flickers between two reads for one
+  frame). Bug found and fixed this session (v1.4.16/87): Waste/Stock change on every
+  draw, so a vanished `Waste -> Foundation`/`Waste -> Tableau` move almost always means
+  the player already drew past it, not a misread — holding froze the arrow at the old
+  waste position while the visible card underneath kept changing, which is what a user
+  report described as an arrow connecting two nonsensical ranks (e.g. "J → 3"). Waste-
+  sourced vanished moves now adopt the new best move immediately; tableau-sourced ones
+  keep the original 2-frame grace period.
 - **Golden set data quality**: the golden JSON/PNG samples under
   `app/src/test/resources/golden/` are human-labeled and **can themselves be wrong**.
   Found this session: sample `20260814_205456`, `tableau:0` index 2 is truth-labeled
@@ -100,30 +152,60 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   mismatch is an app bug, crop and visually check the actual pixels; don't trust the
   truth label blindly.
 
-## Current state (as of v1.3.68 / versionCode 69, pushed, not yet device-verified)
+## Current state (as of v1.4.20 / versionCode 91, pushed, not yet device-verified)
 
-Last confirmed-on-device accuracy: **97% (1031/1068)** on the golden set, before the
-two fixes in this push (tableau-column parallelization already confirmed working
-correctly on-device at this accuracy; the `DeckConstraintPass` suit-swap fix and the
-`bestBitmapRank` margin fix are pushed but awaiting the next Evaluate run).
+Golden set is now 61 samples / 2041 labeled slots (grew from 41 across several
+"new golden" device pushes). Last confirmed-on-device accuracy: **95% (1942/2041)** —
+this has been the stable baseline across three back-to-back Evaluate runs this session
+(v1.4.15/86 baseline, v1.4.19/90 KC/KS suit-tiebreak change, v1.4.20's predecessor):
+confusion counts were byte-identical across those runs, confirming the KC/KS change was
+harmless but also didn't move the number (see `resolveBlackSuit`/`ambiguousBlackSuit`
+note above). v1.4.20/91 (the `Seven→Jack` / `TableauCascadeSupport.isReliableRead` fix
+above) is pushed but not yet Evaluate-verified — expected to be the first change this
+session to actually move accuracy.
+
+**One regression this session, reverted the same round**: v1.4.17/88 tried re-anchoring
+`firstFaceTop` (the position used for every exposed cascade card except the fully-visible
+bottom one) to the reliably-measured bottom card instead of accumulating forward via
+`downStep`/`faceDownOverlap`. It fixed the one golden-verified King-of-Hearts miss it
+targeted, but dropped accuracy to 93% (1897/2041) — new `Six/Eight/Five→Ace` confusions
+(51 combined) appeared, an order of magnitude worse than what it fixed. Reverted in
+v1.4.18/89. Root cause of the regression itself was never fully diagnosed (see "Don't"
+below) — treat any future attempt in this area as starting from scratch, not as a retry
+of a mostly-working idea.
 
 Remaining confusion buckets worth investigating next, in roughly descending value:
 - `Eight → Seven` (2) — this is the known `GoldenTruthEvaluator` neighbor-match
   artifact above; not expected to be fixable by touching recognition.
-- `Seven → Jack` (2) — a genuinely weak rank read (`rank-png@0.60`, "7" not even in the
-  top-4 candidates) that still clears the 0.55 reliability floor
-  (`TableauCascadeSupport.MIN_READ_CONFIDENCE`). Not yet root-caused.
-- Long-cascade compounding errors (e.g. sample `20260819_211539` tableau:3, a 12-card
-  cascade with several consecutive wrong reads) — possibly the same kind of geometric
-  position drift that caused the Five/Six bug (each card's position is
-  `firstFaceTop + exposedIndex * faceUpStep`, purely arithmetic, never re-measured per
-  card — small drift compounds over a long run). Worth checking with the same
-  Python-replica-at-the-geometric-position technique used for the Five/Six fix.
+- `Seven → Jack` and likely other silent mid-cascade misreads — root-caused and fixed
+  this session, see `TableauCascadeSupport.isReliableRead` note above. Awaiting
+  device verification.
+- Black-suit ambiguous ties resolved wrong by the first pass's own coinflip fallback
+  (confirmed case: `20260819_211539` tableau:2, King of Clubs → King of Spades,
+  `full=C0.90/S0.91`) — see the detailed note above. Next lever is probably
+  `DeckConstraintPass` deck-uniqueness, not another single-card scoring tweak.
+- Long-cascade compounding errors beyond the Seven→Jack mechanism (e.g. sample
+  `20260819_211539` tableau:3, a 12-card cascade with several consecutive wrong reads)
+  — worth re-checking once v1.4.20 is verified, since some of these may already be
+  fixed by the same `rankCountConsistent` gate.
 
 ## Don't
 
-- Don't retune `BoardGeometryProfile` constants without very strong, broad (not
-  single-sample) evidence — see "Validation discipline" above.
+- Don't retune `BoardGeometryProfile` constants (`faceDownOverlap`, `faceUpOverlap`,
+  `cardAspect`) *or* the arithmetic that derives cascade slot positions from them
+  (`firstFaceTop`, `downStep`, `faceUpStep`) without very strong, broad (not
+  single-sample) evidence — see "Validation discipline" above. Two different attempts
+  in this area have now net-regressed on device: a direct `faceDownOverlap` retune
+  (1011→1005/1068, an earlier session) and a `firstFaceTop` re-anchor that touched only
+  the exposed-run positioning, not the constant itself (95%→93%, this session, v1.4.17).
+  Both looked well-justified from a single pixel-verified example beforehand. If
+  attempting this again, validate across many golden samples *before* writing Kotlin,
+  not just the one sample that motivated the idea.
+- Don't assume a two-pass tiebreak's *second* pass is where a wrong answer comes from
+  just because it's the one that logs a decisive-looking branch name. Check which pass's
+  diagnostic actually set the stored value first (see the black-suit-ambiguous note
+  above) — patching the second pass can be a real, harmless improvement and still be a
+  complete no-op for the case you're chasing.
 - Don't treat a golden-set mismatch as a confirmed app bug without cropping and
   visually checking the real pixels first.
 - Don't suggest stopping/wrapping up preemptively — this project runs as a long,
