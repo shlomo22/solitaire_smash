@@ -25,6 +25,9 @@ class GoldenBlackSuitRegressionTest {
             Triple("20260814_125352", "tableau:2", 1 to Suit.Clubs),
             Triple("20260814_125352", "tableau:5", 3 to Suit.Clubs),
             Triple("20260814_125744", "waste", 0 to Suit.Clubs),
+            Triple("20260818_080429", "waste", 0 to Suit.Clubs),
+            Triple("20260819_211539", "tableau:2", 0 to Suit.Clubs),
+            Triple("20260823_210146", "tableau:2", 0 to Suit.Clubs),
             Triple("20260814_205456", "foundation:1", 0 to Suit.Clubs),
             Triple("20260815_132843", "foundation:0", 0 to Suit.Clubs),
             Triple("20260815_165137", "foundation:1", 0 to Suit.Clubs)

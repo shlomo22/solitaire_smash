@@ -128,8 +128,41 @@ internal object WasteRankCorrections {
     }
 
     /**
+     * Waste-only: tight/legacy fusion reads Four or Nine but corner OCR read Six.
+     * Real device log: probe ocr='6'@0.62 while fused-Four-Clubs won (Six→Four bucket).
+     */
+    fun correctSixOnWaste(
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float>,
+        ocrRank: Rank?
+    ): Rank? {
+        val fourCandidate = legacyCard?.rank == Rank.Four ||
+            tightCard?.rank == Rank.Four ||
+            baseCard?.rank == Rank.Four
+        val nineCandidate = legacyCard?.rank == Rank.Nine ||
+            tightCard?.rank == Rank.Nine ||
+            baseCard?.rank == Rank.Nine
+        if (!fourCandidate && !nineCandidate) return null
+
+        val sixScore = rankScore(exactRankScores, Rank.Six)
+        if (ocrRank == Rank.Six) return Rank.Six
+
+        if (fourCandidate) {
+            val fourScore = rankScore(exactRankScores, Rank.Four)
+            if (sixScore >= fourScore - 0.05f && sixScore >= 0.38f) return Rank.Six
+        }
+        if (nineCandidate) {
+            val nineScore = rankScore(exactRankScores, Rank.Nine)
+            if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
+        }
+        return null
+    }
+
+    /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
-     * the fused PNG pick on a known confusion pair (3/J, 5/J, K/10, Q/K, Q/10).
+     * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/9, K/10, Q/K, Q/10).
      */
     fun ocrRankOverride(
         ocrRank: Rank?,
@@ -182,6 +215,18 @@ internal object WasteRankCorrections {
         ) {
             return Rank.Three
         }
+        if (ocrRank == Rank.Six &&
+            tightLegacyRanks.contains(Rank.Four) &&
+            !tightLegacyRanks.contains(Rank.Six)
+        ) {
+            return Rank.Six
+        }
+        if (ocrRank == Rank.Six &&
+            tightLegacyRanks.contains(Rank.Nine) &&
+            !tightLegacyRanks.contains(Rank.Six)
+        ) {
+            return Rank.Six
+        }
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
@@ -204,7 +249,9 @@ internal object WasteRankCorrections {
             setOf(Rank.King, Rank.Ten),
             setOf(Rank.King, Rank.Queen),
             setOf(Rank.Jack, Rank.Three),
-            setOf(Rank.Five, Rank.Jack) -> true
+            setOf(Rank.Five, Rank.Jack),
+            setOf(Rank.Six, Rank.Four),
+            setOf(Rank.Six, Rank.Nine) -> true
             else -> false
         }
     }

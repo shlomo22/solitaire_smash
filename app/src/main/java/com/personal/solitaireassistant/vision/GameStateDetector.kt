@@ -310,8 +310,16 @@ class GameStateDetector(
             exactRankScores = exactRankScores,
             inkGuess = wasteInkGuess
         )
+        val wasteSixOverride = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
         val correctedRank = when {
             wasteOcrOverride != null -> wasteOcrOverride
+            wasteSixOverride != null -> wasteSixOverride
             wasteQueenOverride != null -> wasteQueenOverride
             wasteKingOverride != null -> wasteKingOverride
             exactEightSpadeOverride -> Rank.Eight

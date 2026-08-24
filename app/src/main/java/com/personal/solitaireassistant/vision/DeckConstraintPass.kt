@@ -40,6 +40,7 @@ object DeckConstraintPass {
             return state
         }
 
+        resolveAmbiguousSuitByDeckOccupancy(entries)
         val resolvedByDedup = resolveDuplicateCardIds(bitmap, recognizer, entries)
         resolvePartnerSuitSwaps(bitmap, recognizer, entries, resolvedByDedup)
 
@@ -93,6 +94,34 @@ object DeckConstraintPass {
             )
         }
         return entries
+    }
+
+    /**
+     * When a black/red suit read is ambiguous but assigning the current suit would
+     * duplicate a card already on the board, flip to the partner suit instead.
+     * Real case: KC read as KS~ while KS is already assigned elsewhere.
+     */
+    private fun resolveAmbiguousSuitByDeckOccupancy(entries: MutableList<Entry>) {
+        entries.forEach { entry ->
+            if (!entry.card.suitAmbiguous &&
+                !entry.originalDiagnostic.contains("-ambiguous")
+            ) {
+                return@forEach
+            }
+            if (entry.card.suit.isRed) return@forEach
+            val partner = partnerSuit(entry.card.suit)
+            val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
+            val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
+            val partnerTaken = others.any { it.card.id == partnerCard.id }
+            val currentTaken = others.any { it.card.id == entry.card.id }
+            when {
+                currentTaken && !partnerTaken ->
+                    entry.card = partnerCard
+                partnerTaken && !currentTaken ->
+                    entry.card = entry.card.copy(suitAmbiguous = false)
+                else -> Unit
+            }
+        }
     }
 
     private fun resolvePartnerSuitSwaps(
