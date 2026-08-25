@@ -34,6 +34,45 @@ class ErrorCaptureStore(context: Context) {
 
     fun listIdsNewestFirst(): List<String> = listIds().asReversed()
 
+    /** Oldest-first, suitable for comparing consecutive captures from the same session. */
+    fun listIdsOldestFirst(): List<String> = listIds()
+
+    data class CompactResult(
+        val removed: Int,
+        val remaining: Int
+    )
+
+    /**
+     * Walks [listIdsOldestFirst] and deletes the newer capture whenever it has
+     * the same violation set as the capture immediately before it.
+     */
+    fun compactConsecutiveDuplicates(): CompactResult {
+        val ids = listIdsOldestFirst().toMutableList()
+        var removed = 0
+        var index = 0
+        while (index < ids.size - 1) {
+            val olderKey = violationKey(ids[index])
+            val newerKey = violationKey(ids[index + 1])
+            if (olderKey != null && olderKey == newerKey) {
+                delete(ids[index + 1])
+                ids.removeAt(index + 1)
+                removed++
+            } else {
+                index++
+            }
+        }
+        return CompactResult(removed = removed, remaining = ids.size)
+    }
+
+    private fun violationKey(id: String): String? {
+        val text = loadJsonText(id) ?: return null
+        val meta = GoldenTruthJson.parseErrorCaptureMeta(text) ?: return null
+        return meta.violations
+            .map { it.summary() }
+            .sorted()
+            .joinToString("|")
+    }
+
     fun loadJsonText(id: String): String? {
         val file = File(dir(), "$id.json")
         if (!file.isFile) return null
@@ -63,6 +102,14 @@ class ErrorCaptureStore(context: Context) {
         File(directory, "${sample.id}.json").writeText(
             GoldenTruthJson.toJson(sample, errorCapture = meta)
         )
+    }
+
+    /** Deletes one saved PNG+JSON pair. Returns true when both files were removed. */
+    fun delete(id: String): Boolean {
+        val directory = dir()
+        val pngDeleted = File(directory, "$id.png").delete()
+        val jsonDeleted = File(directory, "$id.json").delete()
+        return pngDeleted || jsonDeleted
     }
 
     /** Deletes every saved PNG+JSON pair in [dir]. Returns how many ids were removed. */

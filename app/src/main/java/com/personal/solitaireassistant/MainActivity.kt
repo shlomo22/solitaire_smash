@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity() {
                         onDebugFrames = viewModel::setDebugFrames,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
                         onDeleteErrorCaptures = viewModel::deleteErrorCaptures,
+                        onCompactErrorCaptures = viewModel::compactErrorCaptures,
                         onEvaluateErrorCaptures = viewModel::evaluateErrorCaptures,
                         onImportErrorCapture = viewModel::openErrorCaptureImport,
                         onDismissErrorCaptureImport = viewModel::dismissErrorCaptureImport,

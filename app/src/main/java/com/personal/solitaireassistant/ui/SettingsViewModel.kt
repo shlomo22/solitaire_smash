@@ -143,8 +143,19 @@ class SettingsViewModel(
     }
 
     fun discardGoldenReview() {
+        val snapshot = PendingSnapshotHolder.peek()
+        val importedId = snapshot?.sourceErrorCaptureId
         PendingSnapshotHolder.clear()
         showGoldenReview.value = false
+        if (importedId != null) {
+            viewModelScope.launch {
+                removeImportedErrorCapture(
+                    importedId = importedId,
+                    emptyMessage = "Discarded $importedId — no captures left",
+                    remainingMessage = "Discarded $importedId"
+                )
+            }
+        }
     }
 
     fun saveGoldenReview(truths: List<SlotGuess>) {
@@ -170,11 +181,36 @@ class SettingsViewModel(
             }
             PendingSnapshotHolder.clear()
             goldenCount.value = store.count()
-            transient.value = if (sourceId != null) {
-                "Saved golden sample $id (from $sourceId)"
+            if (sourceId != null) {
+                removeImportedErrorCapture(
+                    importedId = sourceId,
+                    emptyMessage = "Saved golden sample $id — no error captures left",
+                    remainingMessage = "Saved golden sample $id (from $sourceId)"
+                )
             } else {
-                "Saved golden sample $id"
+                transient.value = "Saved golden sample $id"
             }
+        }
+    }
+
+    private suspend fun removeImportedErrorCapture(
+        importedId: String,
+        emptyMessage: String,
+        remainingMessage: String
+    ) {
+        withContext(Dispatchers.IO) {
+            errorCaptureStore.delete(importedId)
+        }
+        errorCaptureCount.value = errorCaptureStore.count()
+        val remaining = errorCaptureStore.listIdsNewestFirst()
+        if (remaining.isEmpty()) {
+            showErrorCaptureImport.value = false
+            errorCaptureImportIds.value = emptyList()
+            transient.value = emptyMessage
+        } else {
+            errorCaptureImportIds.value = remaining
+            showErrorCaptureImport.value = true
+            transient.value = remainingMessage
         }
     }
 
@@ -217,6 +253,30 @@ class SettingsViewModel(
                 "Deleted $removed saved capture${if (removed == 1) "" else "s"}"
             } else {
                 "No saved captures to delete"
+            }
+        }
+    }
+
+    fun compactErrorCaptures() {
+        if (errorCaptureCount.value <= 1) {
+            transient.value = "Need at least 2 captures to compact"
+            return
+        }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { errorCaptureStore.compactConsecutiveDuplicates() }
+            errorCaptureCount.value = errorCaptureStore.count()
+            if (showErrorCaptureImport.value) {
+                val remaining = errorCaptureStore.listIdsNewestFirst()
+                errorCaptureImportIds.value = remaining
+                if (remaining.isEmpty()) {
+                    showErrorCaptureImport.value = false
+                }
+            }
+            transient.value = when {
+                result.removed <= 0 -> "No consecutive duplicate captures found"
+                result.remaining <= 0 -> "Compacted ${result.removed} duplicate captures — none left"
+                else -> "Compacted ${result.removed} duplicate capture${if (result.removed == 1) "" else "s"} " +
+                    "(${result.remaining} remaining)"
             }
         }
     }

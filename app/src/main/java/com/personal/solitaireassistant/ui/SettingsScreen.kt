@@ -58,6 +58,7 @@ fun SettingsScreen(
     onDebugFrames: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
     onDeleteErrorCaptures: () -> Unit,
+    onCompactErrorCaptures: () -> Unit,
     onEvaluateErrorCaptures: () -> Unit,
     onImportErrorCapture: () -> Unit,
     onDismissErrorCaptureImport: () -> Unit,
@@ -258,11 +259,19 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Saved captures: ${state.errorCaptureCount}")
-                    TextButton(
-                        onClick = onDeleteErrorCaptures,
-                        enabled = state.errorCaptureCount > 0
-                    ) {
-                        Text("Delete")
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = onCompactErrorCaptures,
+                            enabled = state.errorCaptureCount > 1
+                        ) {
+                            Text("Compact")
+                        }
+                        TextButton(
+                            onClick = onDeleteErrorCaptures,
+                            enabled = state.errorCaptureCount > 0
+                        ) {
+                            Text("Delete")
+                        }
                     }
                 }
                 Text(

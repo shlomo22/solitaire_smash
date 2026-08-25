@@ -1053,15 +1053,19 @@ class GameStateDetector(
         val avg = confidences.average().toFloat()
         val totalCards = tableau.sumOf { it.size } + foundations.sumOf { it.size } +
             wasteCards.size + stockCards.size
+        val screenSignals = SmashPlayScreenGate.analyze(bitmap, board, locator)
         val livePlayScreen = isLivePlayScreen(
             bitmap = bitmap,
             board = board,
             tableau = tableau,
             foundations = foundations,
             waste = wasteCards,
-            stock = stockCards
+            stock = stockCards,
+            screenSignals = screenSignals
         )
         diagnostics += "livePlayScreen=$livePlayScreen"
+        diagnostics += "gameFooter=${screenSignals.gameControlFooter}"
+        diagnostics += "lobbyScreen=${screenSignals.lobbyHomeScreen}"
         if (totalCards == 0) {
             slotHitCache = newSlotCache
             return DetectionResult(
@@ -1141,7 +1145,8 @@ class GameStateDetector(
         tableau: List<List<Card>>,
         foundations: List<List<Card>>,
         waste: List<Card>,
-        stock: List<Card>
+        stock: List<Card>,
+        screenSignals: SmashPlayScreenGate.Signals
     ): Boolean {
         val occupiedCols = tableau.count { it.isNotEmpty() }
         val tableauCards = tableau.sumOf { it.size }
@@ -1169,7 +1174,10 @@ class GameStateDetector(
                 stockStats.tealRatio >= 0.12f ||
                 band.whiteRatio >= 0.07f
 
-        return enoughCards && smashColor
+        return enoughCards &&
+            smashColor &&
+            screenSignals.gameControlFooter &&
+            !screenSignals.lobbyHomeScreen
     }
 
     /**
