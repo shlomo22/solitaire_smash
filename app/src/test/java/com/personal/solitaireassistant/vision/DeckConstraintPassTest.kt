@@ -72,6 +72,58 @@ class DeckConstraintPassTest {
     }
 
     @Test
+    fun duplicateWeakBlackFiveStaysBlackNotDiamonds() {
+        val taken = slot(
+            pile = PileRef.Tableau(2),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Clubs,
+            confidence = 0.84f,
+            diagnostic = "match-Five-Clubs@0.84"
+        )
+        val weak = slot(
+            pile = PileRef.Tableau(5),
+            index = 0,
+            rank = Rank.Five,
+            suit = Suit.Clubs,
+            confidence = 0.69f,
+            diagnostic = "match-Five-Clubs@0.69",
+            suitTemplates = "C:0.65 S:0.60 D:0.56 H:0.52"
+        )
+        val recognized = mutableListOf(taken.slot, weak.slot)
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                emptyList(),
+                listOf(taken.card),
+                emptyList(),
+                emptyList(),
+                listOf(weak.card),
+                emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[2].last().suit)
+            assertEquals(Suit.Spades, result.tableau[5].last().suit)
+            assertEquals(Suit.Spades, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
     fun ambiguousRedSuitFlipsToPartnerWhenCurrentSuitDuplicated() {
         val taken = slot(
             pile = PileRef.Tableau(0),
