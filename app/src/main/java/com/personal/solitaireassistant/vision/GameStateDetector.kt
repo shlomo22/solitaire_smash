@@ -870,21 +870,17 @@ class GameStateDetector(
                         stats = stats
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
-                    // A read can clear isReliableRead's bar on confidence alone while
-                    // still contradicting a stronger signal: the bottom and leading
-                    // cards of this same run independently agreeing on exactly how
-                    // many cards it has. Only let a weak (<0.75) mid-run read override
-                    // that consensus if it actually agrees with what the consensus
-                    // predicts for this slot - otherwise trust the geometric fallback.
-                    val disagreesWithTrustedGeometry = rankCountConsistent &&
-                        geometricFallback.known &&
-                        slotHit.confidence < STRONG_DIRECT_READ_FLOOR &&
-                        slotCard != null &&
-                        (slotCard.rank != geometricFallback.rank ||
-                            slotCard.suit.isRed != geometricFallback.suit.isRed)
+                    val prefersGeometric = TableauCascadeSupport.prefersGeometricOverDirectRead(
+                        bottomCard = card,
+                        bottomReadConfidence = hit.confidence,
+                        geometric = geometricFallback,
+                        directCard = slotCard,
+                        directConfidence = slotHit.confidence,
+                        rankCountConsistent = rankCountConsistent
+                    )
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard) &&
-                            !disagreesWithTrustedGeometry
+                            !prefersGeometric
                         ) {
                             // Independent crop from whatever region it's given;
                             // locateBadge searches adaptively for the pip
@@ -2103,8 +2099,8 @@ class GameStateDetector(
         // read as Ten/Ten~/Ten~/Queen when the run's own endpoints agreed on a
         // clean Ten-through-Six run). A read at or above this bar is still
         // trusted even when it disagrees with geometry, since the geometry
-        // could occasionally be the one that's wrong.
-        private const val STRONG_DIRECT_READ_FLOOR = 0.75f
+        // could occasionally be the one that's wrong. See
+        // TableauCascadeSupport.STRONG_DIRECT_READ_FLOOR.
     }
 }
 
