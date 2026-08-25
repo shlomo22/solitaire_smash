@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
                         },
                         initialTruths = snapshot.initialTruths,
                         allowRecapture = snapshot.allowRecapture,
+                        suspiciousHints = snapshot.suspiciousHints,
                         title = if (snapshot.sourceErrorCaptureId != null) {
                             "Import error capture"
                         } else {
@@ -108,7 +109,9 @@ class MainActivity : ComponentActivity() {
                         onConfidence = viewModel::setConfidence,
                         onDebugFrames = viewModel::setDebugFrames,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
+                        onCaptureRawReadErrors = viewModel::setCaptureRawReadErrors,
                         onDeleteErrorCaptures = viewModel::deleteErrorCaptures,
+                        onCompactErrorCaptures = viewModel::compactErrorCaptures,
                         onEvaluateErrorCaptures = viewModel::evaluateErrorCaptures,
                         onImportErrorCapture = viewModel::openErrorCaptureImport,
                         onDismissErrorCaptureImport = viewModel::dismissErrorCaptureImport,

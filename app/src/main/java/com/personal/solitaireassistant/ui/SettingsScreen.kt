@@ -57,7 +57,9 @@ fun SettingsScreen(
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
+    onCaptureRawReadErrors: (Boolean) -> Unit,
     onDeleteErrorCaptures: () -> Unit,
+    onCompactErrorCaptures: () -> Unit,
     onEvaluateErrorCaptures: () -> Unit,
     onImportErrorCapture: () -> Unit,
     onDismissErrorCaptureImport: () -> Unit,
@@ -257,12 +259,38 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Also capture raw read errors")
+                        Text(
+                            "Save when slot reads violate deck rules even if deck-constraint fixed them.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = settings.captureRawReadErrors,
+                        onCheckedChange = onCaptureRawReadErrors,
+                        enabled = settings.autoCaptureRecognitionErrors
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Text("Saved captures: ${state.errorCaptureCount}")
-                    TextButton(
-                        onClick = onDeleteErrorCaptures,
-                        enabled = state.errorCaptureCount > 0
-                    ) {
-                        Text("Delete")
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = onCompactErrorCaptures,
+                            enabled = state.errorCaptureCount > 1
+                        ) {
+                            Text("Compact")
+                        }
+                        TextButton(
+                            onClick = onDeleteErrorCaptures,
+                            enabled = state.errorCaptureCount > 0
+                        ) {
+                            Text("Delete")
+                        }
                     }
                 }
                 Text(

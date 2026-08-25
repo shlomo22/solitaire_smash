@@ -864,7 +864,8 @@ class CardRecognizer(
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
         val cascadeSixSevenOcr = CascadeRankCorrections.shouldChallengeStrongSeven(
             trimmedToVisibleStrip,
-            bitmapRankHit
+            bitmapRankHit,
+            rankScoreMap
         )
         if (strongBitmap && !cascadeSixSevenOcr) {
             return RankResolution(
@@ -903,7 +904,7 @@ class CardRecognizer(
             null
         }
         val ocrGuess = ocrAttempt?.guess
-        val rank = pickRank(bitmapRankHit, rankHit, glyph, ocrGuess)
+        val rank = pickRank(bitmapRankHit, rankHit, glyph, ocrGuess, rankScoreMap)
         return RankResolution(
             rank = rank,
             bitmapRankHit = bitmapRankHit,
@@ -1690,14 +1691,24 @@ class CardRecognizer(
         bitmapHit: Pair<Rank, Float>?,
         rankHit: Pair<Rank, Float>?,
         glyph: RankInkHeuristics.Guess?,
-        ocrGuess: RankCornerOcr.Guess? = null
+        ocrGuess: RankCornerOcr.Guess? = null,
+        rankScoreMap: Map<Rank, Float> = emptyMap()
     ): Pair<Rank, Float>? {
         val base = pickRankBase(bitmapHit, rankHit, glyph)
         if (ocrGuess == null) return base
         if (bitmapHit != null && bitmapHit.second >= 0.68f) {
-            CascadeRankCorrections.ocrSixOverridesStrongSeven(bitmapHit, ocrGuess)?.let { return it }
+            CascadeRankCorrections.ocrSixOverridesStrongSeven(
+                bitmapHit,
+                ocrGuess,
+                rankScoreMap
+            )?.let { return it }
             return base
         }
+        CascadeRankCorrections.ocrSixOverridesStrongSeven(
+            bitmapHit,
+            ocrGuess,
+            rankScoreMap
+        )?.let { return it }
 
         val candidates = rankCandidates(bitmapHit, rankHit, glyph)
         val matching = candidates.filter { it.first == ocrGuess.rank }
@@ -1805,6 +1816,7 @@ class CardRecognizer(
         var jackScore = 0f
         var threeScore = 0f
         var twoScore = 0f
+        var sixScore = 0f
         var sevenScore = 0f
         rankScoreMap.forEach { (rank, score) ->
             when (rank) {
@@ -1814,6 +1826,7 @@ class CardRecognizer(
                 Rank.Jack -> jackScore = score
                 Rank.Three -> threeScore = score
                 Rank.Two -> twoScore = score
+                Rank.Six -> sixScore = score
                 Rank.Seven -> sevenScore = score
                 else -> Unit
             }
@@ -1870,6 +1883,12 @@ class CardRecognizer(
         // the caller's ink-shape/OCR tiebreak gets a real say.
         if ((top.first == Rank.Two || top.first == Rank.Seven) &&
             kotlin.math.abs(twoScore - sevenScore) < 0.02f
+        ) {
+            return null
+        }
+        if (top.first == Rank.Seven &&
+            sixScore >= 0.45f &&
+            top.second - sixScore <= CascadeRankCorrections.SIX_SEVEN_SCORE_MARGIN
         ) {
             return null
         }

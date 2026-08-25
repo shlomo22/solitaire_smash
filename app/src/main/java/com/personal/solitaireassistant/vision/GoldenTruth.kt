@@ -37,7 +37,8 @@ data class ErrorCaptureMeta(
     val stableHits: Int,
     val detectionConfidence: Float,
     val diagnostics: List<String>,
-    val violations: List<RecognitionViolation>
+    val violations: List<RecognitionViolation>,
+    val violationSource: String = ErrorCapturePolicy.VIOLATION_SOURCE_FINAL
 )
 
 object GoldenTruthJson {
@@ -67,6 +68,7 @@ object GoldenTruthJson {
             root.put("detectionConfidence", meta.detectionConfidence.toDouble())
             root.put("diagnostics", JSONArray(meta.diagnostics))
             root.put("violations", violationsJson(meta.violations))
+            root.put("violationSource", meta.violationSource)
         }
         val slots = JSONArray()
         sample.slots.forEach { slot ->
@@ -260,7 +262,11 @@ object GoldenTruthJson {
             stableHits = root.getInt("stableHits"),
             detectionConfidence = root.getDouble("detectionConfidence").toFloat(),
             diagnostics = diagnostics,
-            violations = violations
+            violations = violations,
+            violationSource = root.optString(
+                "violationSource",
+                ErrorCapturePolicy.VIOLATION_SOURCE_FINAL
+            )
         )
     }
 }

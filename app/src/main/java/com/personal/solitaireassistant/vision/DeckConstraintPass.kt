@@ -422,11 +422,14 @@ object DeckConstraintPass {
         )
         val suitOrder = linkedSetOf<Suit>()
         suitOrder.addAll(preferredSuitsForDuplicate(entry))
-        if (redBest >= 0.55f) {
-            suitOrder.addAll(listOf(Suit.Hearts, Suit.Diamonds))
-        }
-        if (blackBest >= 0.55f) {
-            suitOrder.addAll(listOf(Suit.Clubs, Suit.Spades))
+        val colorAmbiguous = kotlin.math.abs(redBest - blackBest) < COLOR_FAMILY_MARGIN
+        if (colorAmbiguous) {
+            if (redBest >= 0.55f) {
+                suitOrder.addAll(listOf(Suit.Hearts, Suit.Diamonds))
+            }
+            if (blackBest >= 0.55f) {
+                suitOrder.addAll(listOf(Suit.Clubs, Suit.Spades))
+            }
         }
         return suitOrder.mapNotNull { suit ->
             val card = entry.card.copy(suit = suit, suitAmbiguous = false)

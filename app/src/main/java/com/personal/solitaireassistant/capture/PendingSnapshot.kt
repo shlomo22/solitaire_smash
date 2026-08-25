@@ -3,6 +3,7 @@ package com.personal.solitaireassistant.capture
 import android.graphics.Bitmap
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.SlotGuess
+import com.personal.solitaireassistant.vision.SuspiciousSlotHint
 
 data class PendingSnapshot(
     val bitmap: Bitmap,
@@ -10,7 +11,8 @@ data class PendingSnapshot(
     val diagnostics: List<String>,
     val initialTruths: List<SlotGuess>? = null,
     val allowRecapture: Boolean = true,
-    val sourceErrorCaptureId: String? = null
+    val sourceErrorCaptureId: String? = null,
+    val suspiciousHints: List<SuspiciousSlotHint> = emptyList()
 )
 
 object PendingSnapshotHolder {

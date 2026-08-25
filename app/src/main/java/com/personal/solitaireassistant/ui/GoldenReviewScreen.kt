@@ -3,6 +3,7 @@ package com.personal.solitaireassistant.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -42,9 +43,14 @@ import androidx.compose.ui.window.Dialog
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import com.personal.solitaireassistant.vision.ErrorCaptureReviewHints
+import com.personal.solitaireassistant.vision.GoldenReviewStateBuilder
 import com.personal.solitaireassistant.vision.RecognizedSlot
+import com.personal.solitaireassistant.vision.ReviewSlotStatus
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.SlotKind
+import com.personal.solitaireassistant.vision.SuspiciousSlotHint
+import com.personal.solitaireassistant.vision.locationKey
 
 @Composable
 fun GoldenReviewScreen(
@@ -55,12 +61,31 @@ fun GoldenReviewScreen(
     onRecapture: () -> Unit,
     initialTruths: List<SlotGuess>? = null,
     allowRecapture: Boolean = true,
+    suspiciousHints: List<SuspiciousSlotHint> = emptyList(),
     title: String = "Confirm recognized cards",
     subtitle: String = "Tap a row below to correct rank and suit. Inferred cascade cards are optional."
 ) {
+    val originallyFlagged = remember(suspiciousHints) {
+        ErrorCaptureReviewHints.locationKeys(suspiciousHints)
+    }
     val truths = remember(slots, initialTruths) {
         mutableStateListOf<SlotGuess>().apply {
             addAll(initialTruths ?: slots.map { it.engine })
+        }
+    }
+    val truthsList = truths.toList()
+    val reviewStatuses = remember(slots, truthsList, originallyFlagged) {
+        if (originallyFlagged.isEmpty()) {
+            emptyMap()
+        } else {
+            GoldenReviewStateBuilder.reviewStatuses(slots, truthsList, originallyFlagged)
+        }
+    }
+    val helpText = buildString {
+        append(subtitle)
+        append("\nBadge colors: green = confident read, yellow~ = suit unclear, dim = inferred.")
+        if (originallyFlagged.isNotEmpty()) {
+            append(" Orange rows = still broken; light green = fixed after your edits.")
         }
     }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
@@ -74,7 +99,7 @@ fun GoldenReviewScreen(
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge)
         Text(
-            subtitle,
+            helpText,
             style = MaterialTheme.typography.bodySmall
         )
 
@@ -97,6 +122,7 @@ fun GoldenReviewScreen(
                 SlotRow(
                     slot = slot,
                     truth = truth,
+                    reviewStatus = reviewStatuses[slot.locationKey()],
                     onClick = { editingIndex = index }
                 )
             }
@@ -166,14 +192,32 @@ private fun BoardSnapshotMap(
 private fun SlotRow(
     slot: RecognizedSlot,
     truth: SlotGuess,
+    reviewStatus: ReviewSlotStatus?,
     onClick: () -> Unit
 ) {
     val changed = truth != slot.engine
+    val rowColor = when {
+        reviewStatus?.stillBroken != null -> Color(0x33FF7043)
+        reviewStatus?.resolved == true -> Color(0x332E7D32)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val borderColor = when {
+        reviewStatus?.stillBroken != null -> Color(0xFFFF7043)
+        reviewStatus?.resolved == true -> Color(0xFF66BB6A)
+        else -> null
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(rowColor)
+            .then(
+                if (borderColor != null) {
+                    Modifier.border(1.dp, borderColor, RoundedCornerShape(8.dp))
+                } else {
+                    Modifier
+                }
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -185,6 +229,20 @@ private fun SlotRow(
                 "Engine: ${slot.engine.shortLabel()}",
                 style = MaterialTheme.typography.bodySmall
             )
+            reviewStatus?.stillBroken?.let {
+                Text(
+                    "Problem: ${it.reason}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFE64A19)
+                )
+            }
+            if (reviewStatus?.resolved == true) {
+                Text(
+                    "Resolved",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF2E7D32)
+                )
+            }
         }
         Text(
             text = truth.shortLabel(),

@@ -159,6 +159,33 @@ class GoldenTruthJsonTest {
         assertEquals(2, parsedMeta.violations.size)
         assertTrue(parsedMeta.violations[0] is RecognitionViolation.DuplicateCard)
         assertTrue(parsedMeta.violations[1] is RecognitionViolation.CascadeBreak)
+        assertEquals(ErrorCapturePolicy.VIOLATION_SOURCE_FINAL, parsedMeta.violationSource)
+    }
+
+    @Test
+    fun errorCaptureViolationSourceRoundTrips() {
+        val sample = GoldenSample(
+            id = "error_raw_test",
+            frameWidth = 1080,
+            frameHeight = 2340,
+            slots = emptyList()
+        )
+        val meta = ErrorCaptureMeta(
+            stateSignature = "sig",
+            stableHits = 2,
+            detectionConfidence = 0.8f,
+            diagnostics = emptyList(),
+            violations = listOf(
+                RecognitionViolation.DuplicateCard(
+                    cardId = "Six_Spades",
+                    locations = listOf("waste:0", "tableau:1:0")
+                )
+            ),
+            violationSource = ErrorCapturePolicy.VIOLATION_SOURCE_RAW
+        )
+        val json = GoldenTruthJson.toJson(sample, errorCapture = meta)
+        val parsed = requireNotNull(GoldenTruthJson.parseErrorCaptureMeta(json))
+        assertEquals(ErrorCapturePolicy.VIOLATION_SOURCE_RAW, parsed.violationSource)
     }
 
     @Test

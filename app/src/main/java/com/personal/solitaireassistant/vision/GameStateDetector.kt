@@ -24,7 +24,9 @@ data class DetectionResult(
     val diagnostics: List<String>,
     val board: LocatedBoard?,
     val recognizedSlots: List<RecognizedSlot> = emptyList(),
-    val livePlayScreen: Boolean = false
+    val livePlayScreen: Boolean = false,
+    /** State after suit scrub, before [DeckConstraintPass]. */
+    val preConstraintState: GameState? = null
 )
 
 class GameStateDetector(
@@ -56,6 +58,9 @@ class GameStateDetector(
         (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 7)
     )
     private val columnDispatcher = columnExecutor.asCoroutineDispatcher()
+    // Separate from columnExecutor so a long waste-OCR call cannot starve
+    // (or deadlock) the 7-column runBlocking pool.
+    private val wasteOcrExecutor = Executors.newSingleThreadExecutor()
 
     // Diagnostic-only: per-detect() timing, reset at the top of detect().
     // Not thread-safe, but the pipeline only ever runs one detect() at a time.
@@ -231,41 +236,38 @@ class GameStateDetector(
         // the cost of trying, so just always try when there's a real card.
         val wasteOcrRelevant = legacyCard != null || tightCard != null
         val wasteOcrStartNanos = System.nanoTime()
-        val wasteOcrAttempt = if (wasteOcrRelevant) {
-            val wasteOcrRegions = buildList {
+        val wasteOcrRegions = if (wasteOcrRelevant) {
+            buildList {
                 add(tightWasteRegion)
                 add(legacyWasteRegion)
                 addAll(locator.wasteOcrCardRegions(board))
             }
-            // OCR is the most expensive single step in the serial (pre-tableau)
-            // stretch of detect(): a blocking ML Kit call, median ~47ms and up to
-            // ~430ms on real frames. It used to re-run on every frame that had any
-            // waste card at all - even when the waste pixels were identical to the
-            // previous frame's. A real device log put 37% of all waste-OCR time
-            // (3.3s of 8.9s) into re-reading an unchanged waste pile, ~62ms per
-            // such frame. Memoize on a fingerprint of exactly the regions handed
-            // to OCR, so an unchanged waste is free while any real change still
-            // re-reads. Same idea as the per-slot cache, just around the one step
-            // that dominates this part of the frame.
-            val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
-                acc * 31L + regionFingerprint(bitmap, region)
-            }
-            val reusable = cachedWasteOcr?.takeIf { cached ->
+        } else {
+            emptyList()
+        }
+        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
+            acc * 31L + regionFingerprint(bitmap, region)
+        }
+        val reusableWasteOcr = if (wasteOcrRelevant) {
+            cachedWasteOcr?.takeIf { cached ->
                 cached.fingerprint == ocrFingerprint &&
                     cached.regions.size == wasteOcrRegions.size &&
                     cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
             }
-            reusable?.result ?: recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
-                .also { cachedWasteOcr = CachedWasteOcr(ocrFingerprint, wasteOcrRegions, it) }
         } else {
             null
         }
-        // Diagnostic-only: OCR (ML Kit text recognition) is the one recognize
-        // step that blocks on a real ML model call instead of pixel/template
-        // math, and waste tries it across up to 5 crop regions x 2 (whole +
-        // corner) sequentially. Surface how long that actually took.
-        diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
-            "ms=${(System.nanoTime() - wasteOcrStartNanos) / 1_000_000}"
+        // Kick OCR off before foundations/tableau so a fresh waste read (the
+        // 47–430ms ML Kit path) overlaps column template matching instead of
+        // sitting on the analysis thread first. Cached waste is still free.
+        val wasteOcrFuture = if (wasteOcrRelevant && reusableWasteOcr == null) {
+            wasteOcrExecutor.submit<RankCornerOcr.AttemptResult> {
+                recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+            }
+        } else {
+            null
+        }
+        fun finishWaste(wasteOcrAttempt: RankCornerOcr.AttemptResult?): Pair<RecognitionHit, List<Card>> {
         val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
             ocrRank = wasteOcrAttempt?.guess?.rank,
             legacyCard = legacyCard,
@@ -491,6 +493,8 @@ class GameStateDetector(
         wasteOcrAttempt?.trace?.let { diagnostics += it }
         if (wasteOcrOverride != null) {
             diagnostics += "waste-ocr-rank=${wasteOcrOverride.name}"
+        }
+        return wasteHit to wasteCards
         }
 
         locator.foundationRegions(board).forEachIndexed { index, region ->
@@ -1044,6 +1048,18 @@ class GameStateDetector(
             tableauColumnNanos[result.col] = result.elapsedNanos
         }
 
+        val wasteOcrAttempt = when {
+            !wasteOcrRelevant -> null
+            reusableWasteOcr != null -> reusableWasteOcr.result
+            else -> wasteOcrFuture!!.get().also { result ->
+                cachedWasteOcr = CachedWasteOcr(ocrFingerprint, wasteOcrRegions, result)
+            }
+        }
+        diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
+            "ms=${(System.nanoTime() - wasteOcrStartNanos) / 1_000_000}," +
+            "overlapped=${wasteOcrFuture != null}"
+        val (wasteHit, wasteCards) = finishWaste(wasteOcrAttempt)
+
         val wasteConfidence = if (wasteCandidatesDisagree) {
             wasteHit.confidence.coerceAtMost(0.70f)
         } else {
@@ -1053,15 +1069,19 @@ class GameStateDetector(
         val avg = confidences.average().toFloat()
         val totalCards = tableau.sumOf { it.size } + foundations.sumOf { it.size } +
             wasteCards.size + stockCards.size
+        val screenSignals = SmashPlayScreenGate.analyze(bitmap, board, locator)
         val livePlayScreen = isLivePlayScreen(
             bitmap = bitmap,
             board = board,
             tableau = tableau,
             foundations = foundations,
             waste = wasteCards,
-            stock = stockCards
+            stock = stockCards,
+            screenSignals = screenSignals
         )
         diagnostics += "livePlayScreen=$livePlayScreen"
+        diagnostics += "gameFooter=${screenSignals.gameControlFooter}"
+        diagnostics += "lobbyScreen=${screenSignals.lobbyHomeScreen}"
         if (totalCards == 0) {
             slotHitCache = newSlotCache
             return DetectionResult(
@@ -1126,7 +1146,8 @@ class GameStateDetector(
             diagnostics = diagnostics,
             board = board,
             recognizedSlots = recognizedSlots,
-            livePlayScreen = livePlayScreen
+            livePlayScreen = livePlayScreen,
+            preConstraintState = scrubbed
         )
     }
 
@@ -1141,7 +1162,8 @@ class GameStateDetector(
         tableau: List<List<Card>>,
         foundations: List<List<Card>>,
         waste: List<Card>,
-        stock: List<Card>
+        stock: List<Card>,
+        screenSignals: SmashPlayScreenGate.Signals
     ): Boolean {
         val occupiedCols = tableau.count { it.isNotEmpty() }
         val tableauCards = tableau.sumOf { it.size }
@@ -1169,7 +1191,10 @@ class GameStateDetector(
                 stockStats.tealRatio >= 0.12f ||
                 band.whiteRatio >= 0.07f
 
-        return enoughCards && smashColor
+        return enoughCards &&
+            smashColor &&
+            screenSignals.gameControlFooter &&
+            !screenSignals.lobbyHomeScreen
     }
 
     /**
@@ -1393,6 +1418,7 @@ class GameStateDetector(
     fun release() {
         recognizer.release()
         columnExecutor.shutdown()
+        wasteOcrExecutor.shutdown()
     }
 
     fun attemptCornerRankOcr(

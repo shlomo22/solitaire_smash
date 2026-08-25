@@ -145,11 +145,18 @@ internal object WasteRankCorrections {
         val nineCandidate = legacyCard?.rank == Rank.Nine ||
             tightCard?.rank == Rank.Nine ||
             baseCard?.rank == Rank.Nine
-        if (!fourCandidate && !nineCandidate) return null
+        val sevenCandidate = legacyCard?.rank == Rank.Seven ||
+            tightCard?.rank == Rank.Seven ||
+            baseCard?.rank == Rank.Seven
+        if (!fourCandidate && !nineCandidate && !sevenCandidate) return null
 
         val sixScore = rankScore(exactRankScores, Rank.Six)
         if (ocrRank == Rank.Six) return Rank.Six
 
+        if (sevenCandidate) {
+            val sevenScore = rankScore(exactRankScores, Rank.Seven)
+            if (sixScore + 0.05f >= sevenScore && sixScore >= 0.38f) return Rank.Six
+        }
         if (fourCandidate) {
             val fourScore = rankScore(exactRankScores, Rank.Four)
             if (sixScore >= fourScore - 0.05f && sixScore >= 0.38f) return Rank.Six
@@ -181,7 +188,7 @@ internal object WasteRankCorrections {
 
     /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
-     * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/9, K/10, Q/K, Q/10).
+     * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/7, 6/9, K/10, Q/K, Q/10).
      */
     fun ocrRankOverride(
         ocrRank: Rank?,
@@ -246,6 +253,12 @@ internal object WasteRankCorrections {
         ) {
             return Rank.Six
         }
+        if (ocrRank == Rank.Six &&
+            tightLegacyRanks.contains(Rank.Seven) &&
+            !tightLegacyRanks.contains(Rank.Six)
+        ) {
+            return Rank.Six
+        }
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
@@ -270,7 +283,8 @@ internal object WasteRankCorrections {
             setOf(Rank.Jack, Rank.Three),
             setOf(Rank.Five, Rank.Jack),
             setOf(Rank.Six, Rank.Four),
-            setOf(Rank.Six, Rank.Nine) -> true
+            setOf(Rank.Six, Rank.Nine),
+            setOf(Rank.Six, Rank.Seven) -> true
             else -> false
         }
     }

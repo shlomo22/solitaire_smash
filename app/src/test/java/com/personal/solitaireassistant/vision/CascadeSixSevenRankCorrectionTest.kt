@@ -26,6 +26,27 @@ class CascadeSixSevenRankCorrectionTest {
     }
 
     @Test
+    fun shouldChallengeCloseSevenOnTrimmedCascadeStrip() {
+        assertTrue(
+            CascadeRankCorrections.shouldChallengeStrongSeven(
+                trimmedToVisibleStrip = true,
+                bitmapHit = Rank.Seven to 0.666f,
+                rankScoreMap = mapOf(Rank.Six to 0.636f, Rank.Seven to 0.666f)
+            )
+        )
+    }
+
+    @Test
+    fun closeSevenTemplateScoresPreferSixWithoutOcr() {
+        val override = CascadeRankCorrections.ocrSixOverridesStrongSeven(
+            bitmapHit = Rank.Seven to 0.666f,
+            ocrGuess = null,
+            rankScoreMap = mapOf(Rank.Six to 0.636f, Rank.Seven to 0.666f)
+        )
+        assertEquals(Rank.Six to 0.636f, override)
+    }
+
+    @Test
     fun ocrSixOverridesStrongSevenTemplate() {
         val override = CascadeRankCorrections.ocrSixOverridesStrongSeven(
             bitmapHit = strongSeven,
