@@ -80,6 +80,30 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun correctSixOnWastePrefersSixOverSevenScores() {
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = Card(Rank.Seven, Suit.Hearts, faceUp = true, known = true),
+            tightCard = Card(Rank.Seven, Suit.Hearts, faceUp = true, known = true),
+            baseCard = Card(Rank.Seven, Suit.Hearts, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Seven to 0.59f, Rank.Six to 0.55f),
+            ocrRank = null
+        )
+        assertEquals(Rank.Six, rank)
+    }
+
+    @Test
+    fun ocrSixOverridesSevenFusion() {
+        val sevenHearts = Card(Rank.Seven, Suit.Hearts, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Six,
+            legacyCard = null,
+            tightCard = sevenHearts,
+            baseCard = sevenHearts
+        )
+        assertEquals(Rank.Six, override)
+    }
+
+    @Test
     fun correctSixOnWastePrefersOcrSixOverFour() {
         val rank = WasteRankCorrections.correctSixOnWaste(
             legacyCard = Card(Rank.Four, Suit.Clubs, faceUp = true, known = true),
