@@ -73,7 +73,13 @@ internal object TableauCascadeSupport {
 
         if (directCard.rank == Rank.Ace &&
             geometric.rank != Rank.Ace &&
-            directConfidence < STRONG_DIRECT_READ_FLOOR
+            directConfidence < 0.85f
+        ) {
+            return true
+        }
+
+        if (isFiveSixPair(directCard.rank, geometric.rank) &&
+            directConfidence < 0.82f
         ) {
             return true
         }
@@ -89,11 +95,10 @@ internal object TableauCascadeSupport {
         return false
     }
 
-    /**
-     * When the bottom cascade card is read reliably, the fixed Smash overlap
-     * spacing makes rank/color derivation trustworthy — lift inferred so runs
-     * like 6S-5H-4S-3D become movable.
-     */
+    private fun isFiveSixPair(first: Rank, second: Rank): Boolean =
+        (first == Rank.Five && second == Rank.Six) ||
+            (first == Rank.Six && second == Rank.Five)
+
     /**
      * Geometric fallback only knows red vs black — when a rejected direct read
      * still has strong suit-template scores, keep the geometric rank but adopt

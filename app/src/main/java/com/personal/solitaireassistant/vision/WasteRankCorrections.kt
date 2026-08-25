@@ -151,6 +151,11 @@ internal object WasteRankCorrections {
         if (!fourCandidate && !nineCandidate && !sevenCandidate) return null
 
         val sixScore = rankScore(exactRankScores, Rank.Six)
+        val eightScore = rankScore(exactRankScores, Rank.Eight)
+        // Smash 8 and 6 share stacked loops. v1.4.44's Six-over-Seven path
+        // was stealing real waste Eights (golden 20260825_131411 8♥, 132126 8♦).
+        if (ocrRank == Rank.Eight) return null
+        if (eightScore >= 0.45f && eightScore >= sixScore) return null
         if (ocrRank == Rank.Six) return Rank.Six
 
         if (sevenCandidate) {
@@ -164,6 +169,39 @@ internal object WasteRankCorrections {
         if (nineCandidate) {
             val nineScore = rankScore(exactRankScores, Rank.Nine)
             if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
+        }
+        return null
+    }
+
+    /**
+     * Waste-only: fused Six/Seven on a real Eight. Directed — never the reverse —
+     * so it cannot re-break genuine Sixes the way a new 6/8 confusion pair would.
+     */
+    fun correctEightOnWaste(
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float>,
+        inkGuess: RankInkHeuristics.Guess?,
+        ocrRank: Rank?
+    ): Rank? {
+        val sixOrSeven = legacyCard?.rank == Rank.Six ||
+            tightCard?.rank == Rank.Six ||
+            baseCard?.rank == Rank.Six ||
+            legacyCard?.rank == Rank.Seven ||
+            tightCard?.rank == Rank.Seven ||
+            baseCard?.rank == Rank.Seven
+        if (!sixOrSeven) return null
+
+        val eightScore = rankScore(exactRankScores, Rank.Eight)
+        val sixScore = rankScore(exactRankScores, Rank.Six)
+        val sevenScore = rankScore(exactRankScores, Rank.Seven)
+
+        if (ocrRank == Rank.Eight) return Rank.Eight
+        if (inkGuess?.rank == Rank.Eight && inkGuess.confidence >= 0.48f) return Rank.Eight
+        if (tightCard?.rank == Rank.Eight && eightScore >= sixScore - 0.05f) return Rank.Eight
+        if (eightScore >= 0.48f && eightScore + 0.02f >= maxOf(sixScore, sevenScore)) {
+            return Rank.Eight
         }
         return null
     }
@@ -189,12 +227,14 @@ internal object WasteRankCorrections {
     /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
      * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/7, 6/9, K/10, Q/K, Q/10).
+     * Eight vs Six/Seven is directed (OCR Eight wins; OCR Six does not steal Eight).
      */
     fun ocrRankOverride(
         ocrRank: Rank?,
         legacyCard: Card?,
         tightCard: Card?,
-        baseCard: Card?
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float> = emptyMap()
     ): Rank? {
         if (ocrRank == null) return null
 
@@ -253,10 +293,21 @@ internal object WasteRankCorrections {
         ) {
             return Rank.Six
         }
+        if (ocrRank == Rank.Eight &&
+            (tightLegacyRanks.contains(Rank.Six) ||
+                tightLegacyRanks.contains(Rank.Seven) ||
+                baseRank == Rank.Six ||
+                baseRank == Rank.Seven)
+        ) {
+            return Rank.Eight
+        }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Seven) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
+            val eightScore = rankScore(exactRankScores, Rank.Eight)
+            val sixScore = rankScore(exactRankScores, Rank.Six)
+            if (eightScore >= 0.48f && eightScore + 0.02f >= sixScore) return Rank.Eight
             return Rank.Six
         }
 

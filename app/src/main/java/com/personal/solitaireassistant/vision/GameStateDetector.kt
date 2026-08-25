@@ -272,7 +272,8 @@ class GameStateDetector(
             ocrRank = wasteOcrAttempt?.guess?.rank,
             legacyCard = legacyCard,
             tightCard = tightCard,
-            baseCard = baseCard
+            baseCard = baseCard,
+            exactRankScores = exactRankScores
         )
         val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
             legacyCard = legacyCard,
@@ -319,7 +320,16 @@ class GameStateDetector(
             exactRankScores = exactRankScores,
             ocrRank = wasteOcrAttempt?.guess?.rank
         )
+        val wasteEightOverride = WasteRankCorrections.correctEightOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
         val correctedRank = when {
+            wasteEightOverride != null -> wasteEightOverride
             wasteOcrOverride != null -> wasteOcrOverride
             wasteSixOverride != null -> wasteSixOverride
             wasteQueenOverride != null -> wasteQueenOverride
@@ -344,7 +354,8 @@ class GameStateDetector(
                 (exactRankScores[Rank.Seven] ?: 0f) + 0.10f -> Rank.Eight
             legacyCard?.rank == Rank.Seven &&
                 tightCard?.rank == Rank.Six &&
-                tightCard.suit != legacyCard.suit -> Rank.Six
+                tightCard.suit != legacyCard.suit &&
+                (exactRankScores[Rank.Eight] ?: 0f) < 0.48f -> Rank.Six
             legacyCard?.rank == Rank.Jack &&
                 tightCard?.rank == Rank.Four &&
                 legacyWasteHit.confidence >= 0.68f -> Rank.Jack
