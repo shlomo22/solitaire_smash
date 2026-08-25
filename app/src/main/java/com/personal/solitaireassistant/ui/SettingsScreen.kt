@@ -203,8 +203,8 @@ fun SettingsScreen(
                 Slider(
                     value = settings.captureIntervalMs.toFloat(),
                     onValueChange = { onInterval(it.toLong()) },
-                    valueRange = 250f..3000f,
-                    steps = 10
+                    valueRange = 150f..3000f,
+                    steps = 18
                 )
 
                 Text("Match confidence: ${"%.2f".format(settings.minMatchConfidence)}")

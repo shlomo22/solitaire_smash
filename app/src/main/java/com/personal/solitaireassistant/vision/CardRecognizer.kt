@@ -69,7 +69,8 @@ class CardRecognizer(
         private set
 
     // Templates are loaded lazily on first use, but recognize() is called from
-    // up to 7 tableau columns at once (GameStateDetector.detect's computeColumn).
+    // up to 7 tableau columns plus 4 foundations at once
+    // (GameStateDetector.detect's computeColumn / computeFoundation).
     // This body sets loaded=true BEFORE populating the template maps, so without
     // mutual exclusion a second thread arriving mid-load would see loaded==true,
     // return early, and match against still-empty maps - every card on that frame

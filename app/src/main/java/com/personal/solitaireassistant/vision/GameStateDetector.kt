@@ -46,16 +46,16 @@ class GameStateDetector(
 
     private var cachedWasteOcr: CachedWasteOcr? = null
 
-    // Dedicated pool for parallel tableau-column recognition (see detect()'s
-    // computeColumn), rather than the shared Dispatchers.Default: detect()
-    // is also invoked from GoldenTruthEvaluator via
-    // withContext(Dispatchers.Default), and nesting runBlocking on that same
-    // shared pool would block one of its own worker threads while trying to
-    // schedule more work onto it. A small dedicated pool sidesteps that
-    // entirely instead of relying on Dispatchers.Default's blocking-aware
-    // scheduling to sort it out.
+    // Dedicated pool for parallel tableau-column + foundation recognition
+    // (see detect()'s computeColumn / computeFoundation), rather than the
+    // shared Dispatchers.Default: detect() is also invoked from
+    // GoldenTruthEvaluator via withContext(Dispatchers.Default), and nesting
+    // runBlocking on that same shared pool would block one of its own worker
+    // threads while trying to schedule more work onto it. Sized for 7
+    // columns + 4 foundations so cheap foundation piles don't queue behind
+    // a long cascade.
     private val columnExecutor = Executors.newFixedThreadPool(
-        (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 7)
+        Runtime.getRuntime().availableProcessors().coerceIn(4, 11)
     )
     private val columnDispatcher = columnExecutor.asCoroutineDispatcher()
     // Separate from columnExecutor so a long waste-OCR call cannot starve
@@ -92,6 +92,16 @@ class GameStateDetector(
         var missFingerprint = 0
         var missBounds = 0
     }
+
+    private class FoundationPileResult(
+        val index: Int,
+        val cards: List<Card>,
+        val location: CardLocation,
+        val recognizedSlot: RecognizedSlot,
+        val cacheEntries: Map<SlotKey, CachedSlotHit>,
+        val stats: RecognizeStats,
+        val diagnostic: String
+    )
 
     private class TableauColumnResult(
         val col: Int,
@@ -508,30 +518,36 @@ class GameStateDetector(
         return wasteHit to wasteCards
         }
 
-        locator.foundationRegions(board).forEachIndexed { index, region ->
+        val computeFoundation = fun(index: Int, region: BoardRegion): FoundationPileResult {
+            val stats = RecognizeStats()
+            val localCache = mutableMapOf<SlotKey, CachedSlotHit>()
             val hit = recognizeCached(
                 bitmap = bitmap,
                 pile = PileRef.Foundation(index),
                 index = 0,
                 region = region,
-                cache = newSlotCache
-            )
-            locations[PileRef.Foundation(index)] = listOf(
-                locator.toCardLocation(PileRef.Foundation(index), 0, region)
+                cache = localCache,
+                stats = stats
             )
             val (foundationCard, trace) = cardFromHit(hit)?.let { card ->
                 resolveCardSuitWithTrace(bitmap, region, card, hit.trace)
             } ?: (null to hit.trace)
-            recognizedSlots += recognizedSlot(
-                pile = PileRef.Foundation(index),
-                index = 0,
-                bounds = region,
-                hit = hit,
-                cardOverride = foundationCard,
-                trace = trace
+            return FoundationPileResult(
+                index = index,
+                cards = listOfNotNull(foundationCard),
+                location = locator.toCardLocation(PileRef.Foundation(index), 0, region),
+                recognizedSlot = recognizedSlot(
+                    pile = PileRef.Foundation(index),
+                    index = 0,
+                    bounds = region,
+                    hit = hit,
+                    cardOverride = foundationCard,
+                    trace = trace
+                ),
+                cacheEntries = localCache,
+                stats = stats,
+                diagnostic = "foundation$index=${hit.diagnostic}:${foundationCard}"
             )
-            foundations[index] = listOfNotNull(foundationCard)
-            diagnostics += "foundation$index=${hit.diagnostic}:${foundationCard}"
         }
 
         // Each column is recognized independently of the others (its own
@@ -1035,14 +1051,31 @@ class GameStateDetector(
 
         // OCR (ML Kit) and the OpenCV/bitmap templates are lazily loaded on
         // first use behind a non-thread-safe `loaded` flag; the sequential
-        // stock/waste/foundation recognize() calls above already force that
-        // init before any column runs, but make it explicit here too so this
-        // parallel dispatch never depends on incidental call ordering above.
+        // stock/waste recognize() calls above already force that init before
+        // any parallel pile runs, but make it explicit here too so this
+        // dispatch never depends on incidental call ordering above.
         recognizer.ensureLoaded()
-        val columnResults = runBlocking(columnDispatcher) {
-            locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
+        val (foundationResults, columnResults) = runBlocking(columnDispatcher) {
+            val foundationJobs = locator.foundationRegions(board).mapIndexed { index, region ->
+                async { computeFoundation(index, region) }
+            }
+            val columnJobs = locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
                 async { computeColumn(col, columnRegion) }
-            }.awaitAll()
+            }
+            foundationJobs.awaitAll() to columnJobs.awaitAll()
+        }
+        foundationResults.sortedBy { it.index }.forEach { result ->
+            foundations[result.index] = result.cards
+            locations[PileRef.Foundation(result.index)] = listOf(result.location)
+            recognizedSlots += result.recognizedSlot
+            newSlotCache.putAll(result.cacheEntries)
+            recognizeCacheHits += result.stats.hits
+            recognizeCacheMisses += result.stats.misses
+            recognizeMissNanos += result.stats.missNanos
+            missNoPriorEntry += result.stats.missNoPrior
+            missFingerprintChanged += result.stats.missFingerprint
+            missBoundsShifted += result.stats.missBounds
+            diagnostics += result.diagnostic
         }
         columnResults.forEach { result ->
             tableau[result.col] = result.cards

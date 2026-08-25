@@ -49,7 +49,7 @@ class ScreenCaptureController(
 
     fun start(captureIntervalMs: Long) {
         if (!running.compareAndSet(false, true)) return
-        intervalMs.set(captureIntervalMs.coerceIn(250L, 3000L))
+        intervalMs.set(captureIntervalMs.coerceIn(150L, 3000L))
 
         val metrics = currentMetrics()
         width = metrics.widthPixels
@@ -80,7 +80,7 @@ class ScreenCaptureController(
     }
 
     fun updateInterval(ms: Long) {
-        intervalMs.set(ms.coerceIn(250L, 3000L))
+        intervalMs.set(ms.coerceIn(150L, 3000L))
     }
 
     fun resizeIfNeeded() {

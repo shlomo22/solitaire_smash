@@ -19,7 +19,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
 
 data class AssistantSettings(
     val overlayColorArgb: Int = Color(0xE6000000.toInt()).toArgb(),
-    val captureIntervalMs: Long = 300L,
+    val captureIntervalMs: Long = 200L,
     val minMatchConfidence: Float = 0.72f,
     val debugSaveFrames: Boolean = false,
     val autoCaptureRecognitionErrors: Boolean = false,
@@ -48,8 +48,8 @@ class AssistantPreferences(private val context: Context) {
         AssistantSettings(
             overlayColorArgb = effectiveColor,
             captureIntervalMs = when (val saved = prefs[Keys.captureIntervalMs]) {
-                // Migrate the original default to the faster interval.
-                750L, null -> AssistantSettings().captureIntervalMs
+                // Migrate older defaults to the current faster interval.
+                750L, 300L, null -> AssistantSettings().captureIntervalMs
                 else -> saved
             },
             minMatchConfidence = prefs[Keys.minMatchConfidence]
@@ -67,7 +67,7 @@ class AssistantPreferences(private val context: Context) {
 
     suspend fun updateCaptureIntervalMs(ms: Long) {
         context.dataStore.edit {
-            it[Keys.captureIntervalMs] = ms.coerceIn(250L, 3000L)
+            it[Keys.captureIntervalMs] = ms.coerceIn(150L, 3000L)
         }
     }
 

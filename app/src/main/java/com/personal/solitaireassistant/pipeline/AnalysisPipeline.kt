@@ -159,13 +159,6 @@ class AnalysisPipeline(
         }
         synchronized(snapshotLock) {
             lastDetection = detection
-            // Only keep snapshot pixels from genuine in-game frames. While the
-            // user has this app's Settings/Evaluate UI on screen, MediaProjection
-            // captures that UI — storing it would save a useless PNG for golden
-            // review and error-capture import.
-            if (boardVisuallyChanged && detection.livePlayScreen) {
-                retainFrameLocked(bitmap)
-            }
         }
         val elapsed = System.currentTimeMillis() - started
         // How long this frame sat in the pending-frame handoff before
@@ -181,6 +174,17 @@ class AnalysisPipeline(
             queueDelayMs = queueDelayMs,
             frameBitmap = bitmap
         )
+        // After the arrow — a full-frame blit for golden/error snapshots
+        // must not sit between detect() and overlay.
+        synchronized(snapshotLock) {
+            // Only keep snapshot pixels from genuine in-game frames. While the
+            // user has this app's Settings/Evaluate UI on screen, MediaProjection
+            // captures that UI — storing it would save a useless PNG for golden
+            // review and error-capture import.
+            if (boardVisuallyChanged && detection.livePlayScreen) {
+                retainFrameLocked(bitmap)
+            }
+        }
     }
 
     fun clear() {
@@ -621,12 +625,6 @@ class AnalysisPipeline(
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
         }
-        maybeCaptureRecognitionErrors(
-            detection = detection,
-            state = state,
-            signature = signature,
-            frameBitmap = frameBitmap
-        )
         showBestSuggestion(
             detection = detection,
             signature = signature,
@@ -636,6 +634,14 @@ class AnalysisPipeline(
             frameH = frameH,
             boardVisuallyChanged = boardVisuallyChanged,
             queueDelayMs = queueDelayMs
+        )
+        // After the arrow — a full-frame PNG copy for error capture must not
+        // sit on the path between detect() and overlay.
+        maybeCaptureRecognitionErrors(
+            detection = detection,
+            state = state,
+            signature = signature,
+            frameBitmap = frameBitmap
         )
     }
 
