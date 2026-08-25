@@ -680,7 +680,11 @@ class AnalysisPipeline(
             )
             return
         }
-        val best = applySuggestionStickiness(ranked, rawBest) ?: return
+        val best = applySuggestionStickiness(
+            ranked = ranked,
+            best = rawBest,
+            boardVisuallyChanged = boardVisuallyChanged
+        ) ?: return
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
@@ -880,10 +884,21 @@ class AnalysisPipeline(
      */
     private fun applySuggestionStickiness(
         ranked: List<ScoredMove>,
-        best: ScoredMove
+        best: ScoredMove,
+        boardVisuallyChanged: Boolean
     ): ScoredMove? {
         val previous = lastSuggestion?.scored
         if (previous == null || best.move == previous.move) {
+            pendingSuggestionCandidate = null
+            pendingSuggestionStreak = 0
+            return best
+        }
+        // Stickiness exists for a *static* board whose recognition flickers.
+        // After a real visual change the previous arrow is already stale —
+        // holding it another frame is the "I already played, still waiting"
+        // delay. Adopt the new best immediately; flicker damping still
+        // applies on unchanged pixels.
+        if (boardVisuallyChanged) {
             pendingSuggestionCandidate = null
             pendingSuggestionStreak = 0
             return best
