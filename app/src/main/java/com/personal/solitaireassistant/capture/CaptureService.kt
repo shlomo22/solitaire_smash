@@ -259,6 +259,7 @@ class CaptureService : Service() {
 
         fun setGoldenReviewActive(active: Boolean) {
             instance?.overlayController?.setReviewMode(active)
+            instance?.pipeline?.setAssistantForeground(active)
         }
 
         fun cancelCurrentHint() {

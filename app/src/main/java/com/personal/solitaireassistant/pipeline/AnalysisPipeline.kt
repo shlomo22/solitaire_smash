@@ -69,8 +69,14 @@ class AnalysisPipeline(
     private var pendingSuggestionStreak = 0
     private var sawFreshDeal = false
     private var lastErrorCaptureSignature: String? = null
+    private val assistantForeground = AtomicBoolean(false)
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
+
+    /** True while [MainActivity] Settings/Golden review is visible — blocks error auto-capture. */
+    fun setAssistantForeground(active: Boolean) {
+        assistantForeground.set(active)
+    }
 
     private data class PendingFrame(
         val bitmap: Bitmap,
@@ -150,8 +156,11 @@ class AnalysisPipeline(
         }
         synchronized(snapshotLock) {
             lastDetection = detection
-            // Snapshot for golden review only needs updating when the board changed.
-            if (boardVisuallyChanged) {
+            // Only keep snapshot pixels from genuine in-game frames. While the
+            // user has this app's Settings/Evaluate UI on screen, MediaProjection
+            // captures that UI — storing it would save a useless PNG for golden
+            // review and error-capture import.
+            if (boardVisuallyChanged && detection.livePlayScreen) {
                 retainFrameLocked(bitmap)
             }
         }
@@ -166,7 +175,8 @@ class AnalysisPipeline(
             frameW = bitmap.width,
             frameH = bitmap.height,
             boardVisuallyChanged = boardVisuallyChanged,
-            queueDelayMs = queueDelayMs
+            queueDelayMs = queueDelayMs,
+            frameBitmap = bitmap
         )
     }
 
@@ -337,17 +347,25 @@ class AnalysisPipeline(
     private fun maybeCaptureRecognitionErrors(
         detection: DetectionResult,
         state: GameState,
-        signature: String
+        signature: String,
+        frameBitmap: Bitmap
     ) {
         val settings = settingsRef.get()
         if (!settings.autoCaptureRecognitionErrors) return
+        if (assistantForeground.get()) return
         // Only capture on fully settled boards — skip fast-path frames that
         // bypass the 2-frame stability gate (reliableFirstHit / fastUpdateAfterMove).
         if (stableHits < 2) return
         if (lastErrorCaptureSignature == signature) return
         val violations = BoardRecognitionValidator.validate(state)
         if (violations.isEmpty()) return
-        val snapshot = peekCurrentFrame() ?: return
+        if (!detection.livePlayScreen) return
+        val frameCopy = frameBitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        val snapshot = PendingSnapshot(
+            bitmap = frameCopy,
+            slots = detection.recognizedSlots,
+            diagnostics = detection.diagnostics
+        )
         saveErrorCaptureAsync(
             snapshot = snapshot,
             detection = detection,
@@ -477,7 +495,8 @@ class AnalysisPipeline(
         frameW: Int,
         frameH: Int,
         boardVisuallyChanged: Boolean,
-        queueDelayMs: Long
+        queueDelayMs: Long,
+        frameBitmap: Bitmap
     ) {
         val rawState = detectionRaw.state
         if (!detectionRaw.livePlayScreen) {
@@ -613,7 +632,8 @@ class AnalysisPipeline(
         maybeCaptureRecognitionErrors(
             detection = detection,
             state = state,
-            signature = signature
+            signature = signature,
+            frameBitmap = frameBitmap
         )
         showBestSuggestion(
             detection = detection,
