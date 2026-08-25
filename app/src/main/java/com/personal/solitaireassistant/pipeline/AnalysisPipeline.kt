@@ -893,56 +893,20 @@ class AnalysisPipeline(
         best: ScoredMove,
         boardVisuallyChanged: Boolean
     ): ScoredMove? {
-        val previous = lastSuggestion?.scored
-        if (previous == null || best.move == previous.move) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        // Stickiness exists for a *static* board whose recognition flickers.
-        // After a real visual change the previous arrow is already stale —
-        // holding it another frame is the "I already played, still waiting"
-        // delay. Adopt the new best immediately; flicker damping still
-        // applies on unchanged pixels.
-        if (boardVisuallyChanged) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        if (pendingSuggestionCandidate == best.move) {
-            pendingSuggestionStreak++
-        } else {
-            pendingSuggestionCandidate = best.move
-            pendingSuggestionStreak = 1
-        }
-        if (pendingSuggestionStreak >= 2) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        val stillRanked = ranked.firstOrNull { it.move == previous.move }
-        if (stillRanked == null) {
-            val previousSourcedFromWaste =
-                previous.move is Move.WasteToFoundation || previous.move is Move.WasteToTableau
-            if (previousSourcedFromWaste) {
-                // Waste is the fastest-changing, always-fully-visible pile - unlike the
-                // buried-tableau-card misread this damping was built for, a vanished
-                // waste-sourced move almost always means the player already drew past
-                // it. Holding here left a stale arrow anchored to the old waste
-                // position while the visible card underneath had already moved on to
-                // something unrelated - on screen this reads as the arrow connecting
-                // two nonsensical ranks (e.g. "J -> 3"), since the endpoints are fixed
-                // pixel positions, not the cards they were computed for.
-                pendingSuggestionCandidate = null
-                pendingSuggestionStreak = 0
-                return best
-            }
-            fileLogger.append(
-                "HOLD prev=${previous.move.label} vanished from ranked " +
-                    "(raw=${best.move.label} streak=$pendingSuggestionStreak/2)"
+        val result = SuggestionStickiness.apply(
+            previous = lastSuggestion?.scored,
+            best = best,
+            ranked = ranked,
+            boardVisuallyChanged = boardVisuallyChanged,
+            state = SuggestionStickiness.State(
+                pendingCandidate = pendingSuggestionCandidate,
+                pendingStreak = pendingSuggestionStreak
             )
-        }
-        return stillRanked
+        )
+        pendingSuggestionCandidate = result.state.pendingCandidate
+        pendingSuggestionStreak = result.state.pendingStreak
+        result.holdReason?.let { fileLogger.append(it) }
+        return result.display
     }
 
     private fun endpointsFor(

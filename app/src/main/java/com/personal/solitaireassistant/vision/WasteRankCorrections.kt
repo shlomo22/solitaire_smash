@@ -156,7 +156,18 @@ internal object WasteRankCorrections {
         // was stealing real waste Eights (golden 20260825_131411 8♥, 132126 8♦).
         if (ocrRank == Rank.Eight) return null
         if (eightScore >= 0.45f && eightScore >= sixScore) return null
-        if (ocrRank == Rank.Six) return Rank.Six
+        if (ocrRank == Rank.Six) {
+            // OCR "6" on a real Nine is common. Only steal a fused Nine when
+            // Six templates are actually in the race (the documented Six-as-Nine
+            // gap is ~0.03). A leading Nine with a lone OCR 6 stays Nine —
+            // otherwise 9D→10S vanishes and the arrow snaps to Draw Stock.
+            if (nineCandidate && !fourCandidate && !sevenCandidate) {
+                val nineScore = rankScore(exactRankScores, Rank.Nine)
+                if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
+                return null
+            }
+            return Rank.Six
+        }
 
         if (sevenCandidate) {
             val sevenScore = rankScore(exactRankScores, Rank.Seven)
@@ -291,7 +302,7 @@ internal object WasteRankCorrections {
             tightLegacyRanks.contains(Rank.Nine) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
-            return Rank.Six
+            return if (sixCanStealNine(exactRankScores)) Rank.Six else null
         }
         if (ocrRank == Rank.Eight &&
             (tightLegacyRanks.contains(Rank.Six) ||
@@ -313,6 +324,11 @@ internal object WasteRankCorrections {
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            if (ocrRank == Rank.Six && fusionRank == Rank.Nine &&
+                !sixCanStealNine(exactRankScores)
+            ) {
+                return null
+            }
             // King/Ten evidence (template score pattern + OCR plurality) was
             // confirmed genuinely ambiguous on real golden samples: the same
             // signal shape (Ten~0.54 template lead, King absent from top-4,
@@ -323,6 +339,12 @@ internal object WasteRankCorrections {
         }
 
         return null
+    }
+
+    private fun sixCanStealNine(exactRankScores: Map<Rank, Float>): Boolean {
+        val sixScore = rankScore(exactRankScores, Rank.Six)
+        val nineScore = rankScore(exactRankScores, Rank.Nine)
+        return sixScore + 0.05f >= nineScore && sixScore >= 0.38f
     }
 
     internal fun isConfusionPair(first: Rank, second: Rank): Boolean {

@@ -68,15 +68,42 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
-    fun ocrSixOverridesNineFusion() {
+    fun ocrSixOverridesNineFusionWhenSixIsCompetitive() {
         val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(
             ocrRank = Rank.Six,
             legacyCard = null,
             tightCard = nineDiamonds,
-            baseCard = nineDiamonds
+            baseCard = nineDiamonds,
+            exactRankScores = mapOf(Rank.Nine to 0.44f, Rank.Six to 0.41f)
         )
         assertEquals(Rank.Six, override)
+    }
+
+    @Test
+    fun ocrSixDoesNotStealLeadingNine() {
+        val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Six,
+            legacyCard = null,
+            tightCard = nineDiamonds,
+            baseCard = nineDiamonds,
+            exactRankScores = mapOf(Rank.Nine to 0.62f, Rank.Six to 0.40f)
+        )
+        assertNull(override)
+    }
+
+    @Test
+    fun correctSixOnWasteDoesNotStealLeadingNine() {
+        val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true, known = true)
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = nineDiamonds,
+            tightCard = nineDiamonds,
+            baseCard = nineDiamonds,
+            exactRankScores = mapOf(Rank.Nine to 0.62f, Rank.Six to 0.40f),
+            ocrRank = Rank.Six
+        )
+        assertNull(rank)
     }
 
     @Test
