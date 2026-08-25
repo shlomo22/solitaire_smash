@@ -93,13 +93,14 @@ class AnalysisPipeline(
     // (up to several seconds) synchronously right there, which blocked that
     // thread from ever seeing a newer frame until the current one finished —
     // so a move made mid-analysis was invisible to capture until a whole
-    // extra cycle later. Copy and hand off to a dedicated analysis thread
-    // instead, so capture stays free to keep grabbing the latest frame the
-    // whole time analysis is running.
+    // extra cycle later. Hand the capture Bitmap to a dedicated analysis
+    // thread instead, so capture stays free to keep grabbing the latest
+    // frame the whole time analysis is running.
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
         settingsRef.set(settings)
-        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
-        pendingFrame.getAndSet(PendingFrame(copy, settings, System.currentTimeMillis()))
+        // Capture already copied Image → Bitmap; take ownership instead of
+        // paying a second full-frame ARGB copy before detect() can start.
+        pendingFrame.getAndSet(PendingFrame(bitmap, settings, System.currentTimeMillis()))
             ?.bitmap?.recycle()
         if (busy.compareAndSet(false, true)) {
             analysisExecutor.execute(::drainPendingFrames)

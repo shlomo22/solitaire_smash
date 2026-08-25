@@ -9,11 +9,8 @@ import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import java.util.concurrent.Callable
 import java.util.concurrent.Executors
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -57,9 +54,8 @@ class GameStateDetector(
     private val columnExecutor = Executors.newFixedThreadPool(
         Runtime.getRuntime().availableProcessors().coerceIn(4, 11)
     )
-    private val columnDispatcher = columnExecutor.asCoroutineDispatcher()
     // Separate from columnExecutor so a long waste-OCR call cannot starve
-    // (or deadlock) the 7-column runBlocking pool.
+    // the pile workers.
     private val wasteOcrExecutor = Executors.newSingleThreadExecutor()
 
     // Diagnostic-only: per-detect() timing, reset at the top of detect().
@@ -167,357 +163,6 @@ class GameStateDetector(
         }
         diagnostics += "stock=${stockHit.diagnostic}"
 
-        val tightWasteRegion = locateWasteTopRegion(bitmap, board)
-        val tightWasteHit = recognizeCached(
-            bitmap = bitmap,
-            pile = PileRef.Waste,
-            index = 0,
-            region = tightWasteRegion,
-            cache = newSlotCache,
-            exactCardBounds = true
-        )
-        val legacyWasteRegion = locator.wasteTopRegion(board)
-        val needsLegacyFusion =
-            tightWasteHit.card == null ||
-                tightWasteHit.confidence < 0.68f ||
-                tightWasteHit.card?.suitAmbiguous == true
-        val legacyWasteHit = if (needsLegacyFusion) {
-            recognizeCached(
-                bitmap = bitmap,
-                pile = PileRef.Waste,
-                index = 1,
-                region = legacyWasteRegion,
-                cache = newSlotCache
-            )
-        } else {
-            tightWasteHit
-        }
-        val exactRankScores = tightWasteHit.rankScores
-            ?: recognizer.exactRankTemplateScores(
-                bitmap,
-                tightWasteRegion,
-                Rank.entries.toSet()
-            )
-        val exactSuitScores = tightWasteHit.suitScores
-            ?: recognizer.suitTemplateScores(
-                bitmap,
-                tightWasteRegion,
-                Suit.entries.toSet()
-            )
-        // The legacy crop has the most rank training data, while the complete
-        // tight crop is the only one that reliably contains the suit badge.
-        // Fuse them, correcting the two common clipped-glyph confusions with
-        // the wide/closed center-glyph shape.
-        val legacyCard = legacyWasteHit.card
-        val tightCard = tightWasteHit.card
-        val wasteCandidatesDisagree =
-            tightCard != null &&
-                legacyCard != null &&
-                tightCard.id != legacyCard.id
-        val baseCard = when {
-            wasteCandidatesDisagree -> {
-                fun candidateScore(card: Card): Float {
-                    val rankScore = exactRankScores[card.rank] ?: 0f
-                    val suitScore = exactSuitScores[card.suit] ?: 0f
-                    return rankScore + suitScore
-                }
-                if (candidateScore(tightCard) >= candidateScore(legacyCard)) {
-                    tightCard
-                } else {
-                    legacyCard
-                }
-            }
-            else -> legacyCard ?: tightCard
-        }
-        val rankedExactSuits = exactSuitScores.entries.sortedByDescending { it.value }
-        val exactSuitBest = rankedExactSuits.firstOrNull()
-        val exactSuitSecond = rankedExactSuits.getOrNull(1)?.value ?: 0f
-        val authoritativeExactSuit = exactSuitBest
-            ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
-            ?.key
-        val wasteInkGuess = inkGuessFromRegion(bitmap, tightWasteRegion)
-        // Used to gate on legacyCard/tightCard's rank already being in
-        // WASTE_OCR_RELEVANT_RANKS, on the assumption a wrong initial guess
-        // would always land on one of those ranks. A real game showed a
-        // waste Ten confidently misread as Eight — not in that set — so OCR
-        // never ran and the correction logic below (which depends entirely
-        // on ocrRank) never got a chance. Any rank can be the wrong initial
-        // guess; the early-exit added to attemptWasteRankOcr already bounds
-        // the cost of trying, so just always try when there's a real card.
-        val wasteOcrRelevant = legacyCard != null || tightCard != null
-        val wasteOcrStartNanos = System.nanoTime()
-        val wasteOcrRegions = if (wasteOcrRelevant) {
-            buildList {
-                add(tightWasteRegion)
-                add(legacyWasteRegion)
-                addAll(locator.wasteOcrCardRegions(board))
-            }
-        } else {
-            emptyList()
-        }
-        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
-            acc * 31L + regionFingerprint(bitmap, region)
-        }
-        val reusableWasteOcr = if (wasteOcrRelevant) {
-            cachedWasteOcr?.takeIf { cached ->
-                cached.fingerprint == ocrFingerprint &&
-                    cached.regions.size == wasteOcrRegions.size &&
-                    cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
-            }
-        } else {
-            null
-        }
-        // Kick OCR off before foundations/tableau so a fresh waste read (the
-        // 47–430ms ML Kit path) overlaps column template matching instead of
-        // sitting on the analysis thread first. Cached waste is still free.
-        val wasteOcrFuture = if (wasteOcrRelevant && reusableWasteOcr == null) {
-            wasteOcrExecutor.submit<RankCornerOcr.AttemptResult> {
-                recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
-            }
-        } else {
-            null
-        }
-        fun finishWaste(wasteOcrAttempt: RankCornerOcr.AttemptResult?): Pair<RecognitionHit, List<Card>> {
-        val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
-            ocrRank = wasteOcrAttempt?.guess?.rank,
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            baseCard = baseCard,
-            exactRankScores = exactRankScores
-        )
-        val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            exactRankScores = exactRankScores,
-            inkGuess = wasteInkGuess
-        )
-        val wasteKingOverride = WasteRankCorrections.correctKingTenOnWaste(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            exactRankScores = exactRankScores,
-            inkGuess = wasteInkGuess
-        )
-        val wasteFiveJackOverride = WasteRankCorrections.correctFiveJack(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            baseCard = baseCard,
-            exactRankScores = exactRankScores,
-            inkGuess = wasteInkGuess,
-            ocrRank = wasteOcrAttempt?.guess?.rank
-        )
-        val exactEightSpadeOverride =
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Six &&
-                (exactRankScores[Rank.Eight] ?: 0f) >= 0.90f &&
-                (exactSuitScores[Suit.Spades] ?: 0f) >= 0.90f
-        val exactFourOverride =
-            legacyCard?.rank == Rank.Seven &&
-                (exactRankScores[Rank.Four] ?: 0f) >= 0.85f &&
-                (exactSuitScores[Suit.Diamonds] ?: 0f) >= 0.90f &&
-                (exactSuitScores[Suit.Diamonds] ?: 0f) >
-                (exactSuitScores[Suit.Hearts] ?: 0f) + 0.05f
-        val wasteThreeOverride = WasteRankCorrections.correctJackThree(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            baseCard = baseCard,
-            exactRankScores = exactRankScores,
-            inkGuess = wasteInkGuess
-        )
-        val wasteSixOverride = WasteRankCorrections.correctSixOnWaste(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            baseCard = baseCard,
-            exactRankScores = exactRankScores,
-            ocrRank = wasteOcrAttempt?.guess?.rank
-        )
-        val wasteEightOverride = WasteRankCorrections.correctEightOnWaste(
-            legacyCard = legacyCard,
-            tightCard = tightCard,
-            baseCard = baseCard,
-            exactRankScores = exactRankScores,
-            inkGuess = wasteInkGuess,
-            ocrRank = wasteOcrAttempt?.guess?.rank
-        )
-        val correctedRank = when {
-            wasteEightOverride != null -> wasteEightOverride
-            wasteOcrOverride != null -> wasteOcrOverride
-            wasteSixOverride != null -> wasteSixOverride
-            wasteQueenOverride != null -> wasteQueenOverride
-            wasteKingOverride != null -> wasteKingOverride
-            exactEightSpadeOverride -> Rank.Eight
-            exactFourOverride -> Rank.Four
-            wasteFiveJackOverride != null -> wasteFiveJackOverride
-            wasteThreeOverride != null -> wasteThreeOverride
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Jack &&
-                (exactRankScores[Rank.Jack] ?: 0f) >
-                (exactRankScores[Rank.Seven] ?: 0f) + 0.35f -> Rank.Jack
-            legacyCard?.rank == Rank.Nine &&
-                tightCard?.rank == Rank.Ten &&
-                (exactRankScores[Rank.Ten] ?: 0f) >= 0.85f &&
-                (exactRankScores[Rank.Ten] ?: 0f) >
-                (exactRankScores[Rank.Nine] ?: 0f) + 0.10f -> Rank.Ten
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Eight &&
-                (exactRankScores[Rank.Eight] ?: 0f) >= 0.85f &&
-                (exactRankScores[Rank.Eight] ?: 0f) >
-                (exactRankScores[Rank.Seven] ?: 0f) + 0.10f -> Rank.Eight
-            legacyCard?.rank == Rank.Seven &&
-                tightCard?.rank == Rank.Six &&
-                tightCard.suit != legacyCard.suit &&
-                (exactRankScores[Rank.Eight] ?: 0f) < 0.48f -> Rank.Six
-            legacyCard?.rank == Rank.Jack &&
-                tightCard?.rank == Rank.Four &&
-                legacyWasteHit.confidence >= 0.68f -> Rank.Jack
-            legacyCard?.rank == Rank.Six &&
-                tightCard?.rank == Rank.Four &&
-                legacyWasteHit.confidence >= 0.68f -> Rank.Six
-            legacyCard != null &&
-                tightCard != null &&
-                legacyCard.rank != tightCard.rank &&
-                legacyWasteHit.confidence >= 0.70f &&
-                legacyWasteHit.confidence >= tightWasteHit.confidence &&
-                (exactRankScores[legacyCard.rank] ?: legacyWasteHit.confidence) >=
-                (exactRankScores[tightCard.rank] ?: tightWasteHit.confidence) - 0.12f ->
-                legacyCard.rank
-            else -> baseCard?.rank
-        }
-        val correctedSuit = if ((wasteQueenOverride != null || wasteKingOverride != null ||
-                exactEightSpadeOverride) &&
-            authoritativeExactSuit != null
-        ) {
-            authoritativeExactSuit
-        } else if (exactFourOverride) {
-            Suit.Diamonds
-        } else {
-            tightCard?.suit ?: baseCard?.suit
-        }
-        val wasteBlackSuitOverride = correctedRank?.let { rank ->
-            WasteRankCorrections.correctBlackSuitOnWaste(
-                rank = rank,
-                legacyCard = legacyCard,
-                tightCard = tightCard
-            )
-        }
-        val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
-        val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {
-            val candidate = baseCard.copy(
-                rank = correctedRank,
-                suit = finalCorrectedSuit ?: baseCard.suit,
-                suitAmbiguous = wasteBlackSuitOverride == null && baseCard.suitAmbiguous
-            )
-            if (wasteBlackSuitOverride != null) {
-                candidate to RecognitionTrace.EMPTY.withPost(
-                    "waste-black-suit:${correctedSuit ?: baseCard.suit}->$wasteBlackSuitOverride"
-                )
-            } else {
-                resolveCardSuitWithTrace(
-                    bitmap,
-                    tightWasteRegion,
-                    candidate,
-                    RecognitionTrace.EMPTY
-                )
-            }
-        } else {
-            synthesizeWasteFromScores(
-                bitmap = bitmap,
-                legacyRegion = legacyWasteRegion,
-                tightRegion = tightWasteRegion,
-                legacyHit = legacyWasteHit,
-                tightHit = tightWasteHit,
-                rankScores = exactRankScores,
-                suitScores = exactSuitScores
-            )?.let { synthesized ->
-                resolveCardSuitWithTrace(
-                    bitmap,
-                    tightWasteRegion,
-                    synthesized,
-                    RecognitionTrace.EMPTY
-                )
-            } ?: (null to RecognitionTrace.EMPTY)
-        }
-        val wasteHit = if (fusedCard != null) {
-            val fromFusion = baseCard != null && correctedRank != null
-            RecognitionHit(
-                card = fusedCard,
-                confidence = maxOf(
-                    legacyWasteHit.confidence,
-                    tightWasteHit.confidence,
-                    exactRankScores[fusedCard.rank] ?: 0f
-                ).coerceAtLeast(0.55f),
-                isFaceDown = false,
-                isEmpty = false,
-                diagnostic = if (fromFusion) {
-                    "fused-${fusedCard.rank.name}-${fusedCard.suit.name}"
-                } else {
-                    "synthesized-${fusedCard.rank.name}-${fusedCard.suit.name}"
-                },
-                inferredRed = fusedCard.suit.isRed,
-                trace = if (fromFusion) {
-                    RecognitionTrace(
-                        rankSource = "waste-fusion",
-                        rankScore = exactRankScores[correctedRank] ?: legacyWasteHit.trace.rankScore,
-                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
-                        suitSource = "waste-fusion",
-                        suitScore = exactSuitBest?.value,
-                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores),
-                        postSteps = buildList {
-                            add("waste-fusion:legacy=${legacyCard?.id},tight=${tightCard?.id}")
-                            wasteOcrAttempt?.trace?.let { add(it) }
-                            if (wasteOcrOverride != null) {
-                                add("waste-ocr-rank:${wasteOcrOverride.name}")
-                            }
-                            if (wasteBlackSuitOverride != null) {
-                                add("waste-black-suit:${wasteBlackSuitOverride.name}")
-                            }
-                        }
-                    ).merge(legacyWasteHit.trace).merge(tightWasteHit.trace).merge(fusionPostTrace)
-                } else {
-                    RecognitionTrace(
-                        rankSource = "waste-scores",
-                        rankScore = exactRankScores[fusedCard.rank],
-                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
-                        suitSource = "waste-scores",
-                        suitScore = exactSuitScores[fusedCard.suit],
-                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores)
-                    ).merge(fusionPostTrace)
-                }
-            )
-        } else {
-            legacyWasteHit
-        }
-        val wasteRegion = if (fusedCard != null) tightWasteRegion else legacyWasteRegion
-        locations[PileRef.Waste] = listOf(
-            locator.toCardLocation(PileRef.Waste, 0, wasteRegion)
-        )
-        recognizedSlots += recognizedSlot(
-            pile = PileRef.Waste,
-            index = 0,
-            bounds = wasteRegion,
-            hit = wasteHit,
-            cardOverride = wasteHit.card
-        )
-        val wasteCards = listOfNotNull(cardFromHit(wasteHit))
-        diagnostics += "waste=${wasteHit.diagnostic}:${wasteHit.card}"
-        diagnostics +=
-            "waste-regions=exact:${"%.0f".format(tightWasteRegion.left)}-" +
-            "${"%.0f".format(tightWasteRegion.right)}:${tightWasteHit.diagnostic}," +
-            "legacy:${"%.0f".format(legacyWasteRegion.left)}-" +
-            "${"%.0f".format(legacyWasteRegion.right)}:${legacyWasteHit.diagnostic}"
-        diagnostics += "waste-rank-scores=$exactRankScores"
-        diagnostics += "waste-suit-scores=$exactSuitScores"
-        if (wasteCandidatesDisagree) {
-            diagnostics +=
-                "waste-disagreement=tight:${tightWasteHit.card?.id}," +
-                "legacy:${legacyWasteHit.card?.id}"
-        }
-        wasteOcrAttempt?.trace?.let { diagnostics += it }
-        if (wasteOcrOverride != null) {
-            diagnostics += "waste-ocr-rank=${wasteOcrOverride.name}"
-        }
-        return wasteHit to wasteCards
-        }
-
         val computeFoundation = fun(index: Int, region: BoardRegion): FoundationPileResult {
             val stats = RecognizeStats()
             val localCache = mutableMapOf<SlotKey, CachedSlotHit>()
@@ -559,7 +204,7 @@ class GameStateDetector(
         // is untouched from the previous sequential version. Real device
         // logs showed one or two long cascades dominating a frame's time
         // (up to ~1.3s) while the rest finish in a couple of ms, so running
-        // all 7 concurrently on a dedicated pool (columnDispatcher, below)
+        // all 7 concurrently on a dedicated pool (columnExecutor)
         // lets the frame finish in roughly the slowest column's time instead
         // of the sum of all 7.
         val computeColumn = fun(col: Int, columnRegion: BoardRegion): TableauColumnResult {
@@ -1049,21 +694,369 @@ class GameStateDetector(
             )
         }
 
-        // OCR (ML Kit) and the OpenCV/bitmap templates are lazily loaded on
-        // first use behind a non-thread-safe `loaded` flag; the sequential
-        // stock/waste recognize() calls above already force that init before
-        // any parallel pile runs, but make it explicit here too so this
-        // dispatch never depends on incidental call ordering above.
         recognizer.ensureLoaded()
-        val (foundationResults, columnResults) = runBlocking(columnDispatcher) {
-            val foundationJobs = locator.foundationRegions(board).mapIndexed { index, region ->
-                async { computeFoundation(index, region) }
-            }
-            val columnJobs = locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
-                async { computeColumn(col, columnRegion) }
-            }
-            foundationJobs.awaitAll() to columnJobs.awaitAll()
+        // Start foundations + tableau before waste templates so those reads
+        // overlap the sequential waste fusion work instead of waiting on it.
+        val foundationFutures = locator.foundationRegions(board).mapIndexed { index, region ->
+            columnExecutor.submit(Callable { computeFoundation(index, region) })
         }
+        val columnFutures = locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
+            columnExecutor.submit(Callable { computeColumn(col, columnRegion) })
+        }
+
+        val tightWasteRegion = locateWasteTopRegion(bitmap, board)
+        val tightWasteHit = recognizeCached(
+            bitmap = bitmap,
+            pile = PileRef.Waste,
+            index = 0,
+            region = tightWasteRegion,
+            cache = newSlotCache,
+            exactCardBounds = true
+        )
+        val legacyWasteRegion = locator.wasteTopRegion(board)
+        val needsLegacyFusion =
+            tightWasteHit.card == null ||
+                tightWasteHit.confidence < 0.68f ||
+                tightWasteHit.card?.suitAmbiguous == true
+        val legacyWasteHit = if (needsLegacyFusion) {
+            recognizeCached(
+                bitmap = bitmap,
+                pile = PileRef.Waste,
+                index = 1,
+                region = legacyWasteRegion,
+                cache = newSlotCache
+            )
+        } else {
+            tightWasteHit
+        }
+        val exactRankScores = tightWasteHit.rankScores
+            ?: recognizer.exactRankTemplateScores(
+                bitmap,
+                tightWasteRegion,
+                Rank.entries.toSet()
+            )
+        val exactSuitScores = tightWasteHit.suitScores
+            ?: recognizer.suitTemplateScores(
+                bitmap,
+                tightWasteRegion,
+                Suit.entries.toSet()
+            )
+        // The legacy crop has the most rank training data, while the complete
+        // tight crop is the only one that reliably contains the suit badge.
+        // Fuse them, correcting the two common clipped-glyph confusions with
+        // the wide/closed center-glyph shape.
+        val legacyCard = legacyWasteHit.card
+        val tightCard = tightWasteHit.card
+        val wasteCandidatesDisagree =
+            tightCard != null &&
+                legacyCard != null &&
+                tightCard.id != legacyCard.id
+        val baseCard = when {
+            wasteCandidatesDisagree -> {
+                fun candidateScore(card: Card): Float {
+                    val rankScore = exactRankScores[card.rank] ?: 0f
+                    val suitScore = exactSuitScores[card.suit] ?: 0f
+                    return rankScore + suitScore
+                }
+                if (candidateScore(tightCard) >= candidateScore(legacyCard)) {
+                    tightCard
+                } else {
+                    legacyCard
+                }
+            }
+            else -> legacyCard ?: tightCard
+        }
+        val rankedExactSuits = exactSuitScores.entries.sortedByDescending { it.value }
+        val exactSuitBest = rankedExactSuits.firstOrNull()
+        val exactSuitSecond = rankedExactSuits.getOrNull(1)?.value ?: 0f
+        val authoritativeExactSuit = exactSuitBest
+            ?.takeIf { it.value >= 0.80f && it.value - exactSuitSecond >= 0.04f }
+            ?.key
+        val wasteInkGuess = inkGuessFromRegion(bitmap, tightWasteRegion)
+        // Used to gate on legacyCard/tightCard's rank already being in
+        // WASTE_OCR_RELEVANT_RANKS, on the assumption a wrong initial guess
+        // would always land on one of those ranks. A real game showed a
+        // waste Ten confidently misread as Eight — not in that set — so OCR
+        // never ran and the correction logic below (which depends entirely
+        // on ocrRank) never got a chance. Any rank can be the wrong initial
+        // guess; the early-exit added to attemptWasteRankOcr already bounds
+        // the cost of trying, so just always try when there's a real card.
+        val wasteOcrRelevant = legacyCard != null || tightCard != null
+        val wasteOcrStartNanos = System.nanoTime()
+        val wasteOcrRegions = if (wasteOcrRelevant) {
+            buildList {
+                add(tightWasteRegion)
+                add(legacyWasteRegion)
+                addAll(locator.wasteOcrCardRegions(board))
+            }
+        } else {
+            emptyList()
+        }
+        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
+            acc * 31L + regionFingerprint(bitmap, region)
+        }
+        val reusableWasteOcr = if (wasteOcrRelevant) {
+            cachedWasteOcr?.takeIf { cached ->
+                cached.fingerprint == ocrFingerprint &&
+                    cached.regions.size == wasteOcrRegions.size &&
+                    cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
+            }
+        } else {
+            null
+        }
+        // Columns/foundations already started above. Kick OCR now so a fresh
+        // waste read (the 47–430ms ML Kit path) overlaps whatever pile work
+        // is still running. Cached waste is still free.
+        val wasteOcrFuture = if (wasteOcrRelevant && reusableWasteOcr == null) {
+            wasteOcrExecutor.submit<RankCornerOcr.AttemptResult> {
+                recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+            }
+        } else {
+            null
+        }
+        fun finishWaste(wasteOcrAttempt: RankCornerOcr.AttemptResult?): Pair<RecognitionHit, List<Card>> {
+        val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
+            ocrRank = wasteOcrAttempt?.guess?.rank,
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores
+        )
+        val wasteQueenOverride = WasteRankCorrections.correctQueenOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
+        val wasteKingOverride = WasteRankCorrections.correctKingTenOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
+        val wasteFiveJackOverride = WasteRankCorrections.correctFiveJack(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
+        val exactEightSpadeOverride =
+            legacyCard?.rank == Rank.Seven &&
+                tightCard?.rank == Rank.Six &&
+                (exactRankScores[Rank.Eight] ?: 0f) >= 0.90f &&
+                (exactSuitScores[Suit.Spades] ?: 0f) >= 0.90f
+        val exactFourOverride =
+            legacyCard?.rank == Rank.Seven &&
+                (exactRankScores[Rank.Four] ?: 0f) >= 0.85f &&
+                (exactSuitScores[Suit.Diamonds] ?: 0f) >= 0.90f &&
+                (exactSuitScores[Suit.Diamonds] ?: 0f) >
+                (exactSuitScores[Suit.Hearts] ?: 0f) + 0.05f
+        val wasteThreeOverride = WasteRankCorrections.correctJackThree(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess
+        )
+        val wasteSixOverride = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
+        val wasteEightOverride = WasteRankCorrections.correctEightOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            exactRankScores = exactRankScores,
+            inkGuess = wasteInkGuess,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
+        val correctedRank = when {
+            wasteEightOverride != null -> wasteEightOverride
+            wasteOcrOverride != null -> wasteOcrOverride
+            wasteSixOverride != null -> wasteSixOverride
+            wasteQueenOverride != null -> wasteQueenOverride
+            wasteKingOverride != null -> wasteKingOverride
+            exactEightSpadeOverride -> Rank.Eight
+            exactFourOverride -> Rank.Four
+            wasteFiveJackOverride != null -> wasteFiveJackOverride
+            wasteThreeOverride != null -> wasteThreeOverride
+            legacyCard?.rank == Rank.Seven &&
+                tightCard?.rank == Rank.Jack &&
+                (exactRankScores[Rank.Jack] ?: 0f) >
+                (exactRankScores[Rank.Seven] ?: 0f) + 0.35f -> Rank.Jack
+            legacyCard?.rank == Rank.Nine &&
+                tightCard?.rank == Rank.Ten &&
+                (exactRankScores[Rank.Ten] ?: 0f) >= 0.85f &&
+                (exactRankScores[Rank.Ten] ?: 0f) >
+                (exactRankScores[Rank.Nine] ?: 0f) + 0.10f -> Rank.Ten
+            legacyCard?.rank == Rank.Seven &&
+                tightCard?.rank == Rank.Eight &&
+                (exactRankScores[Rank.Eight] ?: 0f) >= 0.85f &&
+                (exactRankScores[Rank.Eight] ?: 0f) >
+                (exactRankScores[Rank.Seven] ?: 0f) + 0.10f -> Rank.Eight
+            legacyCard?.rank == Rank.Seven &&
+                tightCard?.rank == Rank.Six &&
+                tightCard.suit != legacyCard.suit &&
+                (exactRankScores[Rank.Eight] ?: 0f) < 0.48f -> Rank.Six
+            legacyCard?.rank == Rank.Jack &&
+                tightCard?.rank == Rank.Four &&
+                legacyWasteHit.confidence >= 0.68f -> Rank.Jack
+            legacyCard?.rank == Rank.Six &&
+                tightCard?.rank == Rank.Four &&
+                legacyWasteHit.confidence >= 0.68f -> Rank.Six
+            legacyCard != null &&
+                tightCard != null &&
+                legacyCard.rank != tightCard.rank &&
+                legacyWasteHit.confidence >= 0.70f &&
+                legacyWasteHit.confidence >= tightWasteHit.confidence &&
+                (exactRankScores[legacyCard.rank] ?: legacyWasteHit.confidence) >=
+                (exactRankScores[tightCard.rank] ?: tightWasteHit.confidence) - 0.12f ->
+                legacyCard.rank
+            else -> baseCard?.rank
+        }
+        val correctedSuit = if ((wasteQueenOverride != null || wasteKingOverride != null ||
+                exactEightSpadeOverride) &&
+            authoritativeExactSuit != null
+        ) {
+            authoritativeExactSuit
+        } else if (exactFourOverride) {
+            Suit.Diamonds
+        } else {
+            tightCard?.suit ?: baseCard?.suit
+        }
+        val wasteBlackSuitOverride = correctedRank?.let { rank ->
+            WasteRankCorrections.correctBlackSuitOnWaste(
+                rank = rank,
+                legacyCard = legacyCard,
+                tightCard = tightCard
+            )
+        }
+        val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
+        val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {
+            val candidate = baseCard.copy(
+                rank = correctedRank,
+                suit = finalCorrectedSuit ?: baseCard.suit,
+                suitAmbiguous = wasteBlackSuitOverride == null && baseCard.suitAmbiguous
+            )
+            if (wasteBlackSuitOverride != null) {
+                candidate to RecognitionTrace.EMPTY.withPost(
+                    "waste-black-suit:${correctedSuit ?: baseCard.suit}->$wasteBlackSuitOverride"
+                )
+            } else {
+                resolveCardSuitWithTrace(
+                    bitmap,
+                    tightWasteRegion,
+                    candidate,
+                    RecognitionTrace.EMPTY
+                )
+            }
+        } else {
+            synthesizeWasteFromScores(
+                bitmap = bitmap,
+                legacyRegion = legacyWasteRegion,
+                tightRegion = tightWasteRegion,
+                legacyHit = legacyWasteHit,
+                tightHit = tightWasteHit,
+                rankScores = exactRankScores,
+                suitScores = exactSuitScores
+            )?.let { synthesized ->
+                resolveCardSuitWithTrace(
+                    bitmap,
+                    tightWasteRegion,
+                    synthesized,
+                    RecognitionTrace.EMPTY
+                )
+            } ?: (null to RecognitionTrace.EMPTY)
+        }
+        val wasteHit = if (fusedCard != null) {
+            val fromFusion = baseCard != null && correctedRank != null
+            RecognitionHit(
+                card = fusedCard,
+                confidence = maxOf(
+                    legacyWasteHit.confidence,
+                    tightWasteHit.confidence,
+                    exactRankScores[fusedCard.rank] ?: 0f
+                ).coerceAtLeast(0.55f),
+                isFaceDown = false,
+                isEmpty = false,
+                diagnostic = if (fromFusion) {
+                    "fused-${fusedCard.rank.name}-${fusedCard.suit.name}"
+                } else {
+                    "synthesized-${fusedCard.rank.name}-${fusedCard.suit.name}"
+                },
+                inferredRed = fusedCard.suit.isRed,
+                trace = if (fromFusion) {
+                    RecognitionTrace(
+                        rankSource = "waste-fusion",
+                        rankScore = exactRankScores[correctedRank] ?: legacyWasteHit.trace.rankScore,
+                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
+                        suitSource = "waste-fusion",
+                        suitScore = exactSuitBest?.value,
+                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores),
+                        postSteps = buildList {
+                            add("waste-fusion:legacy=${legacyCard?.id},tight=${tightCard?.id}")
+                            wasteOcrAttempt?.trace?.let { add(it) }
+                            if (wasteOcrOverride != null) {
+                                add("waste-ocr-rank:${wasteOcrOverride.name}")
+                            }
+                            if (wasteBlackSuitOverride != null) {
+                                add("waste-black-suit:${wasteBlackSuitOverride.name}")
+                            }
+                        }
+                    ).merge(legacyWasteHit.trace).merge(tightWasteHit.trace).merge(fusionPostTrace)
+                } else {
+                    RecognitionTrace(
+                        rankSource = "waste-scores",
+                        rankScore = exactRankScores[fusedCard.rank],
+                        rankTemplates = RecognitionTrace.formatRankScores(exactRankScores),
+                        suitSource = "waste-scores",
+                        suitScore = exactSuitScores[fusedCard.suit],
+                        suitTemplates = RecognitionTrace.formatSuitScores(exactSuitScores)
+                    ).merge(fusionPostTrace)
+                }
+            )
+        } else {
+            legacyWasteHit
+        }
+        val wasteRegion = if (fusedCard != null) tightWasteRegion else legacyWasteRegion
+        locations[PileRef.Waste] = listOf(
+            locator.toCardLocation(PileRef.Waste, 0, wasteRegion)
+        )
+        recognizedSlots += recognizedSlot(
+            pile = PileRef.Waste,
+            index = 0,
+            bounds = wasteRegion,
+            hit = wasteHit,
+            cardOverride = wasteHit.card
+        )
+        val wasteCards = listOfNotNull(cardFromHit(wasteHit))
+        diagnostics += "waste=${wasteHit.diagnostic}:${wasteHit.card}"
+        diagnostics +=
+            "waste-regions=exact:${"%.0f".format(tightWasteRegion.left)}-" +
+            "${"%.0f".format(tightWasteRegion.right)}:${tightWasteHit.diagnostic}," +
+            "legacy:${"%.0f".format(legacyWasteRegion.left)}-" +
+            "${"%.0f".format(legacyWasteRegion.right)}:${legacyWasteHit.diagnostic}"
+        diagnostics += "waste-rank-scores=$exactRankScores"
+        diagnostics += "waste-suit-scores=$exactSuitScores"
+        if (wasteCandidatesDisagree) {
+            diagnostics +=
+                "waste-disagreement=tight:${tightWasteHit.card?.id}," +
+                "legacy:${legacyWasteHit.card?.id}"
+        }
+        wasteOcrAttempt?.trace?.let { diagnostics += it }
+        if (wasteOcrOverride != null) {
+            diagnostics += "waste-ocr-rank=${wasteOcrOverride.name}"
+        }
+        return wasteHit to wasteCards
+        }
+
+        val foundationResults = foundationFutures.map { it.get() }
+        val columnResults = columnFutures.map { it.get() }
         foundationResults.sortedBy { it.index }.forEach { result ->
             foundations[result.index] = result.cards
             locations[PileRef.Foundation(result.index)] = listOf(result.location)
@@ -1091,7 +1084,6 @@ class GameStateDetector(
             missBoundsShifted += result.stats.missBounds
             tableauColumnNanos[result.col] = result.elapsedNanos
         }
-
         val wasteOcrAttempt = when {
             !wasteOcrRelevant -> null
             reusableWasteOcr != null -> reusableWasteOcr.result

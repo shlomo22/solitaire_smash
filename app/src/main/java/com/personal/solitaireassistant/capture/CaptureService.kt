@@ -147,9 +147,14 @@ class CaptureService : Service() {
     private fun handleFrame(bitmap: Bitmap) {
         val settings = settingsRef.get()
         if (settings.debugSaveFrames) {
-            saveDebugFrame(bitmap)
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)?.let { saveDebugFrame(it) }
         }
-        pipeline?.onFrame(bitmap, settings)
+        val pipe = pipeline
+        if (pipe != null) {
+            pipe.onFrame(bitmap, settings)
+        } else if (!bitmap.isRecycled) {
+            bitmap.recycle()
+        }
     }
 
     private fun saveDebugFrame(bitmap: Bitmap) {
@@ -162,6 +167,8 @@ class CaptureService : Service() {
                 }
             } catch (t: Throwable) {
                 Log.w(TAG, "Failed saving debug frame", t)
+            } finally {
+                if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
     }
