@@ -7,6 +7,7 @@ import android.util.Log
 import com.personal.solitaireassistant.capture.PendingSnapshot
 import com.personal.solitaireassistant.game.BoardRegion
 import com.personal.solitaireassistant.game.Card
+import com.personal.solitaireassistant.game.DealBoundary
 import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.Move
 import com.personal.solitaireassistant.game.PileRef
@@ -67,7 +68,6 @@ class AnalysisPipeline(
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private var pendingSuggestionCandidate: Move? = null
     private var pendingSuggestionStreak = 0
-    private var sawFreshDeal = false
     private var lastErrorCaptureSignature: String? = null
     private val assistantForeground = AtomicBoolean(false)
 
@@ -138,7 +138,10 @@ class AnalysisPipeline(
         settingsRef.set(settings)
         if (!sessionStarted) {
             sessionStarted = true
+            sessionRejected.clear()
+            rejectedMoveStore.clear()
             fileLogger.sessionStart("${bitmap.width}x${bitmap.height}")
+            fileLogger.append("=== capture session start - rejected-move history cleared ===")
         }
         // Keep prior arrow while analyzing to avoid constant flash.
 
@@ -201,44 +204,26 @@ class AnalysisPipeline(
         pendingFrame.getAndSet(null)?.bitmap?.recycle()
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
-        sawFreshDeal = false
         lastErrorCaptureSignature = null
+        rejectedMoveStore.clear()
         fileLogger.append("=== pipeline cleared ===")
     }
 
     /**
      * User-rejected suggestions are fingerprinted by card identity alone
      * (MoveFingerprint), not board position, and rejectedMoveStore persists to
-     * disk with no expiry - a real board showed a legal, reveal-producing
-     * Tableau->Tableau move (4S onto 5D) missing entirely from the ranked move
-     * list, most likely because that exact card pairing had been rejected in
-     * some earlier, unrelated deal and stayed permanently blacklisted since.
-     * Klondike deals are random each game, so a rejection from one stuck
-     * position says nothing about a completely different deal. Detect the
-     * start of a fresh deal (standard 1..7 face-down-plus-one layout, nothing
-     * on foundations or waste yet) and reset both the persistent and
-     * in-session rejection sets there, so old rejections only ever apply
-     * within the deal that produced them.
+     * disk with no expiry. A real board showed a legal 8H→9C reveal missing
+     * from the ranked list because that pairing had been cancelled on an
+     * earlier deal and never expired — the overlay often starts mid-game, so
+     * the old "opening 1..7 layout" check never ran. Clear on capture start,
+     * capture stop, and whenever [DealBoundary] says the board is a new game.
      */
     private fun maybeResetRejectionsForNewDeal(state: GameState) {
-        val fresh = looksLikeFreshDeal(state)
-        if (fresh && !sawFreshDeal) {
-            sessionRejected.clear()
-            rejectedMoveStore.clear()
-            fileLogger.append("=== new deal detected - rejected-move history cleared ===")
-        }
-        sawFreshDeal = fresh
-    }
-
-    private fun looksLikeFreshDeal(state: GameState): Boolean {
-        if (state.foundations.any { it.isNotEmpty() }) return false
-        if (state.waste.isNotEmpty()) return false
-        if (state.tableau.size != 7) return false
-        return state.tableau.withIndex().all { (index, column) ->
-            column.size == index + 1 &&
-                column.dropLast(1).all { !it.faceUp } &&
-                column.last().faceUp
-        }
+        val previous = lastStableState ?: recentStates.lastOrNull()
+        val reason = DealBoundary.newGameReason(previous, state) ?: return
+        sessionRejected.clear()
+        rejectedMoveStore.clear()
+        fileLogger.append("=== new deal detected ($reason) - rejected-move history cleared ===")
     }
 
     private fun peekCurrentFrame(): PendingSnapshot? = synchronized(snapshotLock) {
@@ -551,7 +536,6 @@ class AnalysisPipeline(
         } else {
             detectionRaw
         }
-        maybeResetRejectionsForNewDeal(state)
 
         val signature = buildString {
             append(state.waste.joinToString { it.id })
@@ -603,6 +587,7 @@ class AnalysisPipeline(
             } else if (boardVisuallyChanged && knownFaceUp >= 2 && detection.confidence >= 0.48f) {
                 // Visual change detected but confidence is still settling — prefer a
                 // best-effort new arrow over keeping the previous move visible.
+                maybeResetRejectionsForNewDeal(state)
                 lastStableState = state
                 if (recentStates.lastOrNull() != state) {
                     recentStates.addLast(state)
@@ -624,6 +609,7 @@ class AnalysisPipeline(
             return
         }
 
+        maybeResetRejectionsForNewDeal(state)
         lastStableState = state
         if (recentStates.lastOrNull() != state) {
             recentStates.addLast(state)
