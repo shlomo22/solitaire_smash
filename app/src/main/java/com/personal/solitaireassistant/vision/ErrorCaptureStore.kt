@@ -44,4 +44,15 @@ class ErrorCaptureStore(context: Context) {
             GoldenTruthJson.toJson(sample, errorCapture = meta)
         )
     }
+
+    /** Deletes every saved PNG+JSON pair in [dir]. Returns how many ids were removed. */
+    fun clearAll(): Int {
+        val ids = listIds()
+        val directory = dir()
+        ids.forEach { id ->
+            File(directory, "$id.png").delete()
+            File(directory, "$id.json").delete()
+        }
+        return ids.size
+    }
 }

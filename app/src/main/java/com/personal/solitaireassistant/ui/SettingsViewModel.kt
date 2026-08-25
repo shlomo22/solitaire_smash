@@ -170,6 +170,19 @@ class SettingsViewModel(
     fun refreshErrorCaptureCount() {
         errorCaptureCount.value = errorCaptureStore.count()
     }
+
+    fun deleteErrorCaptures() {
+        if (errorCaptureCount.value <= 0) return
+        viewModelScope.launch {
+            val removed = withContext(Dispatchers.IO) { errorCaptureStore.clearAll() }
+            errorCaptureCount.value = errorCaptureStore.count()
+            transient.value = if (removed > 0) {
+                "Deleted $removed saved capture${if (removed == 1) "" else "s"}"
+            } else {
+                "No saved captures to delete"
+            }
+        }
+    }
 }
 
 class SettingsViewModelFactory(

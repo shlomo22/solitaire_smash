@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
                         onConfidence = viewModel::setConfidence,
                         onDebugFrames = viewModel::setDebugFrames,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
+                        onDeleteErrorCaptures = viewModel::deleteErrorCaptures,
                         onOpenOverlaySettings = ::openOverlaySettings,
                         onStart = ::onStartClicked,
                         onStop = { CaptureService.stop(this) },

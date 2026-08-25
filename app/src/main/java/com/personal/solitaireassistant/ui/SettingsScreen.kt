@@ -24,6 +24,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,7 @@ fun SettingsScreen(
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
+    onDeleteErrorCaptures: () -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -246,7 +248,19 @@ fun SettingsScreen(
                         onCheckedChange = onAutoCaptureRecognitionErrors
                     )
                 }
-                Text("Saved captures: ${state.errorCaptureCount}")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Saved captures: ${state.errorCaptureCount}")
+                    TextButton(
+                        onClick = onDeleteErrorCaptures,
+                        enabled = state.errorCaptureCount > 0
+                    ) {
+                        Text("Delete")
+                    }
+                }
                 Text(
                     "Folder: ${state.errorCapturePath.ifBlank { "(unavailable)" }}",
                     style = MaterialTheme.typography.bodySmall
