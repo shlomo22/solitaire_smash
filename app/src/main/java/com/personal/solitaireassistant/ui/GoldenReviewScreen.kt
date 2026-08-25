@@ -52,10 +52,16 @@ fun GoldenReviewScreen(
     slots: List<RecognizedSlot>,
     onSave: (List<SlotGuess>) -> Unit,
     onDiscard: () -> Unit,
-    onRecapture: () -> Unit
+    onRecapture: () -> Unit,
+    initialTruths: List<SlotGuess>? = null,
+    allowRecapture: Boolean = true,
+    title: String = "Confirm recognized cards",
+    subtitle: String = "Tap a row below to correct rank and suit. Inferred cascade cards are optional."
 ) {
-    val truths = remember(slots) {
-        mutableStateListOf<SlotGuess>().apply { addAll(slots.map { it.engine }) }
+    val truths = remember(slots, initialTruths) {
+        mutableStateListOf<SlotGuess>().apply {
+            addAll(initialTruths ?: slots.map { it.engine })
+        }
     }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
 
@@ -66,9 +72,9 @@ fun GoldenReviewScreen(
             .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("Confirm recognized cards", style = MaterialTheme.typography.titleLarge)
+        Text(title, style = MaterialTheme.typography.titleLarge)
         Text(
-            "Tap a row below to correct rank and suit. Inferred cascade cards are optional.",
+            subtitle,
             style = MaterialTheme.typography.bodySmall
         )
 
@@ -100,11 +106,13 @@ fun GoldenReviewScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            OutlinedButton(
-                onClick = onRecapture,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Recapture")
+            if (allowRecapture) {
+                OutlinedButton(
+                    onClick = onRecapture,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Recapture")
+                }
             }
             OutlinedButton(
                 onClick = onDiscard,

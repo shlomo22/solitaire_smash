@@ -7,9 +7,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.personal.solitaireassistant.capture.CaptureService
+import com.personal.solitaireassistant.capture.PendingSnapshot
 import com.personal.solitaireassistant.capture.PendingSnapshotHolder
 import com.personal.solitaireassistant.settings.AssistantPreferences
 import com.personal.solitaireassistant.settings.AssistantSettings
+import com.personal.solitaireassistant.vision.ErrorCaptureEvaluator
 import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GoldenSample
 import com.personal.solitaireassistant.pipeline.AnalysisFileLogger
@@ -17,6 +19,7 @@ import com.personal.solitaireassistant.vision.GoldenTruthEvaluator
 import com.personal.solitaireassistant.vision.GoldenTruthStore
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.toGoldenSlot
+import com.personal.solitaireassistant.vision.toRecognizedSlot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,8 +37,12 @@ data class SettingsUiState(
     val errorCaptureCount: Int = 0,
     val errorCapturePath: String = "",
     val evalReport: String = "",
+    val errorEvalReport: String = "",
     val evaluating: Boolean = false,
-    val showGoldenReview: Boolean = false
+    val evaluatingErrors: Boolean = false,
+    val showGoldenReview: Boolean = false,
+    val showErrorCaptureImport: Boolean = false,
+    val errorCaptureImportIds: List<String> = emptyList()
 )
 
 class SettingsViewModel(
@@ -48,28 +55,53 @@ class SettingsViewModel(
     private val goldenCount = MutableStateFlow(store.count())
     private val errorCaptureCount = MutableStateFlow(errorCaptureStore.count())
     private val evalReport = MutableStateFlow("")
+    private val errorEvalReport = MutableStateFlow("")
     private val evaluating = MutableStateFlow(false)
+    private val evaluatingErrors = MutableStateFlow(false)
     private val showGoldenReview = MutableStateFlow(false)
+    private val showErrorCaptureImport = MutableStateFlow(false)
+    private val errorCaptureImportIds = MutableStateFlow<List<String>>(emptyList())
 
-    val uiState: StateFlow<SettingsUiState> = combine(
+    private val coreState = combine(
         preferences.settings,
         transient,
         goldenCount,
-        errorCaptureCount,
-        combine(evalReport, evaluating, showGoldenReview) { report, running, review ->
-            Triple(report, running, review)
-        }
-    ) { settings, message, count, errorCount, eval ->
+        errorCaptureCount
+    ) { settings, message, count, errorCount ->
+        CoreSettingsState(settings, message, count, errorCount)
+    }
+    private val panelState = combine(
+        evalReport,
+        errorEvalReport,
+        evaluating,
+        evaluatingErrors,
+        showGoldenReview
+    ) { report, errorReport, running, runningErrors, review ->
+        EvalPanelStatePart1(report, errorReport, running, runningErrors, review)
+    }
+    private val importState = combine(showErrorCaptureImport, errorCaptureImportIds) { import, ids ->
+        import to ids
+    }
+
+    val uiState: StateFlow<SettingsUiState> = combine(
+        coreState,
+        panelState,
+        importState
+    ) { core, part1, importPair ->
         SettingsUiState(
-            settings = settings,
-            transientMessage = message,
-            goldenCount = count,
+            settings = core.settings,
+            transientMessage = core.message,
+            goldenCount = core.goldenCount,
             goldenPath = store.pathForDisplay(),
-            errorCaptureCount = errorCount,
+            errorCaptureCount = core.errorCaptureCount,
             errorCapturePath = errorCaptureStore.pathForDisplay(),
-            evalReport = eval.first,
-            evaluating = eval.second,
-            showGoldenReview = eval.third
+            evalReport = part1.evalReport,
+            errorEvalReport = part1.errorEvalReport,
+            evaluating = part1.evaluating,
+            evaluatingErrors = part1.evaluatingErrors,
+            showGoldenReview = part1.showGoldenReview,
+            showErrorCaptureImport = importPair.first,
+            errorCaptureImportIds = importPair.second
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
@@ -132,17 +164,22 @@ class SettingsViewModel(
                 }
             )
             showGoldenReview.value = false
+            val sourceId = snapshot.sourceErrorCaptureId
             withContext(Dispatchers.IO) {
                 store.save(snapshot.bitmap, sample)
             }
             PendingSnapshotHolder.clear()
             goldenCount.value = store.count()
-            transient.value = "Saved golden sample $id"
+            transient.value = if (sourceId != null) {
+                "Saved golden sample $id (from $sourceId)"
+            } else {
+                "Saved golden sample $id"
+            }
         }
     }
 
     fun evaluateGoldenSet() {
-        if (evaluating.value) return
+        if (evaluating.value || evaluatingErrors.value) return
         viewModelScope.launch {
             evaluating.value = true
             transient.value = "Evaluating golden set…"
@@ -183,7 +220,94 @@ class SettingsViewModel(
             }
         }
     }
+
+    fun evaluateErrorCaptures() {
+        if (evaluatingErrors.value || evaluating.value) return
+        if (errorCaptureCount.value <= 0) {
+            transient.value = "No error captures saved"
+            return
+        }
+        viewModelScope.launch {
+            evaluatingErrors.value = true
+            transient.value = "Evaluating error captures…"
+            val report = withContext(Dispatchers.Default) {
+                val result = ErrorCaptureEvaluator.evaluate(getApplication(), errorCaptureStore)
+                val logger = AnalysisFileLogger(getApplication())
+                logger.append("=== error capture evaluate ===")
+                result.summary().lines().forEach { line -> logger.append(line) }
+                val detail = result.detailBlock()
+                if (detail.isNotBlank()) {
+                    detail.lines().forEach { line -> logger.append(line) }
+                }
+                result
+            }
+            errorEvalReport.value = report.summary()
+            evaluatingErrors.value = false
+            transient.value = "Error capture evaluation finished"
+        }
+    }
+
+    fun openErrorCaptureImport() {
+        val ids = errorCaptureStore.listIdsNewestFirst()
+        if (ids.isEmpty()) {
+            transient.value = "No error captures saved"
+            return
+        }
+        errorCaptureImportIds.value = ids
+        showErrorCaptureImport.value = true
+    }
+
+    fun dismissErrorCaptureImport() {
+        showErrorCaptureImport.value = false
+    }
+
+    fun importErrorCapture(id: String) {
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                val bitmap = errorCaptureStore.loadBitmap(id) ?: return@withContext null
+                val sample = errorCaptureStore.loadSample(id) ?: run {
+                    bitmap.recycle()
+                    return@withContext null
+                }
+                Triple(bitmap, sample, id)
+            } ?: run {
+                transient.value = "Could not load $id"
+                return@launch
+            }
+            val (bitmap, sample, captureId) = loaded
+            PendingSnapshotHolder.clear()
+            PendingSnapshotHolder.set(
+                PendingSnapshot(
+                    bitmap = bitmap,
+                    slots = sample.slots.map { it.toRecognizedSlot() },
+                    diagnostics = emptyList(),
+                    initialTruths = sample.slots.map { it.truth },
+                    allowRecapture = false,
+                    sourceErrorCaptureId = captureId
+                )
+            )
+            showErrorCaptureImport.value = false
+            showGoldenReview.value = true
+            CaptureService.setGoldenReviewActive(true)
+            transient.value = "Label cards, then Save to add $captureId to golden set"
+        }
+    }
 }
+
+private data class CoreSettingsState(
+    val settings: AssistantSettings,
+    val message: String,
+    val goldenCount: Int,
+    val errorCaptureCount: Int
+)
+
+private data class EvalPanelStatePart1(
+    val evalReport: String,
+    val errorEvalReport: String,
+    val evaluating: Boolean,
+    val evaluatingErrors: Boolean,
+    val showGoldenReview: Boolean
+)
 
 class SettingsViewModelFactory(
     private val application: Application,

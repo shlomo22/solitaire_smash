@@ -106,7 +106,13 @@ object GoldenTruthJson {
                         ),
                         engine = guessFromJson(obj.getJSONObject("engine")),
                         truth = guessFromJson(obj.getJSONObject("truth")),
-                        inferred = obj.optBoolean("inferred", false)
+                        inferred = obj.optBoolean("inferred", false),
+                        confidence = obj.optDouble("confidence")
+                            .takeIf { !it.isNaN() && obj.has("confidence") }
+                            ?.toFloat(),
+                        diagnostic = obj.optString("diagnostic", "")
+                            .takeIf { it.isNotBlank() },
+                        trace = traceFromJson(obj.optJSONObject("trace"))
                     )
                 )
             }
@@ -143,6 +149,31 @@ object GoldenTruthJson {
             rank = rank,
             suit = suit,
             suitAmbiguous = obj.optBoolean("suitAmbiguous", false)
+        )
+    }
+
+    private fun traceFromJson(obj: JSONObject?): RecognitionTrace? {
+        if (obj == null) return null
+        val postStepsJson = obj.optJSONArray("postSteps")
+        val postSteps = buildList {
+            if (postStepsJson != null) {
+                for (i in 0 until postStepsJson.length()) {
+                    add(postStepsJson.getString(i))
+                }
+            }
+        }
+        return RecognitionTrace(
+            rankSource = obj.optString("rankSource", "").takeIf { it.isNotBlank() },
+            rankScore = obj.optDouble("rankScore")
+                .takeIf { !it.isNaN() && obj.has("rankScore") }
+                ?.toFloat(),
+            rankTemplates = obj.optString("rankTemplates", "").takeIf { it.isNotBlank() },
+            suitSource = obj.optString("suitSource", "").takeIf { it.isNotBlank() },
+            suitScore = obj.optDouble("suitScore")
+                .takeIf { !it.isNaN() && obj.has("suitScore") }
+                ?.toFloat(),
+            suitTemplates = obj.optString("suitTemplates", "").takeIf { it.isNotBlank() },
+            postSteps = postSteps
         )
     }
 

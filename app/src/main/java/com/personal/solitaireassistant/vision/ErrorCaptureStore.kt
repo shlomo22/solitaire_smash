@@ -2,6 +2,7 @@ package com.personal.solitaireassistant.vision
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -30,6 +31,25 @@ class ErrorCaptureStore(context: Context) {
             .filter { it.extension.equals("json", ignoreCase = true) }
             .map { it.nameWithoutExtension }
             .sorted()
+
+    fun listIdsNewestFirst(): List<String> = listIds().asReversed()
+
+    fun loadJsonText(id: String): String? {
+        val file = File(dir(), "$id.json")
+        if (!file.isFile) return null
+        return runCatching { file.readText() }.getOrNull()
+    }
+
+    fun loadSample(id: String): GoldenSample? {
+        val text = loadJsonText(id) ?: return null
+        return runCatching { GoldenTruthJson.fromJson(text) }.getOrNull()
+    }
+
+    fun loadBitmap(id: String): Bitmap? {
+        val file = File(dir(), "$id.png")
+        if (!file.isFile) return null
+        return BitmapFactory.decodeFile(file.absolutePath)
+    }
 
     fun nextId(): String =
         "error_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"

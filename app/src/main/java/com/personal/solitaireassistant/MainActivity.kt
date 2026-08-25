@@ -77,6 +77,18 @@ class MainActivity : ComponentActivity() {
                         onRecapture = {
                             viewModel.discardGoldenReview()
                             SolitaireSmashLauncher.launch(this)
+                        },
+                        initialTruths = snapshot.initialTruths,
+                        allowRecapture = snapshot.allowRecapture,
+                        title = if (snapshot.sourceErrorCaptureId != null) {
+                            "Import error capture"
+                        } else {
+                            "Confirm recognized cards"
+                        },
+                        subtitle = if (snapshot.sourceErrorCaptureId != null) {
+                            "Correct each card against the frozen PNG, then Save to add it to golden."
+                        } else {
+                            "Tap a row below to correct rank and suit. Inferred cascade cards are optional."
                         }
                     )
                 } else {
@@ -97,6 +109,10 @@ class MainActivity : ComponentActivity() {
                         onDebugFrames = viewModel::setDebugFrames,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
                         onDeleteErrorCaptures = viewModel::deleteErrorCaptures,
+                        onEvaluateErrorCaptures = viewModel::evaluateErrorCaptures,
+                        onImportErrorCapture = viewModel::openErrorCaptureImport,
+                        onDismissErrorCaptureImport = viewModel::dismissErrorCaptureImport,
+                        onSelectErrorCaptureImport = viewModel::importErrorCapture,
                         onOpenOverlaySettings = ::openOverlaySettings,
                         onStart = ::onStartClicked,
                         onStop = { CaptureService.stop(this) },

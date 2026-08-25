@@ -58,6 +58,10 @@ fun SettingsScreen(
     onDebugFrames: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
     onDeleteErrorCaptures: () -> Unit,
+    onEvaluateErrorCaptures: () -> Unit,
+    onImportErrorCapture: () -> Unit,
+    onDismissErrorCaptureImport: () -> Unit,
+    onSelectErrorCaptureImport: (String) -> Unit,
     onOpenOverlaySettings: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -270,7 +274,42 @@ fun SettingsScreen(
                         "'cd files/recognition_errors && tar cf - .' > errors.tar",
                     style = MaterialTheme.typography.bodySmall
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onEvaluateErrorCaptures,
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.evaluatingErrors &&
+                            !state.evaluating &&
+                            state.errorCaptureCount > 0
+                    ) {
+                        Text(if (state.evaluatingErrors) "Evaluating…" else "Evaluate")
+                    }
+                    OutlinedButton(
+                        onClick = onImportErrorCapture,
+                        modifier = Modifier.weight(1f),
+                        enabled = state.errorCaptureCount > 0
+                    ) {
+                        Text("Import")
+                    }
+                }
+                if (state.errorEvalReport.isNotBlank()) {
+                    Text(
+                        state.errorEvalReport,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
+        }
+
+        if (state.showErrorCaptureImport) {
+            ErrorCaptureImportDialog(
+                captureIds = state.errorCaptureImportIds,
+                onDismiss = onDismissErrorCaptureImport,
+                onImport = onSelectErrorCaptureImport
+            )
         }
 
         if (!canDrawOverlays) {
