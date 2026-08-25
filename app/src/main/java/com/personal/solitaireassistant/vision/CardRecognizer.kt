@@ -450,7 +450,12 @@ class CardRecognizer(
                     )
                     val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
                     val rankResolution =
-                        resolveRankFromCrop(effectiveRankCrop, rankScoreMap, trimmedToVisibleStrip)
+                        resolveRankFromCrop(
+                            crop = effectiveRankCrop,
+                            rankScoreMap = rankScoreMap,
+                            trimmedToVisibleStrip = trimmedToVisibleStrip,
+                            ocrCrop = crop
+                        )
                     val rank = rankResolution.rank
                     val rankTrace = buildRankTrace(
                         bitmapRankHit = rankResolution.bitmapRankHit,
@@ -588,8 +593,13 @@ class CardRecognizer(
                     .orEmpty()
             val suitScoreMap = suitSourceMasks?.let { suitScoresFromMasks(it, suitCandidates) }.orEmpty()
             val rankTemplates = RecognitionTrace.formatRankScores(rankScoreMap)
-            val rankResolution = effectiveRankCrop?.let {
-                resolveRankFromCrop(it, rankScoreMap, trimmedToVisibleStrip)
+            val rankResolution = effectiveRankCrop?.let { rankCrop ->
+                resolveRankFromCrop(
+                    crop = rankCrop,
+                    rankScoreMap = rankScoreMap,
+                    trimmedToVisibleStrip = trimmedToVisibleStrip,
+                    ocrCrop = crop ?: rankCrop
+                )
             }
             val rank = rankResolution?.rank
             val bitmapSuit = if (crop != null && suitSourceMasks != null) {
@@ -847,11 +857,16 @@ class CardRecognizer(
     private fun resolveRankFromCrop(
         crop: Bitmap,
         rankScoreMap: Map<Rank, Float>,
-        trimmedToVisibleStrip: Boolean = false
+        trimmedToVisibleStrip: Boolean = false,
+        ocrCrop: Bitmap = crop
     ): RankResolution {
         val bitmapRankHit = bestBitmapRank(rankScoreMap)
         val strongBitmap = bitmapRankHit != null && bitmapRankHit.second >= 0.68f
-        if (strongBitmap) {
+        val cascadeSixSevenOcr = CascadeRankCorrections.shouldChallengeStrongSeven(
+            trimmedToVisibleStrip,
+            bitmapRankHit
+        )
+        if (strongBitmap && !cascadeSixSevenOcr) {
             return RankResolution(
                 rank = bitmapRankHit,
                 bitmapRankHit = bitmapRankHit,
@@ -862,7 +877,7 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = bestRank(crop, trimmedToVisibleStrip)
+        val rankHit = if (cascadeSixSevenOcr) null else bestRank(crop, trimmedToVisibleStrip)
         // RankInkHeuristics.guess reads the large glyph in a card's CENTER -
         // on a tableau cascade card trimmed to just its own ~45-54px visible
         // header strip there is no center glyph, only the small corner digit
@@ -874,14 +889,15 @@ class CardRecognizer(
         // cause behind all four attempts at this bug so far - none of them
         // touched this heuristic, which is entirely separate from
         // rankSourceMasks/rankTemplateScoreMap.
-        val glyph = if (trimmedToVisibleStrip) null else RankInkHeuristics.guess(crop)
-        val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph)) {
-            val profile = if (trimmedToVisibleStrip) {
-                RankCornerOcr.CornerRoiProfile.TRIMMED
-            } else {
-                RankCornerOcr.CornerRoiProfile.DEFAULT
+        val glyph = if (trimmedToVisibleStrip || cascadeSixSevenOcr) null else RankInkHeuristics.guess(crop)
+        val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph) || cascadeSixSevenOcr) {
+            val profile = when {
+                cascadeSixSevenOcr -> RankCornerOcr.CornerRoiProfile.DEFAULT
+                trimmedToVisibleStrip -> RankCornerOcr.CornerRoiProfile.TRIMMED
+                else -> RankCornerOcr.CornerRoiProfile.DEFAULT
             }
-            rankCornerOcr?.attempt(crop, profile)
+            val ocrBitmap = if (cascadeSixSevenOcr) ocrCrop else crop
+            rankCornerOcr?.attempt(ocrBitmap, profile)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
         } else {
             null
@@ -895,7 +911,7 @@ class CardRecognizer(
             glyph = glyph,
             ocrGuess = ocrGuess,
             ocrTrace = ocrAttempt?.trace,
-            strongBitmap = false
+            strongBitmap = strongBitmap && rank == bitmapRankHit
         )
     }
 
@@ -933,6 +949,7 @@ class CardRecognizer(
         if (ranks.contains(Rank.Ten) && ranks.contains(Rank.Queen)) return true
         if (ranks.contains(Rank.King) && ranks.contains(Rank.Ten)) return true
         if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Three)) return true
+        if (ranks.contains(Rank.Six) && ranks.contains(Rank.Seven)) return true
         if (ranks.size >= 2) return true
         return false
     }
@@ -1677,7 +1694,10 @@ class CardRecognizer(
     ): Pair<Rank, Float>? {
         val base = pickRankBase(bitmapHit, rankHit, glyph)
         if (ocrGuess == null) return base
-        if (bitmapHit != null && bitmapHit.second >= 0.68f) return base
+        if (bitmapHit != null && bitmapHit.second >= 0.68f) {
+            CascadeRankCorrections.ocrSixOverridesStrongSeven(bitmapHit, ocrGuess)?.let { return it }
+            return base
+        }
 
         val candidates = rankCandidates(bitmapHit, rankHit, glyph)
         val matching = candidates.filter { it.first == ocrGuess.rank }
@@ -1711,6 +1731,12 @@ class CardRecognizer(
             ranks.contains(Rank.Three)
         ) {
             return Rank.Three to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Six &&
+            ranks.contains(Rank.Seven) &&
+            (ranks.contains(Rank.Six) || bitmapHit?.first == Rank.Seven)
+        ) {
+            return Rank.Six to ocrGuess.confidence.coerceAtLeast(0.52f)
         }
         // Every branch above only lets OCR confirm a rank some other source
         // already guessed, or step in on a few specific known confusions
