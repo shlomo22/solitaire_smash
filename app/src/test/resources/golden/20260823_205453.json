@@ -657,7 +657,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "King",
+        "rank": "Queen",
         "suit": "Clubs"
       }
     },

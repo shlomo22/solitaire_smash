@@ -233,7 +233,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Seven",
+        "rank": "Jack",
         "suit": "Hearts"
       }
     },
