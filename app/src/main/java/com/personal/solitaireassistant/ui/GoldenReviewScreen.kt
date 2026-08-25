@@ -3,8 +3,10 @@ package com.personal.solitaireassistant.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,7 +16,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -37,14 +41,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
+import com.personal.solitaireassistant.vision.ErrorCaptureReviewHints
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.SlotKind
+import com.personal.solitaireassistant.vision.SuspiciousSlotHint
+import kotlin.math.min
+import com.personal.solitaireassistant.vision.locationKey
 
 @Composable
 fun GoldenReviewScreen(
@@ -55,9 +64,18 @@ fun GoldenReviewScreen(
     onRecapture: () -> Unit,
     initialTruths: List<SlotGuess>? = null,
     allowRecapture: Boolean = true,
+    suspiciousHints: List<SuspiciousSlotHint> = emptyList(),
     title: String = "Confirm recognized cards",
     subtitle: String = "Tap a row below to correct rank and suit. Inferred cascade cards are optional."
 ) {
+    val hasSuspicious = suspiciousHints.isNotEmpty()
+    val helpText = buildString {
+        append(subtitle)
+        append("\nBadge colors: green = confident read, yellow~ = suit unclear, dim = inferred.")
+        if (hasSuspicious) {
+            append(" Orange rows/outlines = cards flagged by the error capture.")
+        }
+    }
     val truths = remember(slots, initialTruths) {
         mutableStateListOf<SlotGuess>().apply {
             addAll(initialTruths ?: slots.map { it.engine })
@@ -74,12 +92,14 @@ fun GoldenReviewScreen(
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge)
         Text(
-            subtitle,
+            helpText,
             style = MaterialTheme.typography.bodySmall
         )
 
         BoardSnapshotMap(
             bitmap = bitmap,
+            slots = slots,
+            suspiciousHints = suspiciousHints,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -97,6 +117,7 @@ fun GoldenReviewScreen(
                 SlotRow(
                     slot = slot,
                     truth = truth,
+                    suspiciousHint = ErrorCaptureReviewHints.hintFor(slot, suspiciousHints),
                     onClick = { editingIndex = index }
                 )
             }
@@ -146,19 +167,46 @@ fun GoldenReviewScreen(
 @Composable
 private fun BoardSnapshotMap(
     bitmap: Bitmap,
+    slots: List<RecognizedSlot>,
+    suspiciousHints: List<SuspiciousSlotHint>,
     modifier: Modifier = Modifier
 ) {
+    val suspiciousKeys = remember(suspiciousHints) {
+        ErrorCaptureReviewHints.locationKeys(suspiciousHints)
+    }
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
     ) {
+        val density = LocalDensity.current
+        val maxWidthPx = with(density) { maxWidth.toPx() }
+        val maxHeightPx = with(density) { maxHeight.toPx() }
+        val scale = min(maxWidthPx / bitmap.width, maxHeightPx / bitmap.height)
+        val drawnWidthPx = bitmap.width * scale
+        val drawnHeightPx = bitmap.height * scale
+        val offsetXPx = (maxWidthPx - drawnWidthPx) / 2f
+        val offsetYPx = (maxHeightPx - drawnHeightPx) / 2f
+
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = "Frozen board",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit
         )
+
+        slots.filter { suspiciousKeys.contains(it.locationKey()) }.forEach { slot ->
+            val leftDp = with(density) { (offsetXPx + slot.bounds.left * scale).toDp() }
+            val topDp = with(density) { (offsetYPx + slot.bounds.top * scale).toDp() }
+            val widthDp = with(density) { (slot.bounds.width * scale).toDp() }
+            val heightDp = with(density) { (slot.bounds.height * scale).toDp() }
+            Box(
+                modifier = Modifier
+                    .offset(x = leftDp, y = topDp)
+                    .size(width = widthDp, height = heightDp)
+                    .border(3.dp, Color(0xFFFF7043), RoundedCornerShape(4.dp))
+            )
+        }
     }
 }
 
@@ -166,14 +214,27 @@ private fun BoardSnapshotMap(
 private fun SlotRow(
     slot: RecognizedSlot,
     truth: SlotGuess,
+    suspiciousHint: SuspiciousSlotHint?,
     onClick: () -> Unit
 ) {
     val changed = truth != slot.engine
+    val rowColor = if (suspiciousHint != null) {
+        Color(0x33FF7043)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(rowColor)
+            .then(
+                if (suspiciousHint != null) {
+                    Modifier.border(1.dp, Color(0xFFFF7043), RoundedCornerShape(8.dp))
+                } else {
+                    Modifier
+                }
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -185,6 +246,13 @@ private fun SlotRow(
                 "Engine: ${slot.engine.shortLabel()}",
                 style = MaterialTheme.typography.bodySmall
             )
+            suspiciousHint?.let {
+                Text(
+                    "Problem: ${it.reason}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFE64A19)
+                )
+            }
         }
         Text(
             text = truth.shortLabel(),

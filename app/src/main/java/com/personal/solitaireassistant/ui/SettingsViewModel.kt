@@ -13,7 +13,9 @@ import com.personal.solitaireassistant.settings.AssistantPreferences
 import com.personal.solitaireassistant.settings.AssistantSettings
 import com.personal.solitaireassistant.vision.ErrorCaptureEvaluator
 import com.personal.solitaireassistant.vision.ErrorCaptureStore
+import com.personal.solitaireassistant.vision.ErrorCaptureReviewHints
 import com.personal.solitaireassistant.vision.GoldenSample
+import com.personal.solitaireassistant.vision.GoldenTruthJson
 import com.personal.solitaireassistant.pipeline.AnalysisFileLogger
 import com.personal.solitaireassistant.vision.GoldenTruthEvaluator
 import com.personal.solitaireassistant.vision.GoldenTruthStore
@@ -339,6 +341,13 @@ class SettingsViewModel(
                 return@launch
             }
             val (bitmap, sample, captureId) = loaded
+            val suspiciousHints = withContext(Dispatchers.IO) {
+                errorCaptureStore.loadJsonText(captureId)
+                    ?.let { GoldenTruthJson.parseErrorCaptureMeta(it) }
+                    ?.violations
+                    ?.let { ErrorCaptureReviewHints.fromViolations(it) }
+                    .orEmpty()
+            }
             PendingSnapshotHolder.clear()
             PendingSnapshotHolder.set(
                 PendingSnapshot(
@@ -347,7 +356,8 @@ class SettingsViewModel(
                     diagnostics = emptyList(),
                     initialTruths = sample.slots.map { it.truth },
                     allowRecapture = false,
-                    sourceErrorCaptureId = captureId
+                    sourceErrorCaptureId = captureId,
+                    suspiciousHints = suspiciousHints
                 )
             )
             showErrorCaptureImport.value = false

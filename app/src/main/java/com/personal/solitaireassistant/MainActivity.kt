@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
                         },
                         initialTruths = snapshot.initialTruths,
                         allowRecapture = snapshot.allowRecapture,
+                        suspiciousHints = snapshot.suspiciousHints,
                         title = if (snapshot.sourceErrorCaptureId != null) {
                             "Import error capture"
                         } else {
