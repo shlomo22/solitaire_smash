@@ -57,6 +57,7 @@ fun SettingsScreen(
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
+    onCaptureRawReadErrors: (Boolean) -> Unit,
     onDeleteErrorCaptures: () -> Unit,
     onCompactErrorCaptures: () -> Unit,
     onEvaluateErrorCaptures: () -> Unit,
@@ -251,6 +252,24 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.autoCaptureRecognitionErrors,
                         onCheckedChange = onAutoCaptureRecognitionErrors
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Also capture raw read errors")
+                        Text(
+                            "Save when slot reads violate deck rules even if deck-constraint fixed them.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = settings.captureRawReadErrors,
+                        onCheckedChange = onCaptureRawReadErrors,
+                        enabled = settings.autoCaptureRecognitionErrors
                     )
                 }
                 Row(

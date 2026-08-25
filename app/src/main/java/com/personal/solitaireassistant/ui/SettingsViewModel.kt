@@ -125,6 +125,10 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.updateAutoCaptureRecognitionErrors(enabled) }
     }
 
+    fun setCaptureRawReadErrors(enabled: Boolean) {
+        viewModelScope.launch { preferences.updateCaptureRawReadErrors(enabled) }
+    }
+
     fun setTransientMessage(message: String) {
         transient.value = message
     }

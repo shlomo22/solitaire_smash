@@ -24,7 +24,9 @@ data class DetectionResult(
     val diagnostics: List<String>,
     val board: LocatedBoard?,
     val recognizedSlots: List<RecognizedSlot> = emptyList(),
-    val livePlayScreen: Boolean = false
+    val livePlayScreen: Boolean = false,
+    /** State after suit scrub, before [DeckConstraintPass]. */
+    val preConstraintState: GameState? = null
 )
 
 class GameStateDetector(
@@ -1130,7 +1132,8 @@ class GameStateDetector(
             diagnostics = diagnostics,
             board = board,
             recognizedSlots = recognizedSlots,
-            livePlayScreen = livePlayScreen
+            livePlayScreen = livePlayScreen,
+            preConstraintState = scrubbed
         )
     }
 

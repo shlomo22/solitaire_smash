@@ -22,10 +22,10 @@ import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.ErrorCaptureMeta
+import com.personal.solitaireassistant.vision.ErrorCapturePolicy
 import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GameStateDetector
 import com.personal.solitaireassistant.vision.GoldenSample
-import com.personal.solitaireassistant.vision.BoardRecognitionValidator
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.RecognitionViolation
 import com.personal.solitaireassistant.vision.RejectedSnapshotStore
@@ -342,8 +342,11 @@ class AnalysisPipeline(
         // bypass the 2-frame stability gate (reliableFirstHit / fastUpdateAfterMove).
         if (stableHits < 2) return
         if (lastErrorCaptureSignature == signature) return
-        val violations = BoardRecognitionValidator.validate(state)
-        if (violations.isEmpty()) return
+        val captureDecision = ErrorCapturePolicy.decide(
+            finalState = state,
+            preConstraintState = detection.preConstraintState,
+            captureRawReadErrors = settings.captureRawReadErrors
+        ) ?: return
         if (!detection.livePlayScreen) return
         val frameCopy = frameBitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
         val snapshot = PendingSnapshot(
@@ -355,7 +358,8 @@ class AnalysisPipeline(
             snapshot = snapshot,
             detection = detection,
             signature = signature,
-            violations = violations
+            violations = captureDecision.violations,
+            violationSource = captureDecision.violationSource
         )
     }
 
@@ -363,7 +367,8 @@ class AnalysisPipeline(
         snapshot: PendingSnapshot,
         detection: DetectionResult,
         signature: String,
-        violations: List<RecognitionViolation>
+        violations: List<RecognitionViolation>,
+        violationSource: String
     ) {
         val id = errorCaptureStore.nextId()
         val sample = GoldenSample(
@@ -377,7 +382,8 @@ class AnalysisPipeline(
             stableHits = stableHits,
             detectionConfidence = detection.confidence,
             diagnostics = detection.diagnostics,
-            violations = violations
+            violations = violations,
+            violationSource = violationSource
         )
         val violationSummary = violations.joinToString(",") { it.summary() }
         lastErrorCaptureSignature = signature
@@ -385,7 +391,7 @@ class AnalysisPipeline(
             try {
                 errorCaptureStore.save(snapshot.bitmap, sample, meta)
                 fileLogger.append(
-                    "ERROR_CAPTURE id=$id path=${errorCaptureStore.dir().absolutePath} " +
+                    "ERROR_CAPTURE id=$id source=$violationSource path=${errorCaptureStore.dir().absolutePath} " +
                         "violations=$violationSummary"
                 )
                 statusSink("Saved recognition error $id")

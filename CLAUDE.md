@@ -18,7 +18,9 @@ within it.
    discipline" below).
 2. Bump `versionCode`/`versionName` in `app/build.gradle.kts` (always — every push
    needs a distinguishable version so a screenshot proves which build ran).
-3. Commit and push to the branch in use.
+3. **Always commit and push in the same turn** once the version is bumped — do not
+   leave a version bump sitting uncommitted or wait for a separate "commit and push"
+   request. That push is part of finishing the round, not an optional follow-up.
 4. The user pulls, runs `./gradlew assembleDebug`, installs via `adb install -r`,
    opens the app's **Golden truth → Evaluate** button, and pastes back a screenshot
    + `analysis.log`.
