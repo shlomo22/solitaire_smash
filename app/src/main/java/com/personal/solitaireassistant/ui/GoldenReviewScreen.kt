@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -16,9 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -41,7 +38,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.personal.solitaireassistant.game.PileRef
@@ -52,8 +48,6 @@ import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.SlotKind
 import com.personal.solitaireassistant.vision.SuspiciousSlotHint
-import kotlin.math.min
-import com.personal.solitaireassistant.vision.locationKey
 
 @Composable
 fun GoldenReviewScreen(
@@ -73,7 +67,7 @@ fun GoldenReviewScreen(
         append(subtitle)
         append("\nBadge colors: green = confident read, yellow~ = suit unclear, dim = inferred.")
         if (hasSuspicious) {
-            append(" Orange rows/outlines = cards flagged by the error capture.")
+            append(" Orange rows = cards flagged by the error capture.")
         }
     }
     val truths = remember(slots, initialTruths) {
@@ -98,8 +92,6 @@ fun GoldenReviewScreen(
 
         BoardSnapshotMap(
             bitmap = bitmap,
-            slots = slots,
-            suspiciousHints = suspiciousHints,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
@@ -167,46 +159,19 @@ fun GoldenReviewScreen(
 @Composable
 private fun BoardSnapshotMap(
     bitmap: Bitmap,
-    slots: List<RecognizedSlot>,
-    suspiciousHints: List<SuspiciousSlotHint>,
     modifier: Modifier = Modifier
 ) {
-    val suspiciousKeys = remember(suspiciousHints) {
-        ErrorCaptureReviewHints.locationKeys(suspiciousHints)
-    }
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
     ) {
-        val density = LocalDensity.current
-        val maxWidthPx = with(density) { maxWidth.toPx() }
-        val maxHeightPx = with(density) { maxHeight.toPx() }
-        val scale = min(maxWidthPx / bitmap.width, maxHeightPx / bitmap.height)
-        val drawnWidthPx = bitmap.width * scale
-        val drawnHeightPx = bitmap.height * scale
-        val offsetXPx = (maxWidthPx - drawnWidthPx) / 2f
-        val offsetYPx = (maxHeightPx - drawnHeightPx) / 2f
-
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = "Frozen board",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit
         )
-
-        slots.filter { suspiciousKeys.contains(it.locationKey()) }.forEach { slot ->
-            val leftDp = with(density) { (offsetXPx + slot.bounds.left * scale).toDp() }
-            val topDp = with(density) { (offsetYPx + slot.bounds.top * scale).toDp() }
-            val widthDp = with(density) { (slot.bounds.width * scale).toDp() }
-            val heightDp = with(density) { (slot.bounds.height * scale).toDp() }
-            Box(
-                modifier = Modifier
-                    .offset(x = leftDp, y = topDp)
-                    .size(width = widthDp, height = heightDp)
-                    .border(3.dp, Color(0xFFFF7043), RoundedCornerShape(4.dp))
-            )
-        }
     }
 }
 
