@@ -428,7 +428,25 @@ class TableauCascadeSupportTest {
             bottomHit = hit
         )
         assertEquals(Rank.Jack, repaired.rank)
-        assertEquals(Suit.Hearts, repaired.suit)
+        assertEquals(Suit.Hearts, repaired.suit        )
+    }
+
+    @Test
+    fun prefersGeometricForEvaluateAceClusterOverQueen() {
+        val bottomJack = Card(Rank.Jack, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomJack, 1)
+        val direct = Card(Rank.Ace, Suit.Clubs, faceUp = true, known = true)
+        assertEquals(Rank.Queen, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomJack,
+                bottomReadConfidence = 0.83f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.86f,
+                rankCountConsistent = false
+            )
+        )
     }
 
     @Test

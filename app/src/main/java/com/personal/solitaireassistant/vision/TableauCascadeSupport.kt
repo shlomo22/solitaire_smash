@@ -16,6 +16,12 @@ internal object TableauCascadeSupport {
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
     private const val ILLEGAL_BOTTOM_OVERRIDE_FLOOR = 0.80f
+    /**
+     * Mid-cascade Ace reads are almost never legal (Ace is the bottom of a
+     * tableau run). 0.85 left Evaluate's 0.86–0.87 Ace cluster in place
+     * (20260818_080819 QS vs AC, 20260822_171728 9D vs AD, Jack vs Ace).
+     */
+    private const val ACE_FALSE_POSITIVE_FLOOR = 0.90f
 
     fun geometricCascadeCard(
         bottomCard: Card,
@@ -158,7 +164,7 @@ internal object TableauCascadeSupport {
 
         if (directCard.rank == Rank.Ace &&
             geometric.rank != Rank.Ace &&
-            directConfidence < 0.85f
+            directConfidence < ACE_FALSE_POSITIVE_FLOOR
         ) {
             return true
         }
