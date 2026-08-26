@@ -226,15 +226,19 @@ class SettingsViewModel(
             evaluating.value = true
             transient.value = "Evaluating golden set…"
             val report = withContext(Dispatchers.Default) {
-                val result = GoldenTruthEvaluator.evaluate(getApplication(), store)
                 val logger = AnalysisFileLogger(getApplication())
-                logger.append("=== golden evaluate ===")
-                result.summary().lines().forEach { line -> logger.append(line) }
-                val traceBlock = result.mismatchTraceBlock()
-                if (traceBlock.isNotBlank()) {
-                    traceBlock.lines().forEach { line -> logger.append(line) }
+                try {
+                    val result = GoldenTruthEvaluator.evaluate(getApplication(), store)
+                    logger.append("=== golden evaluate ===")
+                    result.summary().lines().forEach { line -> logger.append(line) }
+                    val traceBlock = result.mismatchTraceBlock()
+                    if (traceBlock.isNotBlank()) {
+                        traceBlock.lines().forEach { line -> logger.append(line) }
+                    }
+                    result
+                } finally {
+                    logger.append("===EVALUATE_DONE===")
                 }
-                result
             }
             evalReport.value = report.summary()
             evaluating.value = false
@@ -297,15 +301,19 @@ class SettingsViewModel(
             evaluatingErrors.value = true
             transient.value = "Evaluating error captures…"
             val report = withContext(Dispatchers.Default) {
-                val result = ErrorCaptureEvaluator.evaluate(getApplication(), errorCaptureStore)
                 val logger = AnalysisFileLogger(getApplication())
-                logger.append("=== error capture evaluate ===")
-                result.summary().lines().forEach { line -> logger.append(line) }
-                val detail = result.detailBlock()
-                if (detail.isNotBlank()) {
-                    detail.lines().forEach { line -> logger.append(line) }
+                try {
+                    val result = ErrorCaptureEvaluator.evaluate(getApplication(), errorCaptureStore)
+                    logger.append("=== error capture evaluate ===")
+                    result.summary().lines().forEach { line -> logger.append(line) }
+                    val detail = result.detailBlock()
+                    if (detail.isNotBlank()) {
+                        detail.lines().forEach { line -> logger.append(line) }
+                    }
+                    result
+                } finally {
+                    logger.append("===EVALUATE_DONE===")
                 }
-                result
             }
             errorEvalReport.value = report.summary()
             evaluatingErrors.value = false
