@@ -22,10 +22,38 @@ within it.
    leave a version bump sitting uncommitted or wait for a separate "commit and push"
    request. That push is part of finishing the round, not an optional follow-up.
 4. The user pulls, runs `./gradlew assembleDebug`, installs via `adb install -r`,
-   opens the app's **Golden truth → Evaluate** button, and pastes back a screenshot
-   + `analysis.log`.
+   and taps **Golden truth → Evaluate**. Then they run
+   `powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1`, which
+   writes `analysis.log` + `screenshot.png` to `pulled/<timestamp>/` and copies
+   the same pair to **`pulled/latest/`**.
 5. Only real device evidence (the log, the golden-truth accuracy numbers, real pixel
    crops) counts as validation. Never claim a fix works without it.
+
+### "Read latest pull" / "pull artifacts"
+
+When the user says **read latest pull** (or "latest pull", "look at the latest
+evaluate"), read these two files — do not wait for a pasted screenshot or an
+older `pulled/<timestamp>/` folder:
+
+- `pulled/latest/screenshot.png` — Evaluate UI (version, 5169/5317-style totals,
+  confusion buckets, example mismatch lines)
+- `pulled/latest/analysis.log` — full mismatch traces (`rank=`, `suit=`,
+  `post=[...]`, `diag=`, `bottom-repair:`, `deck-constraint:`, `geom-override:`,
+  `probe=`)
+
+When the user says **pull artifacts** (or "run pull-artifacts", "pull and
+read"), first run from the repo root:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1
+```
+
+That copies `analysis.log` + a screen capture into `pulled/<timestamp>/` and
+`pulled/latest/`. Then read `pulled/latest` as above. Needs a connected device
+with the debug app installed and Evaluate already tapped.
+
+`pulled/` is gitignored. Prefer `pulled/latest` over chat image attachments from
+earlier rounds; those can be a previous Evaluate.
 
 `gradle.properties` pins `org.gradle.java.home` to the *user's* Windows JDK path —
 don't edit it; override with `-Dorg.gradle.java.home=$JAVA_HOME` for any local

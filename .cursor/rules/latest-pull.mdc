@@ -1,0 +1,23 @@
+---
+description: After Evaluate, artifacts live in pulled/latest — read those when the user says "latest pull"
+alwaysApply: true
+---
+
+# Latest Evaluate pull
+
+After each **Golden truth → Evaluate**, the user runs `scripts/pull-artifacts.ps1`
+manually. That writes `analysis.log` and `screenshot.png` under `pulled/<timestamp>/`
+and copies them to **`pulled/latest/`**.
+
+When the user says **read latest pull** (or equivalent), read:
+
+- `pulled/latest/screenshot.png`
+- `pulled/latest/analysis.log`
+
+When the user says **pull artifacts** (or "run pull-artifacts", "pull and read"):
+
+1. Run `powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1` from the repo root (needs a connected device; Evaluate should already have been tapped).
+2. Then read `pulled/latest/screenshot.png` and `pulled/latest/analysis.log`.
+
+Do not wait for a pasted screenshot. Prefer `pulled/latest` over older timestamped
+folders and over chat images from earlier rounds.
