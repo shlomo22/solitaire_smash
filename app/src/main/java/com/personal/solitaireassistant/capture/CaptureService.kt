@@ -109,6 +109,7 @@ class CaptureService : Service() {
     }
 
 
+
     private fun beginProjection(resultCode: Int, data: Intent) {
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val projection = try {
