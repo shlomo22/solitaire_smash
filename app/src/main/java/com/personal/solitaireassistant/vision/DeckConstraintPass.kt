@@ -168,6 +168,18 @@ object DeckConstraintPass {
         return kotlin.math.abs(club - spade) < BLACK_SUIT_NEAR_TIE_MARGIN
     }
 
+    /**
+     * Ace geom-overrides copy the Ace crop's C↔S onto the geometric rank.
+     * Evaluate v1.4.73: QS vs QC~ (Ace_Clubs 0.86 → Queen_Clubs, C0.70/S0.63)
+     * and JC vs JS~ (Ace_Spades 0.87 → Jack_Spades). That 0.07 Clubs lead is
+     * past [BLACK_SUIT_NEAR_TIE_MARGIN], so duplicate replacement locked the
+     * Ace suit. The Ace glyph is not a pip — if this weaker slot collides
+     * and the partner id is free, take the partner.
+     */
+    private fun isAceGeomOverride(entry: Entry): Boolean =
+        entry.originalDiagnostic.startsWith("geom-override:") &&
+            entry.originalDiagnostic.contains("match-Ace-")
+
     private fun resolvePartnerSuitSwaps(
         bitmap: Bitmap,
         recognizer: CardRecognizer,
@@ -392,7 +404,9 @@ object DeckConstraintPass {
         entry: Entry,
         usedIds: Set<String>
     ): Card {
-        if (!entry.card.suit.isRed && isBlackSuitNearTie(entry)) {
+        if (!entry.card.suit.isRed &&
+            (isBlackSuitNearTie(entry) || isAceGeomOverride(entry))
+        ) {
             val partner = partnerSuit(entry.card.suit)
             val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
             if (partnerCard.id !in usedIds) {
