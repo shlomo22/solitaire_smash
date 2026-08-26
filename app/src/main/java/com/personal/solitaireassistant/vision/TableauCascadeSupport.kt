@@ -104,7 +104,6 @@ internal object TableauCascadeSupport {
         }
         // Doubly-anchored adjacent glyph confusions keep scoring above 0.75 while
         // still wrong — raise the floor when both anchors agree.
-        // Device Evaluate v1.4.50: Three→Two (12), Six→Seven (12) joined 3/4/5/6/8/9.
         if (rankCountConsistent &&
             rankMismatch &&
             isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
@@ -112,8 +111,18 @@ internal object TableauCascadeSupport {
         ) {
             return true
         }
-        // Color-family flips on a consistent run (Clubs→Diamonds was the #1
-        // Evaluate confusion at 20) — geometry already knows red vs black.
+        // Same-rank color-family flips (Clubs→Diamonds was top Evaluate bucket).
+        // Geometry's alternating color from the bottom card is trustworthy even
+        // when leading/bottom rank-count isn't locked — requiring
+        // rankCountConsistent left almost all of these on the floor.
+        if (!rankMismatch &&
+            colorMismatch &&
+            bottomReadConfidence >= BOTTOM_ANCHOR_FLOOR &&
+            directConfidence < COLOR_MISMATCH_FLOOR
+        ) {
+            return true
+        }
+        // Color flips on a consistent run at slightly higher confidence.
         if (rankCountConsistent &&
             colorMismatch &&
             directConfidence < COLOR_MISMATCH_FLOOR
@@ -145,7 +154,11 @@ internal object TableauCascadeSupport {
             return true
         }
 
-        if (isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
+        // Bottom-only adjacent pairs: only the historically validated set.
+        // Two/Three and Six/Seven stay doubly-anchored-only — a misread Ace
+        // bottom otherwise invents geometric Two and steals a correct Three
+        // (Evaluate Three→Two stayed at 12 after adding 2/3 broadly).
+        if (isBottomOnlyAdjacentConfusionPair(directCard.rank, geometric.rank) &&
             directConfidence < ADJACENT_CONFUSION_FLOOR
         ) {
             return true
@@ -168,6 +181,14 @@ internal object TableauCascadeSupport {
             setOf(Rank.Three, Rank.Four),
             setOf(Rank.Five, Rank.Six),
             setOf(Rank.Six, Rank.Seven),
+            setOf(Rank.Eight, Rank.Nine) -> true
+            else -> false
+        }
+
+    private fun isBottomOnlyAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
+        when (setOf(first, second)) {
+            setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Five, Rank.Six),
             setOf(Rank.Eight, Rank.Nine) -> true
             else -> false
         }

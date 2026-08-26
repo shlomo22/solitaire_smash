@@ -204,6 +204,46 @@ class TableauCascadeSupportTest {
     }
 
     @Test
+    fun prefersGeometricForSameRankColorFlipWithoutRankCountLock() {
+        // Real pattern: Six♣ above Five♥ misread as Six♦ — ranks agree, color wrong.
+        val bottomFive = Card(Rank.Five, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFive, 1)
+        val direct = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true)
+        assertEquals(Rank.Six, geometric.rank)
+        assertTrue(!geometric.suit.isRed)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFive,
+                bottomReadConfidence = 0.88f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.84f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun doesNotPreferTwoThreeGeometryFromAceBottomWithoutConsistentRun() {
+        // Misread Ace bottom invents geometric Two; a correct Three direct read
+        // must not be stolen when rank-count isn't locked.
+        val bottomAce = Card(Rank.Ace, Suit.Spades, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomAce, 1)
+        val direct = Card(Rank.Three, Suit.Hearts, faceUp = true, known = true)
+        assertEquals(Rank.Two, geometric.rank)
+        assertFalse(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomAce,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.80f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
     fun prefersGeometricForEightNineWhenDoublyAnchored() {
         val bottomSeven = Card(Rank.Seven, Suit.Diamonds, faceUp = true, known = true)
         val geometric = TableauCascadeSupport.geometricCascadeCard(bottomSeven, 2)
