@@ -100,10 +100,13 @@ object DeckConstraintPass {
 
     /**
      * Black-suit deck occupancy: flip to the partner suit when the current id is
-     * already taken and the partner is free. Waste flips unconditionally (one
-     * slot). Elsewhere only when the read was ambiguous or a genuine C-vs-S
-     * near-tie — never guess from a narrow margin when both ids are still free.
-     * Red ambiguous duplicates stay on the old ambiguous pass below.
+     * already taken and the partner is free. Duplicate ids (including waste vs
+     * tableau) are resolved by [resolveDuplicateCardIds], which keeps the
+     * stronger read — flipping waste unconditionally broke genuine waste Clubs
+     * (golden 20260823_114903 Ten-Clubs, 20260824_040931 Six-Clubs). Elsewhere
+     * only when the read was ambiguous or a genuine C-vs-S near-tie — never
+     * guess from a narrow margin when both ids are still free. Red ambiguous
+     * duplicates stay on the old ambiguous pass below.
      */
     private fun resolveBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
@@ -113,13 +116,10 @@ object DeckConstraintPass {
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
             val partnerTaken = others.any { it.card.id == partnerCard.id }
             val currentTaken = others.any { it.card.id == entry.card.id }
-            val waste = entry.pile == PileRef.Waste
-            if (!waste && !qualifiesForBlackDeckOccupancy(entry)) return@forEach
+            if (!qualifiesForBlackDeckOccupancy(entry)) return@forEach
             when {
-                currentTaken && !partnerTaken -> {
-                    // Two non-waste slots sharing an id are handled by dedup.
-                    if (waste) entry.card = partnerCard
-                }
+                currentTaken && !partnerTaken ->
+                    entry.card = partnerCard
                 partnerTaken && !currentTaken ->
                     entry.card = entry.card.copy(suitAmbiguous = false)
                 else -> Unit

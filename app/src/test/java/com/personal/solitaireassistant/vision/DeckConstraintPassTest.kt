@@ -9,6 +9,7 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -338,6 +339,51 @@ class DeckConstraintPassTest {
             assertEquals(Suit.Clubs, result.foundations[0].last().suit)
             assertEquals(Suit.Spades, result.waste.last().suit)
             assertEquals(Suit.Spades, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun strongWasteClubsKeepsSuitWhenWeakerTableauDuplicates() {
+        val wasteTen = slot(
+            pile = PileRef.Waste,
+            index = 0,
+            rank = Rank.Ten,
+            suit = Suit.Clubs,
+            confidence = 0.95f,
+            diagnostic = "fused-Ten-Clubs"
+        )
+        val tableauTen = slot(
+            pile = PileRef.Tableau(6),
+            index = 6,
+            rank = Rank.Ten,
+            suit = Suit.Clubs,
+            confidence = 0.93f,
+            diagnostic = "match-Ten-Clubs-ambiguous@0.93",
+            suitAmbiguous = true
+        )
+        val recognized = mutableListOf(wasteTen.slot, tableauTen.slot)
+        val tableauColumn = List(6) { Card(Rank.Two, Suit.Hearts, faceUp = true) } + listOf(tableauTen.card)
+        val state = GameState(
+            tableau = List(6) { emptyList<Card>() } + listOf(tableauColumn),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = listOf(wasteTen.card)
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.waste.last().suit)
+            assertEquals(Suit.Clubs, recognized[0].engine.suit)
+            assertNotEquals(Suit.Clubs, recognized[1].engine.suit)
         } finally {
             bitmap.recycle()
             recognizer.release()
