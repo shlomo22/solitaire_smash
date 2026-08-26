@@ -410,6 +410,28 @@ class TableauCascadeSupportTest {
     }
 
     @Test
+    fun repairIllegalBottomKeepsStrongJackUnderWrongKing() {
+        val above = Card(Rank.King, Suit.Spades, faceUp = true, known = true)
+        val bottom = Card(Rank.Jack, Suit.Hearts, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottom,
+            confidence = 0.83f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Jack-Hearts@0.83",
+            trace = RecognitionTrace(suitTemplates = "H:0.94 D:0.80")
+        )
+        val repaired = TableauCascadeSupport.repairIllegalBottom(
+            cardAbove = above,
+            bottom = bottom,
+            bottomConfidence = 0.83f,
+            bottomHit = hit
+        )
+        assertEquals(Rank.Jack, repaired.rank)
+        assertEquals(Suit.Hearts, repaired.suit)
+    }
+
+    @Test
     fun prefersGeometricForStrongishAceWhenGeometrySaysJack() {
         val bottomTen = Card(Rank.Ten, Suit.Hearts, faceUp = true, known = true)
         val geometric = TableauCascadeSupport.geometricCascadeCard(bottomTen, 1)

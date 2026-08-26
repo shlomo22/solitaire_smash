@@ -15,7 +15,7 @@ internal object TableauCascadeSupport {
     private const val WEAK_JACK_FLOOR = 0.65f
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
-    private const val ILLEGAL_BOTTOM_OVERRIDE_FLOOR = 0.90f
+    private const val ILLEGAL_BOTTOM_OVERRIDE_FLOOR = 0.80f
 
     fun geometricCascadeCard(
         bottomCard: Card,
@@ -60,8 +60,14 @@ internal object TableauCascadeSupport {
     /**
      * When the fully-visible bottom card cannot legally stack under the card
      * above it, prefer the geometric card-below unless the bottom read is
-     * extremely strong. New golden 20260826_070842: 5♥-4♠ over a real 3♦
-     * misread as 8♦ — geometry from 4♠ recovers 3 of red.
+     * strong. New golden 20260826_070842: 5♥-4♠ over a real 3♦ misread as 8♦
+     * at 0.72 — geometry from 4♠ recovers 3 of red.
+     *
+     * 0.90 was too high: Evaluate 20260814_125128 / 192324 / 192510 read the
+     * bottom Jack correctly at 0.83, then this pass overwrote it to Queen to
+     * fit a wrong King immediately above (leadingUnknown mid-cascade). 0.80
+     * matches [BOTTOM_ANCHOR_FLOOR] and still lets the 0.72 Eight→Three case
+     * through.
      */
     fun repairIllegalBottom(
         cardAbove: Card?,
