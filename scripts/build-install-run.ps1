@@ -16,7 +16,11 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "== Building debug APK =="
-& $GradlewPath assembleDebug
+# --no-configuration-cache: this runner reuses the same checkout between
+# runs (unlike GitHub-hosted runners), so a stale cached configuration
+# from an earlier failed build (e.g. before ANDROID_HOME was set here)
+# could otherwise get replayed instead of re-evaluated.
+& $GradlewPath assembleDebug --no-configuration-cache
 if ($LASTEXITCODE -ne 0) { throw "Gradle build failed (exit $LASTEXITCODE)" }
 
 Write-Host "== Checking device connection =="
@@ -27,7 +31,7 @@ if (-not ($devices -match "\bdevice\b")) {
 }
 
 Write-Host "== Installing on device =="
-& $GradlewPath installDebug
+& $GradlewPath installDebug --no-configuration-cache
 if ($LASTEXITCODE -ne 0) { throw "Install failed (exit $LASTEXITCODE)" }
 
 Write-Host "== Clearing logcat buffer (so a later pull starts clean from this run) =="
