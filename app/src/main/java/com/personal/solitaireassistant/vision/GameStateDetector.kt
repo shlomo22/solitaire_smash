@@ -548,9 +548,9 @@ class GameStateDetector(
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
                     val headerStats = SmashColorAnalyzer.analyze(bitmap, headerRegion)
                     val inkSaysRed = headerStats.redInkRatio >
-                        headerStats.blackInkRatio * 1.08f
+                        headerStats.blackInkRatio * 1.20f
                     val inkSaysBlack = headerStats.blackInkRatio >
-                        headerStats.redInkRatio * 1.08f
+                        headerStats.redInkRatio * 1.20f
                     val inkDisagreesWithDirectSuit = slotCard?.known == true && (
                         (inkSaysBlack && slotCard.suit.isRed) ||
                             (inkSaysRed && !slotCard.suit.isRed)
@@ -985,33 +985,6 @@ class GameStateDetector(
                 legacyCard = legacyCard,
                 tightCard = tightCard
             )
-        } ?: run {
-            val clubsCandidate = correctedSuit ?: baseCard?.suit
-            if (clubsCandidate != Suit.Clubs) {
-                null
-            } else {
-                val left = tightWasteRegion.left.toInt().coerceIn(0, bitmap.width - 1)
-                val top = tightWasteRegion.top.toInt().coerceIn(0, bitmap.height - 1)
-                val right = tightWasteRegion.right.toInt().coerceIn(left + 1, bitmap.width)
-                val bottom = tightWasteRegion.bottom.toInt().coerceIn(top + 1, bitmap.height)
-                if (right - left < 8 || bottom - top < 8) {
-                    null
-                } else {
-                    val shapeCrop = Bitmap.createBitmap(
-                        bitmap,
-                        left,
-                        top,
-                        right - left,
-                        bottom - top
-                    )
-                    try {
-                        val shape = SuitBadgeHeuristics.guessBlackSuit(shapeCrop)
-                        WasteRankCorrections.preferWasteSpadeFromShape(Suit.Clubs, shape)
-                    } finally {
-                        shapeCrop.recycle()
-                    }
-                }
-            }
         }
         val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
         val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {

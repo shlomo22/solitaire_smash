@@ -47,27 +47,4 @@ class WasteBlackSuitCorrectionTest {
         )
         assertNull(suit)
     }
-
-    @Test
-    fun strongSpadeShapeFlipsFusedClubs() {
-        val shape = SuitBadgeHeuristics.Guess(
-            suit = Suit.Spades,
-            confidence = 0.80f,
-            margin = 0.85f
-        )
-        assertEquals(
-            Suit.Spades,
-            WasteRankCorrections.preferWasteSpadeFromShape(Suit.Clubs, shape)
-        )
-    }
-
-    @Test
-    fun weakSpadeShapeDoesNotFlipFusedClubs() {
-        val shape = SuitBadgeHeuristics.Guess(
-            suit = Suit.Spades,
-            confidence = 0.60f,
-            margin = 0.50f
-        )
-        assertNull(WasteRankCorrections.preferWasteSpadeFromShape(Suit.Clubs, shape))
-    }
 }

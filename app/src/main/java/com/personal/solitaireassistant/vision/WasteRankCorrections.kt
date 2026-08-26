@@ -236,23 +236,6 @@ internal object WasteRankCorrections {
     }
 
     /**
-     * When both waste crops committed Clubs but the badge shape is a strong
-     * Spade (Evaluate waste 6S→6C / JS→JC), prefer Spades. Real shape margins
-     * split ~0.50 (Clubs) vs ~1.08 (Spades); require well above the Clubs cluster.
-     */
-    fun preferWasteSpadeFromShape(
-        currentSuit: Suit?,
-        shape: SuitBadgeHeuristics.Guess?
-    ): Suit? {
-        if (currentSuit != Suit.Clubs) return null
-        if (shape == null || shape.suit != Suit.Spades) return null
-        if (shape.margin < WASTE_SPADE_SHAPE_MARGIN) return null
-        return Suit.Spades
-    }
-
-    const val WASTE_SPADE_SHAPE_MARGIN = 0.70f
-
-    /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
      * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/7, 6/9, K/10, Q/K, Q/10).
      * Eight vs Six/Seven is directed (OCR Eight wins; OCR Six does not steal Eight).
