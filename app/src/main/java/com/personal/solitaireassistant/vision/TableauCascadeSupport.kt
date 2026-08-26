@@ -8,8 +8,10 @@ import kotlin.math.abs
 internal object TableauCascadeSupport {
     const val MIN_READ_CONFIDENCE = 0.55f
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
-    /** Adjacent glyph confusions (3/4, 5/6, 8/9) need a higher bar to beat geometry. */
+    /** Adjacent glyph confusions need a higher bar to beat geometry. */
     const val ADJACENT_CONFUSION_FLOOR = 0.82f
+    /** Color-only mismatches on a doubly-anchored run (e.g. Clubs→Diamonds). */
+    const val COLOR_MISMATCH_FLOOR = 0.85f
     private const val WEAK_JACK_FLOOR = 0.65f
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
@@ -100,8 +102,9 @@ internal object TableauCascadeSupport {
         if (rankCountConsistent && directConfidence < STRONG_DIRECT_READ_FLOOR) {
             return true
         }
-        // Doubly-anchored adjacent glyph confusions (3/4, 5/6, 8/9) keep scoring
-        // above 0.75 while still wrong — raise the floor when both anchors agree.
+        // Doubly-anchored adjacent glyph confusions keep scoring above 0.75 while
+        // still wrong — raise the floor when both anchors agree.
+        // Device Evaluate v1.4.50: Three→Two (12), Six→Seven (12) joined 3/4/5/6/8/9.
         if (rankCountConsistent &&
             rankMismatch &&
             isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
@@ -109,8 +112,16 @@ internal object TableauCascadeSupport {
         ) {
             return true
         }
+        // Color-family flips on a consistent run (Clubs→Diamonds was the #1
+        // Evaluate confusion at 20) — geometry already knows red vs black.
+        if (rankCountConsistent &&
+            colorMismatch &&
+            directConfidence < COLOR_MISMATCH_FLOOR
+        ) {
+            return true
+        }
         // suitAmbiguous + wrong rank under a consistent run is almost always a
-        // bad mid-strip read (new golden 8↔9 / 3→4 cases carried ~).
+        // bad mid-strip read (8↔9 / 3→4 cases carried ~).
         if (rankCountConsistent &&
             rankMismatch &&
             directCard.suitAmbiguous
@@ -153,8 +164,10 @@ internal object TableauCascadeSupport {
 
     private fun isAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
         when (setOf(first, second)) {
+            setOf(Rank.Two, Rank.Three),
             setOf(Rank.Three, Rank.Four),
             setOf(Rank.Five, Rank.Six),
+            setOf(Rank.Six, Rank.Seven),
             setOf(Rank.Eight, Rank.Nine) -> true
             else -> false
         }
