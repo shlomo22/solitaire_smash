@@ -15,6 +15,14 @@
 . "$PSScriptRoot\config.ps1"
 $ErrorActionPreference = "Stop"
 
+Write-Host "== Debug: environment check =="
+Write-Host "Running as user: $env:USERNAME (whoami: $(whoami))"
+Write-Host "ANDROID_HOME env var = '$env:ANDROID_HOME'"
+Write-Host "ANDROID_SDK_ROOT env var = '$env:ANDROID_SDK_ROOT'"
+Write-Host "AndroidSdkPath variable = '$AndroidSdkPath'"
+Write-Host "Test-Path on that SDK folder = $(Test-Path $AndroidSdkPath)"
+Write-Host "Test-Path on adb.exe = $(Test-Path $AdbPath)"
+
 Write-Host "== Building debug APK =="
 # --no-daemon: a Gradle daemon started before ANDROID_HOME was ever set
 # (i.e. during the very first failed build on this machine) stays alive
