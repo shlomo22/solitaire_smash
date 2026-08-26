@@ -98,7 +98,7 @@ class TableauCascadeSupportTest {
             bottomCard = Card(Rank.Three, Suit.Spades, faceUp = true, known = true),
             distanceFromBottom = 1
         )
-        assertEquals(Suit.Hearts, geometric.suit)
+        assertEquals(Suit.Diamonds, geometric.suit)
         val hit = RecognitionHit(
             card = null,
             confidence = 0.40f,
@@ -121,7 +121,7 @@ class TableauCascadeSupportTest {
             bottomCard = Card(Rank.Five, Suit.Hearts, faceUp = true, known = true),
             distanceFromBottom = 1
         )
-        assertEquals(Suit.Spades, geometric.suit) // black placeholder
+        assertEquals(Suit.Clubs, geometric.suit) // black placeholder
         // Wrong-color templates only — the Clubs→Diamonds failure mode.
         val hit = RecognitionHit(
             card = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true),

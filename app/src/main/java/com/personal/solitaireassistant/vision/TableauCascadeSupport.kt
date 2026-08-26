@@ -30,10 +30,13 @@ internal object TableauCascadeSupport {
         val known = bottomCard.known && inferredValue <= Rank.King.value
         return Card(
             rank = if (known) Rank.fromValue(inferredValue) else Rank.Ace,
-            suit = if (inferredRed) Suit.Hearts else Suit.Spades,
+            // Clubs/Diamonds placeholders — Spades/Hearts defaults biased
+            // Evaluate toward Clubs→Spades once geom overrides became scored.
+            suit = if (inferredRed) Suit.Diamonds else Suit.Clubs,
             faceUp = true,
             known = known,
-            inferred = true
+            inferred = true,
+            suitAmbiguous = true
         )
     }
 
@@ -46,10 +49,11 @@ internal object TableauCascadeSupport {
         if (!upper.known || upper.rank.value <= Rank.Ace.value) return null
         return Card(
             rank = Rank.fromValue(upper.rank.value - 1),
-            suit = if (upper.suit.isRed) Suit.Spades else Suit.Hearts,
+            suit = if (upper.suit.isRed) Suit.Clubs else Suit.Diamonds,
             faceUp = true,
             known = true,
-            inferred = true
+            inferred = true,
+            suitAmbiguous = true
         )
     }
 
@@ -219,10 +223,11 @@ internal object TableauCascadeSupport {
         }
         val partnerScore = scores[partner] ?: 0f
         if (bestScore < 0.65f || bestScore - partnerScore < 0.03f) {
-            // Keep color placeholder but don't pretend Spades/Hearts is known —
-            // a Clubs→Diamonds override that falls through here was becoming
-            // Clubs→Spades via the black default.
-            return geometric.copy(suitAmbiguous = true)
+            // Color-correct placeholder without Spades/Hearts bias.
+            return geometric.copy(
+                suit = if (geometric.suit.isRed) Suit.Diamonds else Suit.Clubs,
+                suitAmbiguous = true
+            )
         }
         return geometric.copy(suit = best, suitAmbiguous = false)
     }

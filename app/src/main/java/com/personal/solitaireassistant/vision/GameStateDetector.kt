@@ -1498,9 +1498,10 @@ class GameStateDetector(
     }
 
     /**
-     * Prefer geometric color from cascade math, then pick C/S or H/D from
-     * fresh templates on the visible header. Trace scores alone are often
-     * only the wrong color family after a Clubs→Diamonds-style misread.
+     * Prefer geometric color from cascade math, then pick C/S or H/D.
+     * Cascade header crops are noisy for black-suit ties — after v1.4.53 made
+     * geom overrides countable, Clubs→Spades jumped 20→34 because weak
+     * re-scores and the Spades color-placeholder were winning Evaluate.
      */
     private fun enrichGeometricCascadeSuit(
         bitmap: Bitmap,
@@ -1508,6 +1509,20 @@ class GameStateDetector(
         geometric: Card,
         rejectedHit: RecognitionHit
     ): Card {
+        val direct = rejectedHit.card
+        // Same color family on the rejected read: keep that suit. Geometry
+        // only needed the rank (or confirmed color); re-scoring C↔S on a
+        // ~44px strip is how Clubs became Spades.
+        if (direct != null &&
+            direct.known &&
+            direct.suit.isRed == geometric.suit.isRed
+        ) {
+            return geometric.copy(
+                suit = direct.suit,
+                suitAmbiguous = direct.suitAmbiguous
+            )
+        }
+
         val fromTrace = TableauCascadeSupport.enrichGeometricFromRejectedRead(
             geometric,
             rejectedHit
@@ -1515,24 +1530,32 @@ class GameStateDetector(
         if (!fromTrace.suitAmbiguous && fromTrace.suit.isRed == geometric.suit.isRed) {
             return fromTrace
         }
+
         val family = if (geometric.suit.isRed) {
             setOf(Suit.Hearts, Suit.Diamonds)
         } else {
             setOf(Suit.Clubs, Suit.Spades)
         }
         val scores = recognizer.suitTemplateScores(bitmap, headerRegion, family)
-        val best = family.maxByOrNull { scores[it] ?: 0f } ?: return fromTrace
+        val best = family.maxByOrNull { scores[it] ?: 0f } ?: return ambiguousGeometric(geometric)
         val bestScore = scores[best] ?: 0f
         val partner = family.first { it != best }
         val partnerScore = scores[partner] ?: 0f
-        if (bestScore < 0.55f) {
-            return geometric.copy(suitAmbiguous = true)
+        // Stricter than normal recognition: cascade headers over-call Spades.
+        if (bestScore < 0.70f || bestScore - partnerScore < 0.06f) {
+            return ambiguousGeometric(geometric)
         }
-        return geometric.copy(
-            suit = best,
-            suitAmbiguous = bestScore - partnerScore < 0.03f
-        )
+        return geometric.copy(suit = best, suitAmbiguous = false)
     }
+
+    /** Color-correct placeholder without pretending Spades/Hearts is known. */
+    private fun ambiguousGeometric(geometric: Card): Card =
+        geometric.copy(
+            // Clubs/Diamonds as neutral placeholders — Spades/Hearts defaults
+            // were biasing Evaluate (Clubs→Spades 34 after geom overrides).
+            suit = if (geometric.suit.isRed) Suit.Diamonds else Suit.Clubs,
+            suitAmbiguous = true
+        )
 
     fun attemptCornerRankOcr(
         bitmap: Bitmap,
