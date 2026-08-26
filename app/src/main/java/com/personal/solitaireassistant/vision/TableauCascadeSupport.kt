@@ -9,7 +9,7 @@ internal object TableauCascadeSupport {
     const val MIN_READ_CONFIDENCE = 0.55f
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
     /** Adjacent glyph confusions need a higher bar to beat geometry. */
-    const val ADJACENT_CONFUSION_FLOOR = 0.82f
+    const val ADJACENT_CONFUSION_FLOOR = 0.88f
     /** Color-family flips (Clubs→Diamonds). Allow strong wrong-color reads. */
     const val COLOR_MISMATCH_FLOOR = 0.92f
     private const val WEAK_JACK_FLOOR = 0.65f
@@ -115,18 +115,17 @@ internal object TableauCascadeSupport {
         ) {
             return true
         }
-        // Same-rank color-family flips (Clubs→Diamonds was top Evaluate bucket).
-        // Geometry's alternating color from the bottom card is trustworthy even
-        // when leading/bottom rank-count isn't locked — requiring
-        // rankCountConsistent left almost all of these on the floor.
-        if (!rankMismatch &&
+        // Same-rank color-family flips only when the run is doubly anchored.
+        // The unlocked path (v1.4.52) fixed some Clubs→Diamonds but invented
+        // C↔S via placeholders and cost net accuracy on v1.4.54.
+        if (rankCountConsistent &&
+            !rankMismatch &&
             colorMismatch &&
-            bottomReadConfidence >= BOTTOM_ANCHOR_FLOOR &&
             directConfidence < COLOR_MISMATCH_FLOOR
         ) {
             return true
         }
-        // Color flips on a consistent run at slightly higher confidence.
+        // Color flips on a consistent run (rank may also differ).
         if (rankCountConsistent &&
             colorMismatch &&
             directConfidence < COLOR_MISMATCH_FLOOR
@@ -183,17 +182,21 @@ internal object TableauCascadeSupport {
         when (setOf(first, second)) {
             setOf(Rank.Two, Rank.Three),
             setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Four, Rank.Five),
             setOf(Rank.Five, Rank.Six),
             setOf(Rank.Six, Rank.Seven),
-            setOf(Rank.Eight, Rank.Nine) -> true
+            setOf(Rank.Eight, Rank.Nine),
+            setOf(Rank.Jack, Rank.Queen) -> true
             else -> false
         }
 
     private fun isBottomOnlyAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
         when (setOf(first, second)) {
             setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Four, Rank.Five),
             setOf(Rank.Five, Rank.Six),
-            setOf(Rank.Eight, Rank.Nine) -> true
+            setOf(Rank.Eight, Rank.Nine),
+            setOf(Rank.Jack, Rank.Queen) -> true
             else -> false
         }
 
