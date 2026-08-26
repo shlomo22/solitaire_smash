@@ -77,50 +77,6 @@ internal object TableauCascadeSupport {
         return enrichGeometricFromRejectedRead(expected, bottomHit).copy(inferred = false)
     }
 
-    /**
-     * When pixel geometry says N face-up cards and the leading card is a
-     * confident King (etc.), the bottom rank is determined: leading - (N-1).
-     * Fixes Evaluate JH→QH bottoms where Queen templates win the full-card
-     * read but the cascade is clearly King-?-Jack (golden 20260814_125128).
-     */
-    fun repairBottomAgainstLeadingCount(
-        leading: Card?,
-        geometricFaceUpCount: Int,
-        bottom: Card,
-        bottomConfidence: Float,
-        bottomHit: RecognitionHit
-    ): Card {
-        if (leading == null || !leading.known || !bottom.known) return bottom
-        if (geometricFaceUpCount < 2) return bottom
-        if (bottomConfidence >= ILLEGAL_BOTTOM_OVERRIDE_FLOOR) return bottom
-        val expectedValue = leading.rank.value - (geometricFaceUpCount - 1)
-        if (expectedValue !in Rank.Ace.value..Rank.King.value) return bottom
-        val expectedRank = Rank.fromValue(expectedValue)
-        if (bottom.rank == expectedRank) return bottom
-        if (!isAdjacentConfusionPair(bottom.rank, expectedRank)) return bottom
-        val expectedRed = if ((geometricFaceUpCount - 1) % 2 == 0) {
-            leading.suit.isRed
-        } else {
-            !leading.suit.isRed
-        }
-        val placeholder = Card(
-            rank = expectedRank,
-            suit = if (expectedRed) Suit.Diamonds else Suit.Clubs,
-            faceUp = true,
-            known = true,
-            inferred = false,
-            suitAmbiguous = true
-        )
-        return if (bottom.suit.isRed == expectedRed) {
-            placeholder.copy(
-                suit = bottom.suit,
-                suitAmbiguous = bottom.suitAmbiguous
-            )
-        } else {
-            enrichGeometricFromRejectedRead(placeholder, bottomHit).copy(inferred = false)
-        }
-    }
-
     fun isReliableRead(hit: RecognitionHit, card: Card?): Boolean =
         card?.known == true &&
             hit.confidence >= MIN_READ_CONFIDENCE &&
@@ -204,9 +160,10 @@ internal object TableauCascadeSupport {
         // Two/Three and Six/Seven stay doubly-anchored-only — a misread Ace
         // bottom otherwise invents geometric Two and steals a correct Three
         // (Evaluate Three→Two stayed at 12 after adding 2/3 broadly).
-        // No confidence ceiling: Five→Six survived floors through 0.94 when
-        // rankCountConsistent was false (leading also misread as Six).
-        if (isBottomOnlyAdjacentConfusionPair(directCard.rank, geometric.rank)) {
+        // v1.4.58 removed the floor and cost -6 rank slots; restore it.
+        if (isBottomOnlyAdjacentConfusionPair(directCard.rank, geometric.rank) &&
+            directConfidence < ADJACENT_CONFUSION_FLOOR
+        ) {
             return true
         }
 

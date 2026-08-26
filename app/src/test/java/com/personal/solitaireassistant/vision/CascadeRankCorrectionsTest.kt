@@ -10,44 +10,41 @@ import org.junit.Test
 
 class CascadeRankCorrectionsTest {
     @Test
-    fun challengesEveryStrongQueen() {
-        assertTrue(
-            CascadeRankCorrections.shouldChallengeStrongJackQueen(
-                Rank.Queen to 0.92f,
-                mapOf(Rank.Queen to 0.92f, Rank.Jack to 0.40f)
-            )
-        )
-    }
-
-    @Test
-    fun challengesStrongQueenWhenJackAlsoScores() {
-        val scores = mapOf(Rank.Queen to 0.86f, Rank.Jack to 0.74f)
+    fun challengesQueenWhenJackScoresWithinWideMargin() {
         assertTrue(
             CascadeRankCorrections.shouldChallengeStrongJackQueen(
                 Rank.Queen to 0.86f,
-                scores
+                mapOf(Rank.Queen to 0.86f, Rank.Jack to 0.65f)
             )
         )
     }
 
     @Test
-    fun doesNotChallengeJackWhenQueenAbsent() {
-        val scores = mapOf(Rank.Jack to 0.90f, Rank.Ten to 0.55f)
+    fun challengesEvenWhenJackBelowOldFloor() {
+        assertTrue(
+            CascadeRankCorrections.shouldChallengeStrongJackQueen(
+                Rank.Queen to 0.80f,
+                mapOf(Rank.Queen to 0.80f, Rank.Jack to 0.58f)
+            )
+        )
+    }
+
+    @Test
+    fun doesNotChallengeWhenJackFarBehind() {
         assertFalse(
             CascadeRankCorrections.shouldChallengeStrongJackQueen(
-                Rank.Jack to 0.90f,
-                scores
+                Rank.Queen to 0.90f,
+                mapOf(Rank.Queen to 0.90f, Rank.Jack to 0.41f)
             )
         )
     }
 
     @Test
     fun ocrJackOverridesStrongQueenBitmap() {
-        val scores = mapOf(Rank.Queen to 0.84f, Rank.Jack to 0.40f)
         val override = CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
             bitmapHit = Rank.Queen to 0.84f,
             ocrGuess = RankCornerOcr.Guess(Rank.Jack, 0.70f, "J"),
-            rankScoreMap = scores
+            rankScoreMap = mapOf(Rank.Queen to 0.84f, Rank.Jack to 0.42f)
         )
         assertNotNull(override)
         assertEquals(Rank.Jack, override!!.first)
@@ -55,12 +52,11 @@ class CascadeRankCorrectionsTest {
 
     @Test
     fun ocrDoesNotOverrideWhenNotJackOrQueen() {
-        val scores = mapOf(Rank.Queen to 0.84f, Rank.Jack to 0.72f)
         assertNull(
             CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
                 bitmapHit = Rank.Queen to 0.84f,
                 ocrGuess = RankCornerOcr.Guess(Rank.Ten, 0.90f, "10"),
-                rankScoreMap = scores
+                rankScoreMap = mapOf(Rank.Queen to 0.84f)
             )
         )
     }

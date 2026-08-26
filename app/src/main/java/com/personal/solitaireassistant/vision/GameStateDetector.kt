@@ -488,27 +488,6 @@ class GameStateDetector(
                         cascadeRankCountNote = "leadingUnknown"
                     }
                 }
-                val repairedFromLeading = TableauCascadeSupport.repairBottomAgainstLeadingCount(
-                    leading = leadingCard,
-                    geometricFaceUpCount = geometricFaceUpCount,
-                    bottom = card,
-                    bottomConfidence = hit.confidence,
-                    bottomHit = hit
-                )
-                if (repairedFromLeading.id != card.id) {
-                    val fromId = card.id
-                    card = repairedFromLeading
-                    slotTrace = slotTrace.withPost(
-                        "bottom-leading-repair:lead=${leadingCard?.id}," +
-                            "geomCount=$geometricFaceUpCount,from=$fromId,to=${card.id}"
-                    )
-                    if (leadingCard?.known == true &&
-                        leadingCard.rank.value >= card.rank.value
-                    ) {
-                        val rankCount = leadingCard.rank.value - card.rank.value + 1
-                        rankCountConsistent = rankCount == faceUpCount
-                    }
-                }
                 // Diagnostic-only: geometric faceUpCount is a real-pixel-distance
                 // divided by an assumed per-card step, which can drift over a long
                 // cascade and land every slot below the drift point on the wrong

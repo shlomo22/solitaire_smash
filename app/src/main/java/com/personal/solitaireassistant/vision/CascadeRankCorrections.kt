@@ -1,6 +1,7 @@
 package com.personal.solitaireassistant.vision
 
 import com.personal.solitaireassistant.game.Rank
+import kotlin.math.abs
 
 object CascadeRankCorrections {
     const val MIN_OCR_SIX_CONFIDENCE = 0.52f
@@ -27,22 +28,21 @@ object CascadeRankCorrections {
     }
 
     /**
-     * Queen templates can crush Jack on full bottom cards with Jack's own
-     * template below 0.50 (v1.4.57 required both ≥0.50 — Evaluate JH→QH
-     * unchanged). Always OCR-challenge a strong Queen; challenge Jack when
-     * Queen is also on the board as a scorer.
+     * Queen templates can beat Jack on full cards; strong-bitmap then skips OCR.
+     * Challenge when both J and Q score — requiring Jack≥0.50 missed real JH
+     * bottoms (v1.4.57), but always-challenging every Queen (v1.4.58) risked
+     * OCR false Jacks. Keep a wide margin instead.
      */
     fun shouldChallengeStrongJackQueen(
         bitmapHit: Pair<Rank, Float>?,
         rankScoreMap: Map<Rank, Float> = emptyMap()
     ): Boolean {
         if (bitmapHit == null) return false
-        if (bitmapHit.first == Rank.Queen) return true
-        if (bitmapHit.first == Rank.Jack) {
-            val queen = rankScoreMap[Rank.Queen] ?: 0f
-            return queen >= JACK_QUEEN_TEMPLATE_FLOOR
-        }
-        return false
+        if (bitmapHit.first != Rank.Queen && bitmapHit.first != Rank.Jack) return false
+        val jack = rankScoreMap[Rank.Jack] ?: 0f
+        val queen = rankScoreMap[Rank.Queen] ?: 0f
+        if (jack < 0.40f || queen < 0.40f) return false
+        return abs(queen - jack) <= 0.25f + SCORE_EPSILON
     }
 
     fun ocrSixOverridesStrongSeven(
