@@ -181,7 +181,7 @@ class TableauCascadeSupportTest {
                 bottomReadConfidence = 0.90f,
                 geometric = geometric,
                 directCard = direct,
-                directConfidence = 0.91f,
+                directConfidence = 0.97f,
                 rankCountConsistent = true
             )
         )

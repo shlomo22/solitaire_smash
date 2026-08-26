@@ -868,7 +868,11 @@ class CardRecognizer(
             bitmapRankHit,
             rankScoreMap
         )
-        if (strongBitmap && !cascadeSixSevenOcr) {
+        val jackQueenOcr = CascadeRankCorrections.shouldChallengeStrongJackQueen(
+            bitmapRankHit,
+            rankScoreMap
+        )
+        if (strongBitmap && !cascadeSixSevenOcr && !jackQueenOcr) {
             return RankResolution(
                 rank = bitmapRankHit,
                 bitmapRankHit = bitmapRankHit,
@@ -879,7 +883,11 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = if (cascadeSixSevenOcr) null else bestRank(crop, trimmedToVisibleStrip)
+        val rankHit = if (cascadeSixSevenOcr || jackQueenOcr) {
+            null
+        } else {
+            bestRank(crop, trimmedToVisibleStrip)
+        }
         // RankInkHeuristics.guess reads the large glyph in a card's CENTER -
         // on a tableau cascade card trimmed to just its own ~45-54px visible
         // header strip there is no center glyph, only the small corner digit
@@ -891,14 +899,22 @@ class CardRecognizer(
         // cause behind all four attempts at this bug so far - none of them
         // touched this heuristic, which is entirely separate from
         // rankSourceMasks/rankTemplateScoreMap.
-        val glyph = if (trimmedToVisibleStrip || cascadeSixSevenOcr) null else RankInkHeuristics.guess(crop)
-        val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph) || cascadeSixSevenOcr) {
+        val glyph = if (trimmedToVisibleStrip || cascadeSixSevenOcr || jackQueenOcr) {
+            null
+        } else {
+            RankInkHeuristics.guess(crop)
+        }
+        val ocrAttempt = if (
+            needsOcrTiebreak(bitmapRankHit, rankHit, glyph) ||
+            cascadeSixSevenOcr ||
+            jackQueenOcr
+        ) {
             val profile = when {
-                cascadeSixSevenOcr -> RankCornerOcr.CornerRoiProfile.DEFAULT
+                cascadeSixSevenOcr || jackQueenOcr -> RankCornerOcr.CornerRoiProfile.DEFAULT
                 trimmedToVisibleStrip -> RankCornerOcr.CornerRoiProfile.TRIMMED
                 else -> RankCornerOcr.CornerRoiProfile.DEFAULT
             }
-            val ocrBitmap = if (cascadeSixSevenOcr) ocrCrop else crop
+            val ocrBitmap = if (cascadeSixSevenOcr || jackQueenOcr) ocrCrop else crop
             rankCornerOcr?.attempt(ocrBitmap, profile)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
         } else {
@@ -1704,9 +1720,19 @@ class CardRecognizer(
                 ocrGuess,
                 rankScoreMap
             )?.let { return it }
+            CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
+                bitmapHit,
+                ocrGuess,
+                rankScoreMap
+            )?.let { return it }
             return base
         }
         CascadeRankCorrections.ocrSixOverridesStrongSeven(
+            bitmapHit,
+            ocrGuess,
+            rankScoreMap
+        )?.let { return it }
+        CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
             bitmapHit,
             ocrGuess,
             rankScoreMap

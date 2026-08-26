@@ -106,12 +106,11 @@ internal object TableauCascadeSupport {
         if (rankCountConsistent && directConfidence < STRONG_DIRECT_READ_FLOOR) {
             return true
         }
-        // Doubly-anchored adjacent glyph confusions keep scoring above 0.75 while
-        // still wrong — raise the floor when both anchors agree.
+        // Doubly-anchored adjacent glyph confusions stay wrong past 0.94
+        // (Evaluate Five→Six unchanged through v1.4.56). Trust geometry.
         if (rankCountConsistent &&
             rankMismatch &&
-            isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
-            directConfidence < ADJACENT_CONFUSION_FLOOR
+            isAdjacentConfusionPair(directCard.rank, geometric.rank)
         ) {
             return true
         }
