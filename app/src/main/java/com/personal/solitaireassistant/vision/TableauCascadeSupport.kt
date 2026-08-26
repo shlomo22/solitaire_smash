@@ -8,9 +8,12 @@ import kotlin.math.abs
 internal object TableauCascadeSupport {
     const val MIN_READ_CONFIDENCE = 0.55f
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
+    /** Adjacent glyph confusions (3/4, 5/6, 8/9) need a higher bar to beat geometry. */
+    const val ADJACENT_CONFUSION_FLOOR = 0.82f
     private const val WEAK_JACK_FLOOR = 0.65f
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
+    private const val ILLEGAL_BOTTOM_OVERRIDE_FLOOR = 0.90f
 
     fun geometricCascadeCard(
         bottomCard: Card,
@@ -30,6 +33,42 @@ internal object TableauCascadeSupport {
             known = known,
             inferred = true
         )
+    }
+
+    /**
+     * Card that should sit immediately under [upper] in a legal tableau run
+     * (rank one below, opposite color). Suit is only a color placeholder —
+     * use [enrichGeometricFromRejectedRead] when template scores are available.
+     */
+    fun geometricCardBelow(upper: Card): Card? {
+        if (!upper.known || upper.rank.value <= Rank.Ace.value) return null
+        return Card(
+            rank = Rank.fromValue(upper.rank.value - 1),
+            suit = if (upper.suit.isRed) Suit.Spades else Suit.Hearts,
+            faceUp = true,
+            known = true,
+            inferred = true
+        )
+    }
+
+    /**
+     * When the fully-visible bottom card cannot legally stack under the card
+     * above it, prefer the geometric card-below unless the bottom read is
+     * extremely strong. New golden 20260826_070842: 5♥-4♠ over a real 3♦
+     * misread as 8♦ — geometry from 4♠ recovers 3 of red.
+     */
+    fun repairIllegalBottom(
+        cardAbove: Card?,
+        bottom: Card,
+        bottomConfidence: Float,
+        bottomHit: RecognitionHit
+    ): Card {
+        if (cardAbove == null || !cardAbove.faceUp || !cardAbove.known) return bottom
+        if (!bottom.known) return bottom
+        if (bottom.canStackOnTableau(cardAbove)) return bottom
+        if (bottomConfidence >= ILLEGAL_BOTTOM_OVERRIDE_FLOOR) return bottom
+        val expected = geometricCardBelow(cardAbove) ?: return bottom
+        return enrichGeometricFromRejectedRead(expected, bottomHit).copy(inferred = false)
     }
 
     fun isReliableRead(hit: RecognitionHit, card: Card?): Boolean =
@@ -61,6 +100,23 @@ internal object TableauCascadeSupport {
         if (rankCountConsistent && directConfidence < STRONG_DIRECT_READ_FLOOR) {
             return true
         }
+        // Doubly-anchored adjacent glyph confusions (3/4, 5/6, 8/9) keep scoring
+        // above 0.75 while still wrong — raise the floor when both anchors agree.
+        if (rankCountConsistent &&
+            rankMismatch &&
+            isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
+            directConfidence < ADJACENT_CONFUSION_FLOOR
+        ) {
+            return true
+        }
+        // suitAmbiguous + wrong rank under a consistent run is almost always a
+        // bad mid-strip read (new golden 8↔9 / 3→4 cases carried ~).
+        if (rankCountConsistent &&
+            rankMismatch &&
+            directCard.suitAmbiguous
+        ) {
+            return true
+        }
 
         if (bottomReadConfidence < BOTTOM_ANCHOR_FLOOR) return false
 
@@ -78,8 +134,8 @@ internal object TableauCascadeSupport {
             return true
         }
 
-        if (isFiveSixPair(directCard.rank, geometric.rank) &&
-            directConfidence < 0.82f
+        if (isAdjacentConfusionPair(directCard.rank, geometric.rank) &&
+            directConfidence < ADJACENT_CONFUSION_FLOOR
         ) {
             return true
         }
@@ -95,9 +151,13 @@ internal object TableauCascadeSupport {
         return false
     }
 
-    private fun isFiveSixPair(first: Rank, second: Rank): Boolean =
-        (first == Rank.Five && second == Rank.Six) ||
-            (first == Rank.Six && second == Rank.Five)
+    private fun isAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
+        when (setOf(first, second)) {
+            setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Five, Rank.Six),
+            setOf(Rank.Eight, Rank.Nine) -> true
+            else -> false
+        }
 
     /**
      * Geometric fallback only knows red vs black — when a rejected direct read

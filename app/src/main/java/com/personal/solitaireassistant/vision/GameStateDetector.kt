@@ -633,6 +633,19 @@ class GameStateDetector(
                         )
                     }
                 }
+                val cardAbove = cards.lastOrNull()
+                val repairedBottom = TableauCascadeSupport.repairIllegalBottom(
+                    cardAbove = cardAbove,
+                    bottom = card,
+                    bottomConfidence = hit.confidence,
+                    bottomHit = hit
+                )
+                if (repairedBottom !== card && repairedBottom.id != card.id) {
+                    card = repairedBottom
+                    slotTrace = slotTrace.withPost(
+                        "bottom-repair:above=${cardAbove?.id},from=${hit.card?.id},to=${card.id}"
+                    )
+                }
                 cards += card
                 locs += locator.toCardLocation(PileRef.Tableau(col), cards.lastIndex, faceRegion)
                 recognizedSlots += recognizedSlot(
