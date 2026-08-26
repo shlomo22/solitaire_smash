@@ -985,7 +985,13 @@ class GameStateDetector(
                 legacyCard = legacyCard,
                 tightCard = tightCard
             )
-        }
+        } ?: WasteRankCorrections.preferWasteExactBlackSuit(
+            fusedSuit = correctedSuit ?: tightCard?.suit ?: baseCard?.suit,
+            fusedAmbiguous = baseCard?.suitAmbiguous == true,
+            exactBest = authoritativeExactSuit,
+            exactBestScore = exactSuitBest?.value ?: 0f,
+            exactSecondScore = exactSuitSecond
+        )
         val finalCorrectedSuit = wasteBlackSuitOverride ?: correctedSuit
         val (fusedCard, fusionPostTrace) = if (baseCard != null && correctedRank != null) {
             val candidate = baseCard.copy(

@@ -47,4 +47,48 @@ class WasteBlackSuitCorrectionTest {
         )
         assertNull(suit)
     }
+
+    @Test
+    fun ambiguousFusedClubsUsesExactSpadesAtStandardBar() {
+        val suit = WasteRankCorrections.preferWasteExactBlackSuit(
+            fusedSuit = Suit.Clubs,
+            fusedAmbiguous = true,
+            exactBest = Suit.Spades,
+            exactBestScore = 0.88f,
+            exactSecondScore = 0.80f
+        )
+        assertEquals(Suit.Spades, suit)
+    }
+
+    @Test
+    fun confidentFusedClubsNeedsWideExactSpadesMargin() {
+        val nearTie = WasteRankCorrections.preferWasteExactBlackSuit(
+            fusedSuit = Suit.Clubs,
+            fusedAmbiguous = false,
+            exactBest = Suit.Spades,
+            exactBestScore = 0.83f,
+            exactSecondScore = 0.79f
+        )
+        assertNull(nearTie)
+        val wide = WasteRankCorrections.preferWasteExactBlackSuit(
+            fusedSuit = Suit.Clubs,
+            fusedAmbiguous = false,
+            exactBest = Suit.Spades,
+            exactBestScore = 0.90f,
+            exactSecondScore = 0.72f
+        )
+        assertEquals(Suit.Spades, wide)
+    }
+
+    @Test
+    fun exactClubsCanOverrideFusedSpades() {
+        val suit = WasteRankCorrections.preferWasteExactBlackSuit(
+            fusedSuit = Suit.Spades,
+            fusedAmbiguous = false,
+            exactBest = Suit.Clubs,
+            exactBestScore = 0.91f,
+            exactSecondScore = 0.70f
+        )
+        assertEquals(Suit.Clubs, suit)
+    }
 }

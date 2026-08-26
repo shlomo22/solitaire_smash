@@ -222,7 +222,7 @@ internal object WasteRankCorrections {
      * that over the fused Clubs pick. Do not guess Spades from a narrow C-vs-S
      * template margin alone — the C0.83/S0.77 cluster appears on genuine Clubs too.
      * Deck-uniqueness for ambiguous waste black suits is handled later in
-     * [DeckConstraintPass.resolveWasteBlackSuitByDeckOccupancy].
+     * [DeckConstraintPass].
      */
     fun correctBlackSuitOnWaste(
         rank: Rank,
@@ -233,6 +233,35 @@ internal object WasteRankCorrections {
         val tightSpade = tightCard?.takeIf { it.rank == rank && it.suit == Suit.Spades }
         if (legacySpade != null || tightSpade != null) return Suit.Spades
         return null
+    }
+
+    /**
+     * Waste C↔S when neither crop already read the partner suit: trust a strong
+     * exact-template leader instead of the fused pick. Shape-based Spade
+     * overrides (v1.4.64) flipped genuine Clubs (8C/4C); this only uses the
+     * same suitTemplateScores already computed for waste fusion.
+     *
+     * Ambiguous fused reads may use the standard 0.80 / 0.04 exact bar.
+     * Confident fused reads need a wider 0.82 / 0.08 gap so a 0.03 C-vs-S
+     * cluster cannot invent Spades.
+     */
+    fun preferWasteExactBlackSuit(
+        fusedSuit: Suit?,
+        fusedAmbiguous: Boolean,
+        exactBest: Suit?,
+        exactBestScore: Float,
+        exactSecondScore: Float
+    ): Suit? {
+        if (fusedSuit == null || fusedSuit.isRed) return null
+        if (exactBest == null || exactBest.isRed) return null
+        if (exactBest == fusedSuit) return null
+        val margin = exactBestScore - exactSecondScore
+        val strongExact = exactBestScore >= 0.82f && margin >= 0.08f
+        val ambiguousExact = fusedAmbiguous &&
+            exactBestScore >= 0.80f &&
+            margin >= 0.04f
+        if (!strongExact && !ambiguousExact) return null
+        return exactBest
     }
 
     /**
