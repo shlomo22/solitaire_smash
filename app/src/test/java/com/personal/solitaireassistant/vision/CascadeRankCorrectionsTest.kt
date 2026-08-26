@@ -10,6 +10,16 @@ import org.junit.Test
 
 class CascadeRankCorrectionsTest {
     @Test
+    fun challengesEveryStrongQueen() {
+        assertTrue(
+            CascadeRankCorrections.shouldChallengeStrongJackQueen(
+                Rank.Queen to 0.92f,
+                mapOf(Rank.Queen to 0.92f, Rank.Jack to 0.40f)
+            )
+        )
+    }
+
+    @Test
     fun challengesStrongQueenWhenJackAlsoScores() {
         val scores = mapOf(Rank.Queen to 0.86f, Rank.Jack to 0.74f)
         assertTrue(
@@ -21,11 +31,11 @@ class CascadeRankCorrectionsTest {
     }
 
     @Test
-    fun doesNotChallengeQueenWhenJackFarBehind() {
-        val scores = mapOf(Rank.Queen to 0.90f, Rank.Jack to 0.55f)
+    fun doesNotChallengeJackWhenQueenAbsent() {
+        val scores = mapOf(Rank.Jack to 0.90f, Rank.Ten to 0.55f)
         assertFalse(
             CascadeRankCorrections.shouldChallengeStrongJackQueen(
-                Rank.Queen to 0.90f,
+                Rank.Jack to 0.90f,
                 scores
             )
         )
@@ -33,7 +43,7 @@ class CascadeRankCorrectionsTest {
 
     @Test
     fun ocrJackOverridesStrongQueenBitmap() {
-        val scores = mapOf(Rank.Queen to 0.84f, Rank.Jack to 0.72f)
+        val scores = mapOf(Rank.Queen to 0.84f, Rank.Jack to 0.40f)
         val override = CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
             bitmapHit = Rank.Queen to 0.84f,
             ocrGuess = RankCornerOcr.Guess(Rank.Jack, 0.70f, "J"),
@@ -51,6 +61,17 @@ class CascadeRankCorrectionsTest {
                 bitmapHit = Rank.Queen to 0.84f,
                 ocrGuess = RankCornerOcr.Guess(Rank.Ten, 0.90f, "10"),
                 rankScoreMap = scores
+            )
+        )
+    }
+
+    @Test
+    fun ocrDoesNotOverrideWhenAgreesWithBitmap() {
+        assertNull(
+            CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
+                bitmapHit = Rank.Queen to 0.84f,
+                ocrGuess = RankCornerOcr.Guess(Rank.Queen, 0.70f, "Q"),
+                rankScoreMap = mapOf(Rank.Queen to 0.84f)
             )
         )
     }

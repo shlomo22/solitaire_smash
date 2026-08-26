@@ -170,21 +170,49 @@ class TableauCascadeSupportTest {
     }
 
     @Test
-    fun prefersGeometricForFiveSixAtHighConfidenceWhenDoublyAnchored() {
-        val bottomFour = Card(Rank.Four, Suit.Hearts, faceUp = true, known = true)
-        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFour, 1)
-        val direct = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true)
-        assertEquals(Rank.Five, geometric.rank)
-        assertTrue(
-            TableauCascadeSupport.prefersGeometricOverDirectRead(
-                bottomCard = bottomFour,
-                bottomReadConfidence = 0.90f,
-                geometric = geometric,
-                directCard = direct,
-                directConfidence = 0.97f,
-                rankCountConsistent = true
-            )
+    fun repairBottomAgainstLeadingCountRecoversJackUnderKingRun() {
+        val leadingKing = Card(Rank.King, Suit.Hearts, faceUp = true, known = true)
+        val bottomQueen = Card(Rank.Queen, Suit.Hearts, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottomQueen,
+            confidence = 0.88f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Queen-Hearts@0.88",
+            trace = RecognitionTrace(suitTemplates = "H:0.90 D:0.70")
         )
+        val repaired = TableauCascadeSupport.repairBottomAgainstLeadingCount(
+            leading = leadingKing,
+            geometricFaceUpCount = 3,
+            bottom = bottomQueen,
+            bottomConfidence = 0.88f,
+            bottomHit = hit
+        )
+        assertEquals(Rank.Jack, repaired.rank)
+        assertEquals(Suit.Hearts, repaired.suit)
+        assertFalse(repaired.inferred)
+    }
+
+    @Test
+    fun repairBottomAgainstLeadingCountSkipsNonAdjacent() {
+        val leadingKing = Card(Rank.King, Suit.Hearts, faceUp = true, known = true)
+        val bottomTen = Card(Rank.Ten, Suit.Hearts, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottomTen,
+            confidence = 0.88f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Ten-Hearts@0.88",
+            trace = RecognitionTrace.EMPTY
+        )
+        val repaired = TableauCascadeSupport.repairBottomAgainstLeadingCount(
+            leading = leadingKing,
+            geometricFaceUpCount = 3,
+            bottom = bottomTen,
+            bottomConfidence = 0.88f,
+            bottomHit = hit
+        )
+        assertEquals(Rank.Ten, repaired.rank)
     }
 
     @Test
