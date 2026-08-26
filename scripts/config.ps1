@@ -20,3 +20,7 @@ $GradlewPath    = Join-Path $PSScriptRoot "..\gradlew.bat"    # adjust if script
 # service runs as). Setting it here, in-process, sidesteps both issues.
 $env:ANDROID_HOME     = $AndroidSdkPath
 $env:ANDROID_SDK_ROOT = $AndroidSdkPath
+
+# Cursor CLI hand-off, used by pull-artifacts.ps1 after a successful pull.
+$RunCursorAgentAfterPull = $false   # the call itself is commented out in pull-artifacts.ps1 for now too - flip both back once the loop-prevention/manual-mode design is built
+$CursorAgentPath         = "cursor-agent"   # verify this matches what your install actually put on PATH - some Windows installs register it as "agent" instead; run "cursor-agent --version" (or "agent --version") to check
