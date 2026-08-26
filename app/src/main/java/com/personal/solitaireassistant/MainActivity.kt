@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
                         onSnapshotBoard = ::onSnapshotClicked,
                         onEvaluateGolden = viewModel::evaluateGoldenSet
                     )
+                    LaunchedEffect(Unit) { viewModel.maybeAutoEvaluateOnOpen() }
                 }
             }
         }

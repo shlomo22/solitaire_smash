@@ -63,6 +63,7 @@ class SettingsViewModel(
     private val showGoldenReview = MutableStateFlow(false)
     private val showErrorCaptureImport = MutableStateFlow(false)
     private val errorCaptureImportIds = MutableStateFlow<List<String>>(emptyList())
+    private var didAutoEvaluateOnOpen = false
 
     private val coreState = combine(
         preferences.settings,
@@ -244,6 +245,19 @@ class SettingsViewModel(
             evaluating.value = false
             transient.value = "Golden evaluation finished"
         }
+    }
+
+    /**
+     * Debug loop: run Golden truth Evaluate once when Settings first appears
+     * after a cold start / new ViewModel. Skip if we opened a review screen
+     * or there are no samples.
+     */
+    fun maybeAutoEvaluateOnOpen() {
+        if (didAutoEvaluateOnOpen) return
+        didAutoEvaluateOnOpen = true
+        if (showGoldenReview.value) return
+        if (store.count() <= 0) return
+        evaluateGoldenSet()
     }
 
     fun refreshGoldenCount() {
