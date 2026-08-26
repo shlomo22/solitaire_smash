@@ -57,7 +57,7 @@ class MoveSelectorTest {
             tableau = listOf(
                 listOf(c(Rank.Jack, Suit.Spades)),
                 emptyList(),
-                listOf(c(Rank.Three, Suit.Hearts), c(Rank.Two, Suit.Clubs)),
+                listOf(c(Rank.Four, Suit.Spades), c(Rank.Three, Suit.Hearts)),
                 listOf(c(Rank.Queen, Suit.Hearts, false), c(Rank.Ten, Suit.Clubs)),
                 listOf(c(Rank.Seven, Suit.Hearts, false), c(Rank.Six, Suit.Clubs)),
                 listOf(c(Rank.Eight, Suit.Spades, false), c(Rank.Nine, Suit.Diamonds)),
@@ -65,7 +65,7 @@ class MoveSelectorTest {
             ),
             foundations = List(4) { emptyList() },
             stock = listOf(c(Rank.Four, Suit.Spades, false)),
-            waste = listOf(c(Rank.Ace, Suit.Diamonds))
+            waste = listOf(c(Rank.Two, Suit.Clubs))
         )
 
         val best = requireNotNull(MoveSelector.bestMove(state))
@@ -274,7 +274,7 @@ class MoveSelectorTest {
     }
 
     @Test
-    fun defersAceToFoundationWhenTableauUseful() {
+    fun doesNotDeferAceToFoundationWhenTableauTwoExists() {
         val withSequence = GameState(
             tableau = listOf(
                 listOf(c(Rank.Ace, Suit.Hearts)),
@@ -302,7 +302,29 @@ class MoveSelectorTest {
             .first { it.move is Move.TableauToFoundation }
             .score
 
-        assertTrue(withSequenceScore < aloneScore)
+        assertTrue(withSequenceScore >= aloneScore)
+        val best = requireNotNull(MoveSelector.bestMove(withSequence))
+        assertTrue(best.move is Move.TableauToFoundation)
+    }
+
+    @Test
+    fun prefersWasteAceToFoundationOverTableauPark() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Two, Suit.Spades)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = listOf(c(Rank.Ace, Suit.Diamonds))
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "Expected waste Ace to foundation, got ${best.move}",
+            best.move is Move.WasteToFoundation
+        )
     }
 
     @Test

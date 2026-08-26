@@ -261,7 +261,7 @@ class SmashScreenshotFixtureTest {
     }
 
     @Test
-    fun fifthLiveBoardPrefersWasteAceOntoBlackTwo() {
+    fun fifthLiveBoardDoesNotParkWasteAceOnTableau() {
         val bitmap = load("screenshots/device_live_5.png")
         val detector = GameStateDetector(context, minConfidence = 0.55f)
         val result = detector.detect(bitmap)
@@ -281,7 +281,10 @@ class SmashScreenshotFixtureTest {
             state.tableau.map { it.lastOrNull()?.rank }
         )
         val best = requireNotNull(MoveSelector.bestMove(state))
-        assertEquals(Move.WasteToTableau(toColumn = 2), best.move)
+        assertTrue(
+            "Waste Ace must not park on tableau; got ${best.move}",
+            best.move !is Move.WasteToTableau
+        )
 
         detector.release()
         bitmap.recycle()

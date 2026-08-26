@@ -19,6 +19,7 @@ object MoveSelector {
     private const val KING_FAMILY_BONUS = 8.0
     private const val WASTE_UNLOCK_THRESHOLD = 50.0
     private const val MINIMAL_MOVE_PENALTY = 15.0
+    private const val ACE_ON_TABLEAU_PENALTY = 150.0
 
     fun rankedMoves(
         state: GameState,
@@ -153,16 +154,21 @@ object MoveSelector {
                 reasons += "clear-waste"
                 val wasteCard = before.wasteTop()
                 val target = before.tableauTop(move.toColumn)
-                if (wasteCard != null &&
-                    target != null &&
-                    wasteCard.rank.isOneBelow(target.rank)
-                ) {
-                    score += 130.0
-                    reasons += "direct-stack"
-                }
-                if (wasteCard?.rank == Rank.Ace || wasteCard?.rank == Rank.Two) {
-                    score += 125.0
-                    reasons += "unlock-low-waste"
+                if (wasteCard?.rank == Rank.Ace) {
+                    score -= ACE_ON_TABLEAU_PENALTY
+                    reasons += "ace-on-tableau"
+                } else {
+                    if (wasteCard != null &&
+                        target != null &&
+                        wasteCard.rank.isOneBelow(target.rank)
+                    ) {
+                        score += 130.0
+                        reasons += "direct-stack"
+                    }
+                    if (wasteCard?.rank == Rank.Two) {
+                        score += 125.0
+                        reasons += "unlock-low-waste"
+                    }
                 }
             }
             is Move.WasteToFoundation -> {
@@ -192,6 +198,11 @@ object MoveSelector {
                 reasons += "recycle"
             }
             is Move.TableauToTableau -> {
+                val moving = before.tableau[move.fromColumn].getOrNull(move.startIndex)
+                if (moving?.rank == Rank.Ace) {
+                    score -= ACE_ON_TABLEAU_PENALTY
+                    reasons += "ace-on-tableau"
+                }
                 if (createsUsefulEmpty) {
                     score += 35.0
                     reasons += "king-setup"
@@ -263,7 +274,7 @@ object MoveSelector {
     }
 
     private fun isTableauUsefulLowCard(state: GameState, card: Card): Boolean {
-        if (card.rank != Rank.Ace && card.rank != Rank.Two) return false
+        if (card.rank != Rank.Two) return false
 
         val onTableau = state.tableau.indexOfFirst { it.lastOrNull() == card }
         if (onTableau >= 0) {
@@ -342,7 +353,7 @@ object MoveSelector {
             ) {
                 estimate += 130.0
             }
-            if (wasteCard?.rank == Rank.Ace || wasteCard?.rank == Rank.Two) {
+            if (wasteCard?.rank == Rank.Two) {
                 estimate += 125.0
             }
             estimate >= WASTE_UNLOCK_THRESHOLD
