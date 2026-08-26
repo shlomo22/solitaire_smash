@@ -950,6 +950,7 @@ class CardRecognizer(
         val ranks = candidates.map { it.first }.toSet()
         if (ranks.contains(Rank.Ten) && ranks.contains(Rank.Queen)) return true
         if (ranks.contains(Rank.King) && ranks.contains(Rank.Ten)) return true
+        if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Queen)) return true
         if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Three)) return true
         if (ranks.contains(Rank.Six) && ranks.contains(Rank.Seven)) return true
         if (ranks.size >= 2) return true
@@ -1734,6 +1735,18 @@ class CardRecognizer(
         }
         if (ocrGuess.rank == Rank.Jack &&
             ranks.contains(Rank.Jack) &&
+            ranks.contains(Rank.Queen)
+        ) {
+            return Rank.Jack to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Queen &&
+            ranks.contains(Rank.Jack) &&
+            ranks.contains(Rank.Queen)
+        ) {
+            return Rank.Queen to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Jack &&
+            ranks.contains(Rank.Jack) &&
             ranks.contains(Rank.Three)
         ) {
             return Rank.Jack to ocrGuess.confidence.coerceAtLeast(0.52f)
@@ -1863,6 +1876,16 @@ class CardRecognizer(
             tenScore - queenScore < 0.08f
         ) {
             return Rank.Queen to queenScore
+        }
+        // J and Q share a tall stem; full-card Jack crops (golden JH/JS bottoms)
+        // often lose to Queen by a razor margin while OCR still reads "J".
+        // Decline so needsOcrTiebreak isn't skipped by the strong-bitmap gate.
+        if ((top.first == Rank.Queen || top.first == Rank.Jack) &&
+            jackScore >= 0.50f &&
+            queenScore >= 0.50f &&
+            kotlin.math.abs(queenScore - jackScore) < 0.08f
+        ) {
+            return null
         }
         // A Smash "10" has a tall 1 that matches K unless Ten wins clearly.
         if (top.first == Rank.King &&

@@ -9,7 +9,7 @@ internal object TableauCascadeSupport {
     const val MIN_READ_CONFIDENCE = 0.55f
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
     /** Adjacent glyph confusions need a higher bar to beat geometry. */
-    const val ADJACENT_CONFUSION_FLOOR = 0.88f
+    const val ADJACENT_CONFUSION_FLOOR = 0.94f
     /** Color-family flips (Clubs→Diamonds). Allow strong wrong-color reads. */
     const val COLOR_MISMATCH_FLOOR = 0.92f
     private const val WEAK_JACK_FLOOR = 0.65f
