@@ -9,7 +9,6 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -346,31 +345,33 @@ class DeckConstraintPassTest {
     }
 
     @Test
-    fun strongWasteClubsKeepsSuitWhenWeakerTableauDuplicates() {
-        val wasteTen = slot(
-            pile = PileRef.Waste,
+    fun tableauNearTieDuplicateIsNotOccupancyFlipped() {
+        val high = slot(
+            pile = PileRef.Tableau(0),
             index = 0,
             rank = Rank.Ten,
             suit = Suit.Clubs,
             confidence = 0.95f,
-            diagnostic = "fused-Ten-Clubs"
+            diagnostic = "match-Ten-Clubs@0.95"
         )
-        val tableauTen = slot(
-            pile = PileRef.Tableau(6),
-            index = 6,
+        val nearTie = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
             rank = Rank.Ten,
             suit = Suit.Clubs,
-            confidence = 0.93f,
-            diagnostic = "match-Ten-Clubs-ambiguous@0.93",
-            suitAmbiguous = true
+            confidence = 0.88f,
+            diagnostic = "match-Ten-Clubs@0.88",
+            suitTemplates = "C:0.83 S:0.81"
         )
-        val recognized = mutableListOf(wasteTen.slot, tableauTen.slot)
-        val tableauColumn = List(6) { Card(Rank.Two, Suit.Hearts, faceUp = true) } + listOf(tableauTen.card)
+        val recognized = mutableListOf(high.slot, nearTie.slot)
         val state = GameState(
-            tableau = List(6) { emptyList<Card>() } + listOf(tableauColumn),
+            tableau = listOf(
+                listOf(high.card),
+                listOf(nearTie.card)
+            ) + List(5) { emptyList() },
             foundations = List(4) { emptyList() },
             stock = emptyList(),
-            waste = listOf(wasteTen.card)
+            waste = emptyList()
         )
         val recognizer = CardRecognizer(context)
         val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
@@ -381,9 +382,8 @@ class DeckConstraintPassTest {
                 state = state,
                 recognizedSlots = recognized
             )
-            assertEquals(Suit.Clubs, result.waste.last().suit)
-            assertEquals(Suit.Clubs, recognized[0].engine.suit)
-            assertNotEquals(Suit.Clubs, recognized[1].engine.suit)
+            assertEquals(Suit.Clubs, result.tableau[0].last().suit)
+            assertEquals(Suit.Spades, result.tableau[1].last().suit)
         } finally {
             bitmap.recycle()
             recognizer.release()
