@@ -180,6 +180,45 @@ object DeckConstraintPass {
         entry.originalDiagnostic.startsWith("geom-override:") &&
             entry.originalDiagnostic.contains("match-Ace-")
 
+    /**
+     * v1.4.75 left QS vs QC~ in place: partner QS was already claimed by a
+     * different-rank misread (golden 20260818_080819 tableau:6). Steal QS
+     * for the Ace-geom Queen and move that holder to a still-free Queen suit.
+     * Do not steal from another Ace-geom slot.
+     */
+    private fun stealAceGeomPartner(
+        entry: Entry,
+        partnerCard: Card,
+        entries: MutableList<Entry>,
+        usedIds: MutableSet<String>
+    ): Card? {
+        if (!isAceGeomOverride(entry)) return null
+        val holder = entries.firstOrNull {
+            it.recognizedIndex != entry.recognizedIndex &&
+                it.card.id == partnerCard.id &&
+                !isAceGeomOverride(it)
+        } ?: return null
+        val displaced = displaceToFreeSuit(holder, usedIds, keepOut = partnerCard.id)
+        usedIds.remove(holder.card.id)
+        holder.card = displaced
+        usedIds.add(displaced.id)
+        return partnerCard
+    }
+
+    private fun displaceToFreeSuit(
+        holder: Entry,
+        usedIds: Set<String>,
+        keepOut: String
+    ): Card {
+        val suits = preferredSuitsForDuplicate(holder) +
+            listOf(Suit.Hearts, Suit.Diamonds, Suit.Clubs, Suit.Spades)
+        for (suit in suits) {
+            val card = holder.card.copy(suit = suit, suitAmbiguous = false)
+            if (card.id !in usedIds && card.id != keepOut) return card
+        }
+        return holder.card.copy(suitAmbiguous = true)
+    }
+
     private fun resolvePartnerSuitSwaps(
         bitmap: Bitmap,
         recognizer: CardRecognizer,
@@ -382,6 +421,7 @@ object DeckConstraintPass {
                     bitmap = bitmap,
                     recognizer = recognizer,
                     entry = entry,
+                    entries = entries,
                     usedIds = used
                 )
                 used.remove(oldId)
@@ -402,7 +442,8 @@ object DeckConstraintPass {
         bitmap: Bitmap,
         recognizer: CardRecognizer,
         entry: Entry,
-        usedIds: Set<String>
+        entries: MutableList<Entry>,
+        usedIds: MutableSet<String>
     ): Card {
         if (!entry.card.suit.isRed &&
             (isBlackSuitNearTie(entry) || isAceGeomOverride(entry))
@@ -412,6 +453,7 @@ object DeckConstraintPass {
             if (partnerCard.id !in usedIds) {
                 return partnerCard
             }
+            stealAceGeomPartner(entry, partnerCard, entries, usedIds)?.let { return it }
         }
         val candidates = duplicateReplacementCandidates(entry, usedIds)
         if (candidates.isEmpty()) {
