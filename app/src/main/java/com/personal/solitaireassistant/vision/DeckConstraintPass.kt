@@ -41,8 +41,7 @@ object DeckConstraintPass {
             return state
         }
 
-        resolveWasteBlackSuitByDeckOccupancy(entries)
-        resolveAmbiguousSuitByDeckOccupancy(entries)
+        resolveBlackSuitByDeckOccupancy(entries)
         val resolvedByDedup = resolveDuplicateCardIds(bitmap, recognizer, entries)
         resolvePartnerSuitSwaps(bitmap, recognizer, entries, resolvedByDedup)
 
@@ -100,37 +99,39 @@ object DeckConstraintPass {
     }
 
     /**
-     * Waste black cards: when assigning the current suit would duplicate a card
-     * already on the board, flip to the partner suit if that id is still free
-     * (e.g. waste AS vs foundation AC). When both partner ids are free, keep the
-     * template read — do not guess from a narrow C-vs-S margin.
+     * Black-suit deck occupancy: flip to the partner suit when the current id is
+     * already taken and the partner is free. Waste flips unconditionally (one
+     * slot). Elsewhere only when the read was ambiguous or a genuine C-vs-S
+     * near-tie — never guess from a narrow margin when both ids are still free.
+     * Red ambiguous duplicates stay on the old ambiguous pass below.
      */
-    private fun resolveWasteBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
+    private fun resolveBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
-            if (entry.pile != PileRef.Waste) return@forEach
             if (entry.card.suit.isRed) return@forEach
             val partner = partnerSuit(entry.card.suit)
             val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
             val partnerTaken = others.any { it.card.id == partnerCard.id }
             val currentTaken = others.any { it.card.id == entry.card.id }
+            val waste = entry.pile == PileRef.Waste
+            if (!waste && !qualifiesForBlackDeckOccupancy(entry)) return@forEach
             when {
-                currentTaken && !partnerTaken ->
-                    entry.card = partnerCard
+                currentTaken && !partnerTaken -> {
+                    // Two non-waste slots sharing an id are handled by dedup.
+                    if (waste) entry.card = partnerCard
+                }
                 partnerTaken && !currentTaken ->
                     entry.card = entry.card.copy(suitAmbiguous = false)
                 else -> Unit
             }
         }
+        resolveAmbiguousRedSuitByDeckOccupancy(entries)
     }
 
-    /**
-     * When a black/red suit read is ambiguous but assigning the current suit would
-     * duplicate a card already on the board, flip to the partner suit instead.
-     * Real case: KC read as KS~ while KS is already assigned elsewhere.
-     */
-    private fun resolveAmbiguousSuitByDeckOccupancy(entries: MutableList<Entry>) {
+    /** Red-suit ambiguous duplicates only — black C↔S handled above. */
+    private fun resolveAmbiguousRedSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
+            if (!entry.card.suit.isRed) return@forEach
             if (!entry.card.suitAmbiguous &&
                 !entry.originalDiagnostic.contains("-ambiguous")
             ) {
@@ -149,6 +150,20 @@ object DeckConstraintPass {
                 else -> Unit
             }
         }
+    }
+
+    private fun qualifiesForBlackDeckOccupancy(entry: Entry): Boolean =
+        entry.card.suitAmbiguous ||
+            entry.originalDiagnostic.contains("-ambiguous") ||
+            isBlackSuitNearTie(entry)
+
+    private fun isBlackSuitNearTie(entry: Entry): Boolean {
+        val scores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)
+        if (scores.isEmpty()) return false
+        val club = scores[Suit.Clubs] ?: 0f
+        val spade = scores[Suit.Spades] ?: 0f
+        if (club < BLACK_SUIT_NEAR_TIE_MIN && spade < BLACK_SUIT_NEAR_TIE_MIN) return false
+        return kotlin.math.abs(club - spade) < BLACK_SUIT_NEAR_TIE_MARGIN
     }
 
     private fun resolvePartnerSuitSwaps(
@@ -184,7 +199,15 @@ object DeckConstraintPass {
             // comparison, which - unlike the tiebreak - has no shape-veto or
             // ink-ratio signal. Only reconsider a pair when at least one
             // side was already flagged uncertain by that tiebreak.
-            if (!first.card.suitAmbiguous && !second.card.suitAmbiguous) return@forEach
+            val blackNearTiePair = !first.card.suit.isRed &&
+                isBlackSuitNearTie(first) &&
+                isBlackSuitNearTie(second)
+            if (!first.card.suitAmbiguous &&
+                !second.card.suitAmbiguous &&
+                !blackNearTiePair
+            ) {
+                return@forEach
+            }
             // Two real device traces (both after the suitAmbiguous gate above)
             // caught this pass flipping a card whose ORIGINAL suit read was
             // already strong: waste Four of Diamonds (trace.suitScore=1.00)
@@ -204,8 +227,11 @@ object DeckConstraintPass {
             // literally the number the mismatch trace prints as
             // "suit=source@X") instead of re-deriving a possibly-different
             // one here.
-            if ((first.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR ||
-                (second.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR
+            if (!blackNearTiePair &&
+                (
+                    (first.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR ||
+                        (second.originalSuitScore ?: 0f) >= CONFIDENT_CURRENT_SUIT_FLOOR
+                    )
             ) {
                 return@forEach
             }
@@ -364,6 +390,13 @@ object DeckConstraintPass {
         entry: Entry,
         usedIds: Set<String>
     ): Card {
+        if (!entry.card.suit.isRed && isBlackSuitNearTie(entry)) {
+            val partner = partnerSuit(entry.card.suit)
+            val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
+            if (partnerCard.id !in usedIds) {
+                return partnerCard
+            }
+        }
         val candidates = duplicateReplacementCandidates(entry, usedIds)
         if (candidates.isEmpty()) {
             return entry.card.copy(suitAmbiguous = true)
@@ -611,4 +644,7 @@ object DeckConstraintPass {
     // same crop favored Spades by 0.17 (0.92 vs 0.75) - a gap too wide to be normal
     // measurement noise between the two calls.
     private const val STRONG_ALT_OVERRIDE_MARGIN = 0.15f
+    /** C-vs-S template scores closer than this are deck-breakable near-ties. */
+    private const val BLACK_SUIT_NEAR_TIE_MARGIN = 0.04f
+    private const val BLACK_SUIT_NEAR_TIE_MIN = 0.55f
 }

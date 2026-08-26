@@ -386,6 +386,89 @@ class DeckConstraintPassTest {
         }
     }
 
+    @Test
+    fun nearTieBlackDuplicateFlipsLoserToPartnerSuit() {
+        val high = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Nine,
+            suit = Suit.Spades,
+            confidence = 0.90f,
+            diagnostic = "match-Nine-Spades@0.90"
+        )
+        val nearTie = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Nine,
+            suit = Suit.Spades,
+            confidence = 0.82f,
+            diagnostic = "match-Nine-Spades@0.82",
+            suitTemplates = "S:0.82 C:0.79"
+        )
+        val recognized = mutableListOf(high.slot, nearTie.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(high.card),
+                listOf(nearTie.card)
+            ) + List(5) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Spades, result.tableau[0].last().suit)
+            assertEquals(Suit.Clubs, result.tableau[1].last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun confidentBlackSuitNearTieDoesNotFlipWhenBothIdsFree() {
+        val only = slot(
+            pile = PileRef.Tableau(3),
+            index = 0,
+            rank = Rank.Eight,
+            suit = Suit.Clubs,
+            confidence = 0.84f,
+            diagnostic = "match-Eight-Clubs@0.84",
+            suitTemplates = "C:0.83 S:0.81"
+        )
+        val recognized = mutableListOf(only.slot)
+        val state = GameState(
+            tableau = listOf(emptyList(), emptyList(), emptyList(), listOf(only.card)) +
+                List(3) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[3].last().suit)
+            assertEquals(Suit.Clubs, recognized[0].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
     private data class SlotFixture(
         val card: Card,
         val slot: RecognizedSlot
