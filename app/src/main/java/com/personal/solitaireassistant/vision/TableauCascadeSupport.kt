@@ -114,21 +114,10 @@ internal object TableauCascadeSupport {
         ) {
             return true
         }
-        // Same-rank color-family flips only when the run is doubly anchored.
-        // The unlocked path (v1.4.52) fixed some Clubs→Diamonds but invented
-        // C↔S via placeholders and cost net accuracy on v1.4.54.
-        if (rankCountConsistent &&
-            !rankMismatch &&
-            colorMismatch &&
-            directConfidence < COLOR_MISMATCH_FLOOR
-        ) {
-            return true
-        }
-        // Color flips on a consistent run (rank may also differ).
-        if (rankCountConsistent &&
-            colorMismatch &&
-            directConfidence < COLOR_MISMATCH_FLOOR
-        ) {
+        // Color-family flips on a doubly-anchored run (Clubs→Diamonds / Spades→Hearts).
+        // The 0.92 floor left Evaluate's cross-color buckets intact — mid-cascade
+        // diamond reads of true clubs often score ≥0.92 on the red pip.
+        if (rankCountConsistent && colorMismatch) {
             return true
         }
         // suitAmbiguous + wrong rank under a consistent run is almost always a
