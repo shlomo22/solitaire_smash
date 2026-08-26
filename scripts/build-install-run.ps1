@@ -16,11 +16,15 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "== Building debug APK =="
-# --no-configuration-cache: this runner reuses the same checkout between
-# runs (unlike GitHub-hosted runners), so a stale cached configuration
-# from an earlier failed build (e.g. before ANDROID_HOME was set here)
-# could otherwise get replayed instead of re-evaluated.
-& $GradlewPath assembleDebug --no-configuration-cache
+# --no-daemon: a Gradle daemon started before ANDROID_HOME was ever set
+# (i.e. during the very first failed build on this machine) stays alive
+# and gets reused for speed - but it keeps the environment it was
+# originally launched with, so it never sees env vars set afterward.
+# CI has no "next build" soon enough for a daemon to pay for itself
+# anyway, so skip it entirely and always get a fresh process.
+# --no-configuration-cache: same idea, belt-and-suspenders against a
+# stale cached build configuration from that same early failure.
+& $GradlewPath assembleDebug --no-daemon --no-configuration-cache
 if ($LASTEXITCODE -ne 0) { throw "Gradle build failed (exit $LASTEXITCODE)" }
 
 Write-Host "== Checking device connection =="
@@ -31,7 +35,7 @@ if (-not ($devices -match "\bdevice\b")) {
 }
 
 Write-Host "== Installing on device =="
-& $GradlewPath installDebug --no-configuration-cache
+& $GradlewPath installDebug --no-daemon --no-configuration-cache
 if ($LASTEXITCODE -ne 0) { throw "Install failed (exit $LASTEXITCODE)" }
 
 Write-Host "== Clearing logcat buffer (so a later pull starts clean from this run) =="
