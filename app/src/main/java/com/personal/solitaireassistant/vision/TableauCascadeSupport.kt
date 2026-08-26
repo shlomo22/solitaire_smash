@@ -94,7 +94,8 @@ internal object TableauCascadeSupport {
         geometric: Card,
         directCard: Card?,
         directConfidence: Float,
-        rankCountConsistent: Boolean
+        rankCountConsistent: Boolean,
+        inkDisagreesWithDirectSuit: Boolean = false
     ): Boolean {
         if (directCard == null || !directCard.known) return false
         if (!geometric.known || !bottomCard.known) return false
@@ -118,6 +119,17 @@ internal object TableauCascadeSupport {
         // The 0.92 floor left Evaluate's cross-color buckets intact — mid-cascade
         // diamond reads of true clubs often score ≥0.92 on the red pip.
         if (rankCountConsistent && colorMismatch) {
+            return true
+        }
+        // Header-strip ink color contradicts the direct suit (black ink on a
+        // "Diamonds" read). v1.4.61's rankCountConsistent-only color path was a
+        // no-op when geomCount ≠ rankCount; ink disagreement is a local signal
+        // that still requires geometric color ≠ direct (binary ⇒ ink agrees
+        // with geometry) so we don't unlock plain color flips (v1.4.52 C↔S).
+        if (inkDisagreesWithDirectSuit &&
+            colorMismatch &&
+            bottomReadConfidence >= BOTTOM_ANCHOR_FLOOR
+        ) {
             return true
         }
         // suitAmbiguous + wrong rank under a consistent run is almost always a

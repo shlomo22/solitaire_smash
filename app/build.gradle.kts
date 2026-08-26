@@ -12,8 +12,8 @@ android {
         applicationId = "com.personal.solitaireassistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 133
-        versionName = "1.4.62"
+        versionCode = 134
+        versionName = "1.4.63"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

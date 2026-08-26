@@ -546,13 +546,23 @@ class GameStateDetector(
                         stats = stats
                     )
                     val slotCard = cardFromHit(slotHit) ?: slotHit.card
+                    val headerStats = SmashColorAnalyzer.analyze(bitmap, headerRegion)
+                    val inkSaysRed = headerStats.redInkRatio >
+                        headerStats.blackInkRatio * 1.20f
+                    val inkSaysBlack = headerStats.blackInkRatio >
+                        headerStats.redInkRatio * 1.20f
+                    val inkDisagreesWithDirectSuit = slotCard?.known == true && (
+                        (inkSaysBlack && slotCard.suit.isRed) ||
+                            (inkSaysRed && !slotCard.suit.isRed)
+                        )
                     val prefersGeometric = TableauCascadeSupport.prefersGeometricOverDirectRead(
                         bottomCard = card,
                         bottomReadConfidence = hit.confidence,
                         geometric = geometricFallback,
                         directCard = slotCard,
                         directConfidence = slotHit.confidence,
-                        rankCountConsistent = rankCountConsistent
+                        rankCountConsistent = rankCountConsistent,
+                        inkDisagreesWithDirectSuit = inkDisagreesWithDirectSuit
                     )
                     val (cascadeCard, cascadeTrace, cascadeDiagnostic, cascadeConfidence, cascadeInferred) =
                         if (TableauCascadeSupport.isReliableRead(slotHit, slotCard) &&

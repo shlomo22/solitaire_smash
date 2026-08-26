@@ -279,32 +279,33 @@ class TableauCascadeSupportTest {
     }
 
     @Test
-    fun prefersGeometricForSameRankColorFlipWithoutRankCountLock() {
-        // Unlocked color-only overrides were reverted after v1.4.54 — they
-        // invented C↔S placeholders. Same-rank color flips need a consistent run.
-        val bottomFive = Card(Rank.Five, Suit.Hearts, faceUp = true, known = true)
+    fun prefersGeometricWhenHeaderInkDisagreesWithDirectSuit() {
+        val bottomFive = Card(Rank.Five, Suit.Diamonds, faceUp = true, known = true)
         val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFive, 1)
+        // Geometry: Six of black. Direct: Six of Diamonds with black header ink.
         val direct = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true)
         assertEquals(Rank.Six, geometric.rank)
         assertTrue(!geometric.suit.isRed)
-        assertFalse(
-            TableauCascadeSupport.prefersGeometricOverDirectRead(
-                bottomCard = bottomFive,
-                bottomReadConfidence = 0.88f,
-                geometric = geometric,
-                directCard = direct,
-                directConfidence = 0.84f,
-                rankCountConsistent = false
-            )
-        )
         assertTrue(
             TableauCascadeSupport.prefersGeometricOverDirectRead(
                 bottomCard = bottomFive,
                 bottomReadConfidence = 0.88f,
                 geometric = geometric,
                 directCard = direct,
-                directConfidence = 0.84f,
-                rankCountConsistent = true
+                directConfidence = 0.94f,
+                rankCountConsistent = false,
+                inkDisagreesWithDirectSuit = true
+            )
+        )
+        assertFalse(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFive,
+                bottomReadConfidence = 0.88f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.94f,
+                rankCountConsistent = false,
+                inkDisagreesWithDirectSuit = false
             )
         )
     }
