@@ -666,7 +666,9 @@ class GameStateDetector(
                             hit = slotHit,
                             cardOverride = cascadeCard,
                             trace = cascadeTrace,
-                            inferred = false
+                            inferred = false,
+                            diagnostic = cascadeDiagnostic,
+                            confidence = cascadeConfidence
                         )
                     }
                 }
@@ -2235,14 +2237,16 @@ class GameStateDetector(
         hit: RecognitionHit,
         cardOverride: Card? = null,
         trace: RecognitionTrace = hit.trace,
-        inferred: Boolean = false
+        inferred: Boolean = false,
+        diagnostic: String = hit.diagnostic,
+        confidence: Float = hit.confidence
     ): RecognizedSlot = RecognizedSlot(
         pile = pile,
         index = index,
         bounds = bounds,
         engine = slotGuessFromHit(hit, cardOverride),
-        confidence = hit.confidence,
-        diagnostic = hit.diagnostic,
+        confidence = confidence,
+        diagnostic = diagnostic,
         trace = trace,
         inferred = inferred
     )
