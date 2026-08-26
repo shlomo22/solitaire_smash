@@ -578,6 +578,33 @@ class GameStateDetector(
                                 confidence = slotHit.confidence,
                                 inferred = false
                             )
+                        } else if (prefersGeometric && geometricFallback.known) {
+                            // Geometry beat a direct mid-run read. Must stay
+                            // inferred=false — GoldenTruthEvaluator ignores
+                            // inferred slots, so marking these inferred made
+                            // every geometric override invisible to Evaluate
+                            // (and let neighbors steal truth matches → new
+                            // rank errors). Re-score suit in the geometric
+                            // color family; rejected red/black templates from
+                            // a color-flip read must not leave the Spades/
+                            // Hearts placeholder as a fake "known" suit.
+                            val enriched = enrichGeometricCascadeSuit(
+                                bitmap = bitmap,
+                                headerRegion = headerRegion,
+                                geometric = geometricFallback,
+                                rejectedHit = slotHit
+                            )
+                            ResolvedCascadeSlot(
+                                card = enriched.copy(inferred = false),
+                                trace = slotHit.trace.withPost(
+                                    "geom-override:direct=${slotCard?.id}," +
+                                        "conf=${"%.2f".format(slotHit.confidence)}," +
+                                        "to=${enriched.id}"
+                                ),
+                                diagnostic = "geom-override:${slotHit.diagnostic}",
+                                confidence = slotHit.confidence.coerceAtMost(0.72f),
+                                inferred = false
+                            )
                         } else {
                             // Keep the real attempt's own rank/suit/post trace instead
                             // of discarding it to RecognitionTrace.EMPTY. Previously a
@@ -1468,6 +1495,43 @@ class GameStateDetector(
         recognizer.release()
         columnExecutor.shutdown()
         wasteOcrExecutor.shutdown()
+    }
+
+    /**
+     * Prefer geometric color from cascade math, then pick C/S or H/D from
+     * fresh templates on the visible header. Trace scores alone are often
+     * only the wrong color family after a Clubs→Diamonds-style misread.
+     */
+    private fun enrichGeometricCascadeSuit(
+        bitmap: Bitmap,
+        headerRegion: BoardRegion,
+        geometric: Card,
+        rejectedHit: RecognitionHit
+    ): Card {
+        val fromTrace = TableauCascadeSupport.enrichGeometricFromRejectedRead(
+            geometric,
+            rejectedHit
+        )
+        if (!fromTrace.suitAmbiguous && fromTrace.suit.isRed == geometric.suit.isRed) {
+            return fromTrace
+        }
+        val family = if (geometric.suit.isRed) {
+            setOf(Suit.Hearts, Suit.Diamonds)
+        } else {
+            setOf(Suit.Clubs, Suit.Spades)
+        }
+        val scores = recognizer.suitTemplateScores(bitmap, headerRegion, family)
+        val best = family.maxByOrNull { scores[it] ?: 0f } ?: return fromTrace
+        val bestScore = scores[best] ?: 0f
+        val partner = family.first { it != best }
+        val partnerScore = scores[partner] ?: 0f
+        if (bestScore < 0.55f) {
+            return geometric.copy(suitAmbiguous = true)
+        }
+        return geometric.copy(
+            suit = best,
+            suitAmbiguous = bestScore - partnerScore < 0.03f
+        )
     }
 
     fun attemptCornerRankOcr(

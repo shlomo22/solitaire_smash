@@ -112,6 +112,28 @@ class TableauCascadeSupportTest {
         val enriched = TableauCascadeSupport.enrichGeometricFromRejectedRead(geometric, hit)
         assertEquals(Rank.Four, enriched.rank)
         assertEquals(Suit.Diamonds, enriched.suit)
+        assertFalse(enriched.suitAmbiguous)
+    }
+
+    @Test
+    fun enrichGeometricMarksAmbiguousWhenColorFamilyScoresMissing() {
+        val geometric = TableauCascadeSupport.geometricCascadeCard(
+            bottomCard = Card(Rank.Five, Suit.Hearts, faceUp = true, known = true),
+            distanceFromBottom = 1
+        )
+        assertEquals(Suit.Spades, geometric.suit) // black placeholder
+        // Wrong-color templates only — the Clubs→Diamonds failure mode.
+        val hit = RecognitionHit(
+            card = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true),
+            confidence = 0.84f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Six-Diamonds",
+            trace = RecognitionTrace(suitTemplates = "D:0.88 H:0.70")
+        )
+        val enriched = TableauCascadeSupport.enrichGeometricFromRejectedRead(geometric, hit)
+        assertEquals(Rank.Six, enriched.rank)
+        assertTrue(enriched.suitAmbiguous)
     }
 
     @Test

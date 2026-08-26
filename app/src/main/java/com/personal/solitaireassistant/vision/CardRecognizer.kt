@@ -1376,7 +1376,7 @@ class CardRecognizer(
         val loose = bestBitmapSuitLoose(crop, red = false)
         if (loose != null) return Triple(loose, true, debug)
         val fallback = shape?.suit
-            ?: if (scores.fullSpade >= scores.fullClub) Suit.Spades else Suit.Clubs
+            ?: if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
         return Triple(fallback, true, debug)
     }
 

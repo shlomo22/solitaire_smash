@@ -10,8 +10,8 @@ internal object TableauCascadeSupport {
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
     /** Adjacent glyph confusions need a higher bar to beat geometry. */
     const val ADJACENT_CONFUSION_FLOOR = 0.82f
-    /** Color-only mismatches on a doubly-anchored run (e.g. Clubs→Diamonds). */
-    const val COLOR_MISMATCH_FLOOR = 0.85f
+    /** Color-family flips (Clubs→Diamonds). Allow strong wrong-color reads. */
+    const val COLOR_MISMATCH_FLOOR = 0.92f
     private const val WEAK_JACK_FLOOR = 0.65f
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
@@ -218,8 +218,13 @@ internal object TableauCascadeSupport {
             if (best == Suit.Clubs) Suit.Spades else Suit.Clubs
         }
         val partnerScore = scores[partner] ?: 0f
-        if (bestScore < 0.65f || bestScore - partnerScore < 0.03f) return geometric
-        return geometric.copy(suit = best)
+        if (bestScore < 0.65f || bestScore - partnerScore < 0.03f) {
+            // Keep color placeholder but don't pretend Spades/Hearts is known —
+            // a Clubs→Diamonds override that falls through here was becoming
+            // Clubs→Spades via the black default.
+            return geometric.copy(suitAmbiguous = true)
+        }
+        return geometric.copy(suit = best, suitAmbiguous = false)
     }
 
     fun promoteTrustedRun(faceUpRun: List<Card>): List<Card> {
