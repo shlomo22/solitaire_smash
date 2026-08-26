@@ -189,4 +189,25 @@ class KlondikeRulesTest {
             KlondikeRules.legalMoves(state).none { it is Move.TableauToTableau }
         )
     }
+
+    @Test
+    fun aceIsAlwaysASafeFoundationMove() {
+        val state = GameState.empty()
+        assertTrue(KlondikeRules.isSafeFoundationMove(state, c(Rank.Ace, Suit.Hearts)))
+        assertTrue(KlondikeRules.isSafeFoundationMove(state, c(Rank.Ace, Suit.Spades)))
+    }
+
+    @Test
+    fun twoIsUnsafeWhenOtherAcesAreMissing() {
+        val state = GameState(
+            tableau = List(7) { emptyList() },
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Spades)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        assertFalse(KlondikeRules.isSafeFoundationMove(state, c(Rank.Two, Suit.Spades)))
+    }
 }

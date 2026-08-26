@@ -328,6 +328,97 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun holdsUnbalancedTwoWhenDrawIsAvailable() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Two, Suit.Spades)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Spades)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            stock = listOf(c(Rank.Four, Suit.Hearts, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(Move.DrawStock, best.move)
+    }
+
+    @Test
+    fun sendsUnbalancedTwoWhenItIsTheOnlyCardMove() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Two, Suit.Spades)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Spades)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "Expected Two to foundation as only card move, got ${best.move}",
+            best.move is Move.TableauToFoundation
+        )
+    }
+
+    @Test
+    fun sendsUnbalancedTwoWhenItReveals() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Seven, Suit.Clubs, false), c(Rank.Two, Suit.Spades)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Spades)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            stock = listOf(c(Rank.Four, Suit.Hearts, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "Expected revealing Two to foundation, got ${best.move}",
+            best.move is Move.TableauToFoundation
+        )
+    }
+
+    @Test
+    fun sendsBalancedTwoWhenNotABridge() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Two, Suit.Spades)),
+                listOf(c(Rank.Five, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Spades)),
+                listOf(c(Rank.Ace, Suit.Hearts)),
+                listOf(c(Rank.Ace, Suit.Diamonds)),
+                emptyList()
+            ),
+            stock = listOf(c(Rank.Four, Suit.Hearts, false)),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertTrue(
+            "Expected balanced Two to foundation, got ${best.move}",
+            best.move is Move.TableauToFoundation
+        )
+    }
+
+    @Test
     fun prefersKingWithLargerHiddenFamily() {
         val state = GameState(
             tableau = listOf(

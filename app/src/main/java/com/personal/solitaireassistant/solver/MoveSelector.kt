@@ -20,6 +20,7 @@ object MoveSelector {
     private const val WASTE_UNLOCK_THRESHOLD = 50.0
     private const val MINIMAL_MOVE_PENALTY = 15.0
     private const val ACE_ON_TABLEAU_PENALTY = 150.0
+    private const val HOLD_UNBALANCED_FOUNDATION = 2.0
 
     fun rankedMoves(
         state: GameState,
@@ -114,6 +115,10 @@ object MoveSelector {
             if (card != null && isTableauUsefulLowCard(before, card)) {
                 foundationScore = if (safe) 25.0 else 5.0
                 reasons += "defer-low-foundation"
+            }
+            if (!safe && revealed == 0) {
+                foundationScore = HOLD_UNBALANCED_FOUNDATION
+                reasons += "hold-unbalanced"
             }
             score += foundationScore * foundationDelta
             reasons += if (safe) "safe-foundation" else "risky-foundation"
