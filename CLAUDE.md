@@ -232,18 +232,20 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   can independently latch the 2nd card: it counts only white/red ink, so a black
   front card can fail the 6% gate.
 
-## Current state (as of v1.4.82 / versionCode 153, pushed, not yet Evaluate-verified)
+## Current state (as of v1.4.83 / versionCode 154, pushed, not yet Evaluate-verified)
 
-**v1.4.81 / 152** Evaluate: **5182/5317 (+3)**. `QH vs 10H` and both `QC vs 10C`
-cleared. `JS vs 3C` became `JS vs 6C` (`correctSixOnWaste` stole Four at the 0.38
-floor). Rank 59, suit 86, C→S 23, S→C 14.
+**v1.4.82 / 153** Evaluate: **5185/5317 (+3)**. Rank 56 (was 59). Suit 86.
+`8H vs 4H` cleared. `210739` is `JS vs JC` (rank fixed). `230337` waste hit.
+C→S 24 / S→C 13.
 
-**v1.4.82** — do not Six-steal a Four when a waste crop already read Jack
-(`JS vs 6C`, `JC vs 6C` with legacy Jack). OCR Eight may override Four
-(`8H vs 4H`; tight-crop OCR `'8'@0.62`). Do **not** adopt OCR Jack over Four
-— `20260825_143855` is a real waste Six whose tight corner OCR'd `J`. Awaiting
-Evaluate. Expected: 032046 JC and the three 8H slots; 230337 becomes JS vs JC
-(still a suit miss).
+**v1.4.83** — Jack+Four fusion was still losing to neighbor OCR Five
+(`032046` fan is 3 / **5** / **J**, engine `JC vs 5S` via `correctFiveJack`).
+Keep Jack when both crops already ranked and OCR is 5 or 3. Do **not** Six-steal
+`190130` back to Six: those pixels are a Jack of Clubs; truth labeled Six.
+
+**190130 is a truth error**, not a recognition regression. Pixel crop of the
+playable waste face is an unambiguous J♣ (center J glyph + club pip). Leave the
+Jack-crop Six gate in place.
 
 Golden set: **151 samples / 5317 labeled slots**. On-device floor:
 

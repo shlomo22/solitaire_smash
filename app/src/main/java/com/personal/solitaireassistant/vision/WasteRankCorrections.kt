@@ -80,7 +80,14 @@ internal object WasteRankCorrections {
         // Five candidate, rather than requiring the absolute 0.50 floor above
         // (confirmed case: fiveScore 0.47 vs jackScore 0.40, five reads of
         // OCR "5" with zero competing reads).
-        if (ocrRank == Rank.Five && fiveScore >= jackScore - 0.05f) return Rank.Five
+        // Both crops already ranked: a later OCR 5 is the covered fan card
+        // (v1.4.82: 032046 Jack+Four then whole@707 ocr='5' → JC vs 5S).
+        if (ocrRank == Rank.Five &&
+            fiveScore >= jackScore - 0.05f &&
+            (legacyCard?.rank == null || tightCard?.rank == null)
+        ) {
+            return Rank.Five
+        }
         if (inkGuess?.rank == Rank.Five &&
             inkGuess.confidence >= 0.48f &&
             fiveScore >= jackScore - 0.10f
@@ -359,6 +366,17 @@ internal object WasteRankCorrections {
             val sixScore = rankScore(exactRankScores, Rank.Six)
             if (eightScore >= 0.48f && eightScore + 0.02f >= sixScore) return Rank.Eight
             return Rank.Six
+        }
+
+        // Jack templates as Four on the tight crop; a later left-fan OCR
+        // then reads the covered 5 or 3 (032046 3/5/J, 230337 K/3/J).
+        // Keep the crop Jack. Do not wait for isConfusionPair to return
+        // null and then let correctFiveJack steal.
+        if (legacyRank == Rank.Jack &&
+            tightRank == Rank.Four &&
+            (ocrRank == Rank.Five || ocrRank == Rank.Three)
+        ) {
+            return Rank.Jack
         }
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank

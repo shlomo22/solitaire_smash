@@ -155,7 +155,35 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
-    fun ocrThreeDoesNotOverrideWhenCropsDisagreeJackAndFour() {
+    fun ocrFiveKeepsJackWhenCropsAreJackAndFour() {
+        val jack = Card(Rank.Jack, Suit.Clubs, faceUp = true)
+        val four = Card(Rank.Four, Suit.Clubs, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Five,
+            legacyCard = jack,
+            tightCard = four,
+            baseCard = jack
+        )
+        assertEquals(Rank.Jack, override)
+    }
+
+    @Test
+    fun correctFiveJackDoesNotAdoptOcrFiveWhenBothCropsHaveRanks() {
+        val jack = Card(Rank.Jack, Suit.Clubs, faceUp = true, known = true)
+        val four = Card(Rank.Four, Suit.Clubs, faceUp = true, known = true)
+        val rank = WasteRankCorrections.correctFiveJack(
+            legacyCard = jack,
+            tightCard = four,
+            baseCard = jack,
+            exactRankScores = mapOf(Rank.Five to 0.41f, Rank.Jack to 0.36f),
+            inkGuess = null,
+            ocrRank = Rank.Five
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun ocrThreeKeepsJackWhenCropsDisagreeJackAndFour() {
         val jack = Card(Rank.Jack, Suit.Spades, faceUp = true)
         val four = Card(Rank.Four, Suit.Clubs, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(
@@ -164,7 +192,7 @@ class WasteOcrRankOverrideTest {
             tightCard = four,
             baseCard = jack
         )
-        assertNull(override)
+        assertEquals(Rank.Jack, override)
     }
 
     @Test
