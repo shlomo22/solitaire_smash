@@ -1,0 +1,17 @@
+<#
+  Per-machine override for scripts\config.ps1 - OPTIONAL, only needed on
+  a machine whose Android SDK lives somewhere non-standard.
+
+  scripts\config.ps1 already auto-detects the SDK at the default Android
+  Studio install location ($env:LOCALAPPDATA\Android\Sdk), which works
+  unchanged on any machine with a normal install - so on most machines
+  (including a fresh second dev machine) you don't need this file at all.
+
+  Only if THIS particular machine's SDK is somewhere else: copy this file
+  to "local-machine.ps1" in the same folder (drop the ".example") and set
+  the path below. That filename is gitignored, so it never gets committed
+  or pushed - each machine can keep its own without clashing or needing
+  merges.
+#>
+
+$AndroidSdkPath = "C:\Path\To\Your\Android\Sdk"

@@ -9,7 +9,26 @@ $MainActivity  = ".MainActivity"                              # confirmed from A
 $AnalysisLogRelPath = "files/logs/analysis.log"               # confirmed via Android Studio Device Explorer: /data/data/<package>/files/logs/analysis.log
                                                                 # (internal, private storage - pulled via "adb exec-out run-as" since it's a debug build)
 $OutputRoot     = Join-Path $PSScriptRoot "..\pulled"         # where pulled artifacts land locally (gitignored)
-$AndroidSdkPath = "C:\Users\shlomob\AppData\Local\Android\Sdk" # confirmed from local.properties' sdk.dir - the runner service can't see local.properties (it's gitignored) or your user PATH, so both ANDROID_HOME and adb are pinned to this explicitly below
+
+# Default SDK location: Android Studio's standard per-user install path.
+# This resolves correctly on ANY machine with a normal install, since
+# $env:LOCALAPPDATA always expands to "C:\Users\<whoever's logged in>\AppData\Local"
+# for the account actually running this script - no username needs to be
+# hardcoded here, so this line works unchanged on your laptop, your office
+# desktop, or any future machine.
+$AndroidSdkPath = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+
+# If one particular machine's SDK lives somewhere non-standard, don't edit
+# the line above (it's shared/committed and used by every machine) -
+# instead copy scripts\local-machine.ps1.example to scripts\local-machine.ps1
+# (gitignored, stays local to that one machine only) and set $AndroidSdkPath
+# there. Loading it here, after the default, lets it override just for
+# whichever machine has that file.
+$localMachineConfig = Join-Path $PSScriptRoot "local-machine.ps1"
+if (Test-Path $localMachineConfig) {
+    . $localMachineConfig
+}
+
 $AdbPath        = Join-Path $AndroidSdkPath "platform-tools\adb.exe"
 $GradlewPath    = Join-Path $PSScriptRoot "..\gradlew.bat"    # adjust if scripts/ is not directly under the repo root
 
