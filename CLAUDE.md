@@ -232,16 +232,15 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   can independently latch the 2nd card: it counts only white/red ink, so a black
   front card can fail the 6% gate.
 
-## Current state (as of v1.4.83 / versionCode 154, pushed, not yet Evaluate-verified)
+## Current state (as of v1.4.84 / versionCode 155, pushed, not yet Evaluate-verified)
 
-**v1.4.82 / 153** Evaluate: **5185/5317 (+3)**. Rank 56 (was 59). Suit 86.
-`8H vs 4H` cleared. `210739` is `JS vs JC` (rank fixed). `230337` waste hit.
-C→S 24 / S→C 13.
+**v1.4.83 / 154** Evaluate: **5186/5317 (+1)**. Rank 54. Suit 86.
+`190130` cleared after relabel to Jack. `032046` rank fixed, remaining `JC vs JS`
+was a Clubs label on a Spade pip.
 
-**v1.4.83** — Jack+Four fusion was still losing to neighbor OCR Five
-(`032046` fan is 3 / **5** / **J**, engine `JC vs 5S` via `correctFiveJack`).
-Keep Jack when both crops already ranked and OCR is 5 or 3. `190130` waste
-truth is now Jack of Clubs (was Six; pixel-verified).
+**v1.4.84** — OCR Jack may override a tight Four (`205220`, `230055`). The old
+veto was `143855`, whose playable waste is also a Jack of Clubs (truth was Six).
+`032046` waste truth is now Jack of Spades.
 
 Golden set: **151 samples / 5317 labeled slots**. On-device floor:
 

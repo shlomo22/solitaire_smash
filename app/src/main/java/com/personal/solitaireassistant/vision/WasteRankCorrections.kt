@@ -358,6 +358,17 @@ internal object WasteRankCorrections {
         ) {
             return Rank.Eight
         }
+        // Jack templates as Four on a tight waste crop. OCR "J" on that same
+        // card is the playable glyph (205220, 230055, 143855). The old veto
+        // was 143855, whose pixels are a Jack labeled Six.
+        if (ocrRank == Rank.Jack &&
+            (tightRank == Rank.Four ||
+                legacyRank == Rank.Four ||
+                baseRank == Rank.Four) &&
+            Rank.Jack !in tightLegacyRanks
+        ) {
+            return Rank.Jack
+        }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Seven) &&
             !tightLegacyRanks.contains(Rank.Six)
