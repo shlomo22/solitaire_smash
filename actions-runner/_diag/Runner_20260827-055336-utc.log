@@ -1,0 +1,152 @@
+[2026-08-27 05:53:36Z INFO HostContext] No proxy settings were found based on environmental variables (http_proxy/https_proxy/HTTP_PROXY/HTTPS_PROXY)
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'Credentials': 'D:\projects\solitaire smash\actions-runner\.credentials'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'Runner': 'D:\projects\solitaire smash\actions-runner\.runner'
+[2026-08-27 05:53:36Z INFO Listener] Runner is built for Windows (X64) - win-x64.
+[2026-08-27 05:53:36Z INFO Listener] RuntimeInformation: Microsoft Windows 10.0.26200.
+[2026-08-27 05:53:36Z INFO Listener] Version: 2.336.0
+[2026-08-27 05:53:36Z INFO Listener] Commit: 98aabcd429c4e8402406c56ce2d26387fed3b9ce
+[2026-08-27 05:53:36Z INFO Listener] Culture: en-US
+[2026-08-27 05:53:36Z INFO Listener] UI Culture: en-US
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO Listener] Validating directory permissions for: 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO CommandLineParser] Parse
+[2026-08-27 05:53:36Z INFO CommandLineParser] Parsing 3 args
+[2026-08-27 05:53:36Z INFO CommandLineParser] parsing argument
+[2026-08-27 05:53:36Z INFO CommandLineParser] HasArgs: False
+[2026-08-27 05:53:36Z INFO CommandLineParser] Adding Command: run
+[2026-08-27 05:53:36Z INFO CommandLineParser] parsing argument
+[2026-08-27 05:53:36Z INFO CommandLineParser] HasArgs: True
+[2026-08-27 05:53:36Z INFO CommandLineParser] arg: startuptype
+[2026-08-27 05:53:36Z INFO CommandLineParser] parsing argument
+[2026-08-27 05:53:36Z INFO CommandLineParser] HasArgs: True
+[2026-08-27 05:53:36Z INFO CommandLineParser] Adding option 'startuptype': 'service'
+[2026-08-27 05:53:36Z INFO Listener] Arguments parsed
+[2026-08-27 05:53:36Z INFO Runner] ExecuteCommand
+[2026-08-27 05:53:36Z INFO ConfigurationStore] currentAssemblyLocation: D:\projects\solitaire smash\actions-runner\bin\Runner.Listener.dll
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] binPath: D:\projects\solitaire smash\actions-runner\bin
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] RootFolder: D:\projects\solitaire smash\actions-runner
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'Runner': 'D:\projects\solitaire smash\actions-runner\.runner'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] ConfigFilePath: D:\projects\solitaire smash\actions-runner\.runner
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'MigratedRunner': 'D:\projects\solitaire smash\actions-runner\.runner_migrated'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] MigratedConfigFilePath: D:\projects\solitaire smash\actions-runner\.runner_migrated
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'Credentials': 'D:\projects\solitaire smash\actions-runner\.credentials'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] CredFilePath: D:\projects\solitaire smash\actions-runner\.credentials
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'MigratedCredentials': 'D:\projects\solitaire smash\actions-runner\.credentials_migrated'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] MigratedCredFilePath: D:\projects\solitaire smash\actions-runner\.credentials_migrated
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'Service': 'D:\projects\solitaire smash\actions-runner\.service'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] ServiceConfigFilePath: D:\projects\solitaire smash\actions-runner\.service
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'help': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'version': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'commit': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'check': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Command 'configure': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Command 'remove': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Command 'warmup': 'False'
+[2026-08-27 05:53:36Z INFO ConfigurationManager] LoadSettings
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsConfigured()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsConfigured: True
+[2026-08-27 05:53:36Z INFO ConfigurationManager] Is configured: True
+[2026-08-27 05:53:36Z INFO ConfigurationStore] Read setting file: 399 chars
+[2026-08-27 05:53:36Z INFO ConfigurationManager] Settings Loaded
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsServiceConfigured()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsServiceConfigured: True
+[2026-08-27 05:53:36Z INFO CommandSettings] Command 'run': 'True'
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsConfigured()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsConfigured: True
+[2026-08-27 05:53:36Z INFO ConfigurationManager] Is configured: True
+[2026-08-27 05:53:36Z INFO Runner] Set runner startup type - Service
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'once': 'False'
+[2026-08-27 05:53:36Z INFO CommandSettings] Flag 'once': 'False'
+[2026-08-27 05:53:36Z INFO Runner] RunAsync
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Work': 'D:\projects\solitaire smash\actions-runner\_work'
+[2026-08-27 05:53:36Z INFO Runner] Validating directory permissions for: 'D:\projects\solitaire smash\actions-runner\_work'
+[2026-08-27 05:53:36Z INFO ConfigurationManager] LoadMigratedSettings
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsMigratedConfigured()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] IsMigratedConfigured: False
+[2026-08-27 05:53:36Z INFO Runner] Failed to load migrated settings: No migrated configuration found.
+[2026-08-27 05:53:36Z INFO Runner] Falling back to original .runner settings
+[2026-08-27 05:53:36Z INFO Runner] Using BrokerMessageListener
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] Using provided settings
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] {
+  "AgentId": 24,
+  "AgentName": "SHLOMOB-PC",
+  "PoolId": 1,
+  "PoolName": "Default",
+  "ServerUrl": "https://pipelinesghubeus12.actions.githubusercontent.com/s6NCYKOVa06jbk5LkOTXnJOIN4kr4Kh6IABr1R5B0xn91E3r5s/",
+  "GitHubUrl": "https://github.com/shlomo22/solitaire_smash",
+  "WorkFolder": "_work",
+  "UseV2Flow": true,
+  "ServerUrlV2": "https://broker.actions.githubusercontent.com/"
+}
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] Loading Credentials
+[2026-08-27 05:53:36Z INFO ConfigurationStore] HasCredentials()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] stored True
+[2026-08-27 05:53:36Z INFO CredentialManager] GetCredentialProvider
+[2026-08-27 05:53:36Z INFO CredentialManager] Creating type OAuth
+[2026-08-27 05:53:36Z INFO CredentialManager] Creating credential type: OAuth
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:36Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:36Z INFO HostContext] Well known config file 'RSACredentials': 'D:\projects\solitaire smash\actions-runner\.credentials_rsaparams'
+[2026-08-27 05:53:36Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] Attempt to create session.
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] Connecting to the Broker Server...
+[2026-08-27 05:53:36Z INFO ConfigurationStore] HasCredentials()
+[2026-08-27 05:53:36Z INFO ConfigurationStore] stored True
+[2026-08-27 05:53:36Z INFO CredentialManager] GetCredentialProvider
+[2026-08-27 05:53:36Z INFO CredentialManager] Creating type OAuth
+[2026-08-27 05:53:36Z INFO CredentialManager] Creating credential type: OAuth
+[2026-08-27 05:53:36Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] VssConnection created
+[2026-08-27 05:53:36Z INFO BrokerMessageListener] Connecting to the Runner server...
+[2026-08-27 05:53:36Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:36Z INFO RunnerServer] Establish connection with 100 seconds timeout.
+[2026-08-27 05:53:36Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:36Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:36Z INFO RunnerServer] Establish connection with 60 seconds timeout.
+[2026-08-27 05:53:36Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:36Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:36Z INFO RunnerServer] Establish connection with 60 seconds timeout.
+[2026-08-27 05:53:36Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:37Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:37Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:37Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:37Z INFO BrokerMessageListener] VssConnection created
+[2026-08-27 05:53:37Z INFO Terminal] WRITE LINE: 
+[2026-08-27 05:53:37Z INFO Terminal] WRITE LINE: 
+[2026-08-27 05:53:37Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 05:53:37Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 05:53:38Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown
+[2026-08-27 05:53:38Z INFO BrokerMessageListener] Session created.
+[2026-08-27 05:53:38Z INFO Terminal] WRITE LINE: Current runner version: '2.336.0'
+[2026-08-27 05:53:38Z INFO Terminal] WRITE LINE: 2026-08-27 05:53:38Z: Listening for Jobs
+[2026-08-27 05:53:38Z INFO JobDispatcher] Set runner/worker IPC timeout to 30 seconds.
+[2026-08-27 06:43:50Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 06:43:51Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown
+[2026-08-27 07:34:04Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 07:34:04Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown
+[2026-08-27 08:24:16Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 08:24:17Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown
+[2026-08-27 09:14:29Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 09:14:29Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown
+[2026-08-27 10:04:42Z INFO RSAEncryptedFileKeyManager] Loading RSA key parameters from file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 10:04:42Z INFO GitHubActionsService] AAD Correlation ID for this token request: Unknown

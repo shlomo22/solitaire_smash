@@ -1,0 +1,94 @@
+[2026-08-27 05:53:04Z INFO HostContext] No proxy settings were found based on environmental variables (http_proxy/https_proxy/HTTP_PROXY/HTTPS_PROXY)
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'Credentials': 'D:\projects\solitaire smash\actions-runner\.credentials'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'Runner': 'D:\projects\solitaire smash\actions-runner\.runner'
+[2026-08-27 05:53:04Z INFO Listener] Runner is built for Windows (X64) - win-x64.
+[2026-08-27 05:53:04Z INFO Listener] RuntimeInformation: Microsoft Windows 10.0.26200.
+[2026-08-27 05:53:04Z INFO Listener] Version: 2.336.0
+[2026-08-27 05:53:04Z INFO Listener] Commit: 98aabcd429c4e8402406c56ce2d26387fed3b9ce
+[2026-08-27 05:53:04Z INFO Listener] Culture: en-IL
+[2026-08-27 05:53:04Z INFO Listener] UI Culture: en-US
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO Listener] Validating directory permissions for: 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO CommandLineParser] Parse
+[2026-08-27 05:53:04Z INFO CommandLineParser] Parsing 1 args
+[2026-08-27 05:53:04Z INFO CommandLineParser] parsing argument
+[2026-08-27 05:53:04Z INFO CommandLineParser] HasArgs: False
+[2026-08-27 05:53:04Z INFO CommandLineParser] Adding Command: remove
+[2026-08-27 05:53:04Z INFO Listener] Arguments parsed
+[2026-08-27 05:53:04Z INFO Runner] ExecuteCommand
+[2026-08-27 05:53:04Z INFO ConfigurationStore] currentAssemblyLocation: D:\projects\solitaire smash\actions-runner\bin\Runner.Listener.dll
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] binPath: D:\projects\solitaire smash\actions-runner\bin
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] RootFolder: D:\projects\solitaire smash\actions-runner
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'Runner': 'D:\projects\solitaire smash\actions-runner\.runner'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] ConfigFilePath: D:\projects\solitaire smash\actions-runner\.runner
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'MigratedRunner': 'D:\projects\solitaire smash\actions-runner\.runner_migrated'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] MigratedConfigFilePath: D:\projects\solitaire smash\actions-runner\.runner_migrated
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'Credentials': 'D:\projects\solitaire smash\actions-runner\.credentials'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] CredFilePath: D:\projects\solitaire smash\actions-runner\.credentials
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'MigratedCredentials': 'D:\projects\solitaire smash\actions-runner\.credentials_migrated'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] MigratedCredFilePath: D:\projects\solitaire smash\actions-runner\.credentials_migrated
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:04Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:04Z INFO HostContext] Well known config file 'Service': 'D:\projects\solitaire smash\actions-runner\.service'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] ServiceConfigFilePath: D:\projects\solitaire smash\actions-runner\.service
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'help': 'False'
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'version': 'False'
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'commit': 'False'
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'check': 'False'
+[2026-08-27 05:53:04Z INFO CommandSettings] Command 'configure': 'False'
+[2026-08-27 05:53:04Z INFO CommandSettings] Command 'remove': 'True'
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'local': 'False'
+[2026-08-27 05:53:04Z INFO ConfigurationStore] IsServiceConfigured()
+[2026-08-27 05:53:04Z INFO ConfigurationStore] IsServiceConfigured: False
+[2026-08-27 05:53:04Z INFO ConfigurationStore] IsConfigured()
+[2026-08-27 05:53:04Z INFO ConfigurationStore] IsConfigured: True
+[2026-08-27 05:53:04Z INFO ConfigurationStore] HasCredentials()
+[2026-08-27 05:53:04Z INFO ConfigurationStore] stored True
+[2026-08-27 05:53:04Z INFO ConfigurationStore] Read setting file: 399 chars
+[2026-08-27 05:53:04Z INFO CommandSettings] Arg 'token': ''
+[2026-08-27 05:53:04Z INFO CommandSettings] Flag 'unattended': 'False'
+[2026-08-27 05:53:04Z INFO PromptManager] ReadValue
+[2026-08-27 05:53:04Z INFO Terminal] WRITE: Enter runner remove token: 
+[2026-08-27 05:53:04Z INFO Terminal] READ SECRET
+[2026-08-27 05:53:16Z INFO Terminal] Read value: '***'
+[2026-08-27 05:53:16Z INFO ConfigurationManager] Http response code: OK from 'POST https://api.github.com/actions/runner-registration' (DDEA:5D654:20B531:31B1FC:6A8FD0CD)
+[2026-08-27 05:53:17Z INFO ConfigurationManager] cred retrieved via GitHub auth
+[2026-08-27 05:53:17Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:17Z INFO RunnerServer] Establish connection with 100 seconds timeout.
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:17Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:17Z INFO RunnerServer] Establish connection with 60 seconds timeout.
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:17Z INFO RunnerServer] EstablishVssConnection
+[2026-08-27 05:53:17Z INFO RunnerServer] Establish connection with 60 seconds timeout.
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Starting operation Location.GetConnectionData
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:17Z INFO GitHubActionsService] Finished operation Location.GetConnectionData
+[2026-08-27 05:53:18Z INFO Terminal] WRITE LINE: 
+[2026-08-27 05:53:18Z INFO ConfigurationStore] IsConfigured()
+[2026-08-27 05:53:18Z INFO ConfigurationStore] IsConfigured: True
+[2026-08-27 05:53:18Z INFO ConfigurationStore] HasCredentials()
+[2026-08-27 05:53:18Z INFO ConfigurationStore] stored True
+[2026-08-27 05:53:18Z INFO HostContext] Well known directory 'Bin': 'D:\projects\solitaire smash\actions-runner\bin'
+[2026-08-27 05:53:18Z INFO HostContext] Well known directory 'Root': 'D:\projects\solitaire smash\actions-runner'
+[2026-08-27 05:53:18Z INFO HostContext] Well known config file 'RSACredentials': 'D:\projects\solitaire smash\actions-runner\.credentials_rsaparams'
+[2026-08-27 05:53:18Z INFO RSAEncryptedFileKeyManager] Deleting RSA key parameters file D:\projects\solitaire smash\actions-runner\.credentials_rsaparams
+[2026-08-27 05:53:18Z INFO Terminal] WRITE LINE: 
+[2026-08-27 05:53:18Z INFO Listener] Runner execution has finished with return code 0
