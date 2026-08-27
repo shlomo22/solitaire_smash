@@ -240,12 +240,8 @@ C→S 24 / S→C 13.
 
 **v1.4.83** — Jack+Four fusion was still losing to neighbor OCR Five
 (`032046` fan is 3 / **5** / **J**, engine `JC vs 5S` via `correctFiveJack`).
-Keep Jack when both crops already ranked and OCR is 5 or 3. Do **not** Six-steal
-`190130` back to Six: those pixels are a Jack of Clubs; truth labeled Six.
-
-**190130 is a truth error**, not a recognition regression. Pixel crop of the
-playable waste face is an unambiguous J♣ (center J glyph + club pip). Leave the
-Jack-crop Six gate in place.
+Keep Jack when both crops already ranked and OCR is 5 or 3. `190130` waste
+truth is now Jack of Clubs (was Six; pixel-verified).
 
 Golden set: **151 samples / 5317 labeled slots**. On-device floor:
 
