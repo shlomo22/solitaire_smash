@@ -230,30 +230,30 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   **J♠**, engine `JS vs 3C`. This is also the live-play false Waste→Tableau arrow
   (legal for the covered card, illegal for the exposed one). `locateWasteTopRegion`
   can independently latch the 2nd card: it counts only white/red ink, so a black
-  front card can fail the 6% gate.
+  front card can fail the 6% gate. **v1.4.81–1.4.84 gated this:** skip
+  `isConfusionPair` when both crops already ranked; keep Jack on Jack+Four when
+  neighbor OCR is 5/3; OCR Jack may override a tight Four. Queen/Ten and Jack+Three
+  fan cases cleared. Remaining rank misses are mostly **no-OCR** Four→Six
+  (`230705` JD, `132126`/`132140` 8D).
+- **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
+  session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
+  is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
+  Relabel after a crop; do not Six-steal those back.
 
-## Current state (as of v1.4.84 / versionCode 155, pushed, not yet Evaluate-verified)
+## Current state (as of v1.4.84 / versionCode 155, Evaluate-verified)
 
-**v1.4.83 / 154** Evaluate: **5186/5317 (+1)**. Rank 54. Suit 86.
-`190130` cleared after relabel to Jack. `032046` rank fixed, remaining `JC vs JS`
-was a Clubs label on a Spade pip.
+**v1.4.84 Evaluate: 5189/5317 (+3 vs 5186).** Rank 52, suit 85, C→S 23 / S→C 13,
+occupancy 24, missing 4. `032046` (Spades label), `143855` waste (Jack label +
+OCR Jack), `230055` (OCR Jack over Four) cleared. `205220` rank is Jack, still
+`JC vs JS` (truth still Clubs; pixels Spades).
 
-**v1.4.84** — OCR Jack may override a tight Four (`205220`, `230055`). The old
-veto was `143855`, whose playable waste is also a Jack of Clubs (truth was Six).
-`032046` waste truth is now Jack of Spades.
-
-Golden set: **151 samples / 5317 labeled slots**. On-device floor:
-
-| version | accuracy | C→S | S→C | suit |
+| version | accuracy | rank | suit | C→S / S→C |
 |---|---|---|---|---|
-| v1.4.77 / 148 | **5179/5317 (97%)** | 24 | 14 | 87 |
-| v1.4.78 / 149 Clubs-on-near-tie | 5171/5317 (−8) | 20 | **25** | 94 |
-| v1.4.79 / 150 header recheck | 5092/5317 (−87) | **73** | **51** | 173 |
-| **v1.4.80 / 151 revert** | **5179/5317 (97%)** | **24** | **14** | **87** |
-
-v1.4.80 is a clean restore of the v1.4.77 suit path (no header-black-suit, no
-Clubs-on-0.01-tie, `locateBadge` and waste occupancy as they were). Rank 62,
-occupancy 24, missing 4 — unchanged across 77/78/80.
+| v1.4.80 / 151 | 5179/5317 | 62 | 87 | 24 / 14 |
+| v1.4.81 / 152 | 5182/5317 (+3) | 59 | 86 | 23 / 14 |
+| v1.4.82 / 153 | 5185/5317 (+3) | 56 | 86 | 24 / 13 |
+| v1.4.83 / 154 | 5186/5317 (+1) | 54 | 86 | 24 / 13 |
+| **v1.4.84 / 155** | **5189/5317 (+3)** | **52** | **85** | **23 / 13** |
 
 **C↔S is parked.** Cascade headers score C0.90/S0.91 on the same pixels. Every
 post-pass that “breaks” the tie has a favorite side and overfires. Occupancy
@@ -263,20 +263,26 @@ tableau arrows (color is enough) and would drop Evaluate.
 **Active work: waste top identity** (playable card → wrong Waste→Tableau /
 Waste→Foundation arrow). Do not start another C↔S scoring/header/occupancy round.
 
+**Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
+**rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
+wrong. Label that exposed card, not the peeking neighbor. Skip near-duplicate
+`6C vs 6S` / `JS vs JC` (parked C0.83). Pixel-check new files before they stay;
+wrong Six-on-Jack labels already cost rounds.
+
 **Older geometry regression (still don't retry):** v1.4.17/88 re-anchored
 `firstFaceTop` to the bottom card; 95%→93% (1897/2041). Reverted v1.4.18/89.
 
 Remaining buckets, descending live-play value:
-- Waste fan 2nd-card / OCR-left override — `QH vs 10H`, `QC vs 10C`, `JS vs 3C`,
-  `JC vs 5S`. Confirmed in pixels; `isConfusionPair` after two template reads is
-  the first lever.
-- Waste rank magnet (Jack/Eight → Four/Six) — `JC vs 6C`, `JH vs 6H`, `8H vs 4H`.
-  Tight crop reads Four; `correctSixOnWaste` or fusion keeps it. Separate from OCR.
-- Waste black-suit crop bias — many waste blacks score **C0.83/S0.77**
-  `wideMarginDirect→Clubs` (`6S vs 6C`, `JS vs JC`, `3S vs 3C`). Not a 0.01 tie.
+- Waste no-OCR Four→Six magnet — `230705` JD vs 6D, `132126`/`132140` 8D vs 6D.
+  Tight Four, `correctSixOnWaste` at 0.38, every OCR region miss. Needs more
+  playable 5/6/8/J samples before another template.
+- Waste OCR Five over Four not adopted — `080754` 5D vs 4D (`ocr='5'` on a
+  left-shifted crop). Same class as Jack-over-Four, not yet gated the same way.
+- Waste black-suit crop bias — **C0.83/S0.77** `wideMarginDirect→Clubs`
+  (`6S vs 6C`, `210739 JS vs JC`, `3S vs 3C`). Not a 0.01 tie. Parked.
 - FaceDown→FaceUp occupancy (18) and long-cascade compounding — buried slots,
   high-risk, not the arrow the user plays.
-- H↔D (9+8) and parked C↔S (24+14).
+- H↔D (9+8) and parked C↔S (23+13).
 
 ## Don't
 
