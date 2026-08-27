@@ -11,7 +11,7 @@ jobs:
     # Requires a self-hosted runner registered from this repo's
     # Settings > Actions > Runners, installed on the Windows machine
     # your device is physically plugged into. See SETUP.md.
-    runs-on: [self-hosted, Windows]
+    runs-on: [self-hosted, Windows, office]
 
     steps:
       - name: Checkout
