@@ -83,7 +83,7 @@ fun GoldenReviewScreen(
     }
     val helpText = buildString {
         append(subtitle)
-        append("\nBadge colors: green = confident read, yellow~ = suit unclear, dim = inferred.")
+        append("\nBadge colors: green = locked suit, yellow = low confidence, teal = geom/~ suit unclear, dim = inferred.")
         if (originallyFlagged.isNotEmpty()) {
             append(" Orange rows = still broken; light green = fixed after your edits.")
         }
@@ -249,7 +249,15 @@ private fun SlotRow(
             color = Color.White,
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
-                .background(badgeColor(truth, slot.inferred))
+                .background(
+                    badgeColor(
+                        guess = truth,
+                        inferred = slot.inferred,
+                        confidence = slot.confidence,
+                        diagnostic = slot.diagnostic,
+                        edited = changed
+                    )
+                )
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         )
         if (changed) {
@@ -380,15 +388,27 @@ private fun rankChip(rank: Rank): String = when (rank) {
     else -> rank.value.toString()
 }
 
-private fun badgeColor(guess: SlotGuess, inferred: Boolean): Color {
+private const val LOW_CONFIDENCE_FLOOR = 0.65f
+
+private fun badgeColor(
+    guess: SlotGuess,
+    inferred: Boolean,
+    confidence: Float,
+    diagnostic: String,
+    edited: Boolean
+): Color {
     val base = when (guess.kind) {
         SlotKind.Empty -> Color(0xCC546E7A)
         SlotKind.FaceDown -> Color(0xCC1565C0)
         SlotKind.Unknown -> Color(0xCCC62828)
-        SlotKind.FaceUp -> if (guess.suitAmbiguous) {
-            Color(0xCCF9A825)
-        } else {
-            Color(0xCC2E7D32)
+        SlotKind.FaceUp -> {
+            val geomOrUnclear = guess.suitAmbiguous ||
+                (!edited && diagnostic.startsWith("geom-override:"))
+            when {
+                geomOrUnclear -> Color(0xCC00838F)
+                confidence < LOW_CONFIDENCE_FLOOR -> Color(0xCCF9A825)
+                else -> Color(0xCC2E7D32)
+            }
         }
     }
     return if (inferred) base.copy(alpha = 0.55f) else base
