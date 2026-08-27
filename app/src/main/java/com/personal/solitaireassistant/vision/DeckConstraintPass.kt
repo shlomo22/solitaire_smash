@@ -100,33 +100,27 @@ object DeckConstraintPass {
 
     /**
      * Black-suit deck occupancy: flip to the partner suit when the current id is
-     * already taken and the partner is free. Only when the read was ambiguous
-     * or a genuine C-vs-S near-tie — never guess from a confident Clubs/Spades
-     * call just because another slot already claimed that id.
-     * Waste used to flip unconditionally (one slot). Evaluate v1.4.77: that
-     * turned four confident waste Clubs (6C/10C, wideMarginDirect C0.83/S0.77)
-     * into Spades whenever a false duplicate existed. Confident waste stays.
-     * Tableau occupancy only flips an *ambiguous* C↔S read (not a mere 0.04
-     * near-tie): v1.4.69 flipped every qualifying near-tie and C↔S jumped
-     * 40→64 (5172→5148). Duplicate ids that are not ambiguous still go
-     * through [resolveDuplicateCardIds].
+     * already taken and the partner is free. Waste flips unconditionally (one
+     * slot). Elsewhere only when the read was ambiguous or a genuine C-vs-S
+     * near-tie — never guess from a narrow margin when both ids are still free.
+     * Tableau/foundation duplicates are resolved by [resolveDuplicateCardIds],
+     * not this pass: v1.4.69 flipped every qualifying near-tie on a duplicate
+     * id and C↔S jumped 40→64 (5172→5148).
      * Red ambiguous duplicates stay on the old ambiguous pass below.
      */
     private fun resolveBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
             if (entry.card.suit.isRed) return@forEach
-            if (!qualifiesForBlackDeckOccupancy(entry)) return@forEach
             val partner = partnerSuit(entry.card.suit)
             val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
             val partnerTaken = others.any { it.card.id == partnerCard.id }
             val currentTaken = others.any { it.card.id == entry.card.id }
             val waste = entry.pile == PileRef.Waste
+            if (!waste && !qualifiesForBlackDeckOccupancy(entry)) return@forEach
             when {
                 currentTaken && !partnerTaken -> {
-                    if (waste || isAmbiguousBlackRead(entry)) {
-                        entry.card = partnerCard
-                    }
+                    if (waste) entry.card = partnerCard
                 }
                 partnerTaken && !currentTaken ->
                     entry.card = entry.card.copy(suitAmbiguous = false)
@@ -160,12 +154,10 @@ object DeckConstraintPass {
         }
     }
 
-    private fun isAmbiguousBlackRead(entry: Entry): Boolean =
-        entry.card.suitAmbiguous ||
-            entry.originalDiagnostic.contains("-ambiguous")
-
     private fun qualifiesForBlackDeckOccupancy(entry: Entry): Boolean =
-        isAmbiguousBlackRead(entry) || isBlackSuitNearTie(entry)
+        entry.card.suitAmbiguous ||
+            entry.originalDiagnostic.contains("-ambiguous") ||
+            isBlackSuitNearTie(entry)
 
     private fun isBlackSuitNearTie(entry: Entry): Boolean {
         val scores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)

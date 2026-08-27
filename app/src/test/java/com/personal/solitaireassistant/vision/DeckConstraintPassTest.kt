@@ -304,50 +304,7 @@ class DeckConstraintPassTest {
     }
 
     @Test
-    fun wasteConfidentClubsStaysWhenDuplicateElsewhere() {
-        val foundationSix = slot(
-            pile = PileRef.Foundation(0),
-            index = 0,
-            rank = Rank.Six,
-            suit = Suit.Clubs,
-            confidence = 0.94f
-        )
-        val wasteSix = slot(
-            pile = PileRef.Waste,
-            index = 0,
-            rank = Rank.Six,
-            suit = Suit.Clubs,
-            confidence = 0.83f,
-            diagnostic = "fused-Six-Clubs",
-            suitTemplates = "C:0.83 S:0.77"
-        )
-        val recognized = mutableListOf(foundationSix.slot, wasteSix.slot)
-        val state = GameState(
-            tableau = List(7) { emptyList() },
-            foundations = listOf(listOf(foundationSix.card), emptyList(), emptyList(), emptyList()),
-            stock = emptyList(),
-            waste = listOf(wasteSix.card)
-        )
-        val recognizer = CardRecognizer(context)
-        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
-        try {
-            val result = DeckConstraintPass.apply(
-                bitmap = bitmap,
-                recognizer = recognizer,
-                state = state,
-                recognizedSlots = recognized
-            )
-            assertEquals(Suit.Clubs, result.foundations[0].last().suit)
-            assertEquals(Suit.Clubs, result.waste.last().suit)
-            assertEquals(Suit.Clubs, recognized[1].engine.suit)
-        } finally {
-            bitmap.recycle()
-            recognizer.release()
-        }
-    }
-
-    @Test
-    fun wasteAmbiguousBlackSuitFlipsWhenDuplicateElsewhere() {
+    fun wasteBlackSuitFlipsWhenConfidentClubsDuplicateElsewhere() {
         val foundationAce = slot(
             pile = PileRef.Foundation(0),
             index = 0,
@@ -361,9 +318,7 @@ class DeckConstraintPassTest {
             rank = Rank.Ace,
             suit = Suit.Clubs,
             confidence = 0.83f,
-            diagnostic = "fused-Ace-Clubs-ambiguous",
-            suitAmbiguous = true,
-            suitTemplates = "C:0.91 S:0.90"
+            diagnostic = "fused-Ace-Clubs"
         )
         val recognized = mutableListOf(foundationAce.slot, wasteAce.slot)
         val state = GameState(
@@ -384,55 +339,6 @@ class DeckConstraintPassTest {
             assertEquals(Suit.Clubs, result.foundations[0].last().suit)
             assertEquals(Suit.Spades, result.waste.last().suit)
             assertEquals(Suit.Spades, recognized[1].engine.suit)
-        } finally {
-            bitmap.recycle()
-            recognizer.release()
-        }
-    }
-
-    @Test
-    fun tableauAmbiguousBlackSuitFlipsWhenDuplicateElsewhere() {
-        val taken = slot(
-            pile = PileRef.Tableau(0),
-            index = 0,
-            rank = Rank.King,
-            suit = Suit.Spades,
-            confidence = 0.90f,
-            diagnostic = "match-King-Spades@0.90"
-        )
-        val ambiguous = slot(
-            pile = PileRef.Tableau(2),
-            index = 0,
-            rank = Rank.King,
-            suit = Suit.Spades,
-            confidence = 0.87f,
-            diagnostic = "match-King-Spades-ambiguous@0.87",
-            suitAmbiguous = true,
-            suitTemplates = "C:0.90 S:0.91"
-        )
-        val recognized = mutableListOf(taken.slot, ambiguous.slot)
-        val state = GameState(
-            tableau = listOf(
-                listOf(taken.card),
-                emptyList(),
-                listOf(ambiguous.card)
-            ) + List(4) { emptyList() },
-            foundations = List(4) { emptyList() },
-            stock = emptyList(),
-            waste = emptyList()
-        )
-        val recognizer = CardRecognizer(context)
-        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
-        try {
-            val result = DeckConstraintPass.apply(
-                bitmap = bitmap,
-                recognizer = recognizer,
-                state = state,
-                recognizedSlots = recognized
-            )
-            assertEquals(Suit.Spades, result.tableau[0].last().suit)
-            assertEquals(Suit.Clubs, result.tableau[2].last().suit)
-            assertEquals(Suit.Clubs, recognized[1].engine.suit)
         } finally {
             bitmap.recycle()
             recognizer.release()
