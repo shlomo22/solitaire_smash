@@ -304,7 +304,50 @@ class DeckConstraintPassTest {
     }
 
     @Test
-    fun wasteBlackSuitFlipsWhenConfidentClubsDuplicateElsewhere() {
+    fun wasteConfidentClubsStaysWhenDuplicateElsewhere() {
+        val foundationSix = slot(
+            pile = PileRef.Foundation(0),
+            index = 0,
+            rank = Rank.Six,
+            suit = Suit.Clubs,
+            confidence = 0.94f
+        )
+        val wasteSix = slot(
+            pile = PileRef.Waste,
+            index = 0,
+            rank = Rank.Six,
+            suit = Suit.Clubs,
+            confidence = 0.83f,
+            diagnostic = "fused-Six-Clubs",
+            suitTemplates = "C:0.83 S:0.77"
+        )
+        val recognized = mutableListOf(foundationSix.slot, wasteSix.slot)
+        val state = GameState(
+            tableau = List(7) { emptyList() },
+            foundations = listOf(listOf(foundationSix.card), emptyList(), emptyList(), emptyList()),
+            stock = emptyList(),
+            waste = listOf(wasteSix.card)
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.foundations[0].last().suit)
+            assertEquals(Suit.Clubs, result.waste.last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun wasteAmbiguousBlackSuitFlipsWhenDuplicateElsewhere() {
         val foundationAce = slot(
             pile = PileRef.Foundation(0),
             index = 0,
@@ -318,7 +361,9 @@ class DeckConstraintPassTest {
             rank = Rank.Ace,
             suit = Suit.Clubs,
             confidence = 0.83f,
-            diagnostic = "fused-Ace-Clubs"
+            diagnostic = "fused-Ace-Clubs-ambiguous",
+            suitAmbiguous = true,
+            suitTemplates = "C:0.91 S:0.90"
         )
         val recognized = mutableListOf(foundationAce.slot, wasteAce.slot)
         val state = GameState(

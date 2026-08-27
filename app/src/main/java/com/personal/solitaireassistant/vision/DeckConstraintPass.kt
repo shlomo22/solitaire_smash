@@ -100,9 +100,13 @@ object DeckConstraintPass {
 
     /**
      * Black-suit deck occupancy: flip to the partner suit when the current id is
-     * already taken and the partner is free. Waste flips unconditionally (one
-     * slot). Elsewhere only when the read was ambiguous or a genuine C-vs-S
-     * near-tie — never guess from a narrow margin when both ids are still free.
+     * already taken and the partner is free. Only when the read was ambiguous
+     * or a genuine C-vs-S near-tie — never guess from a confident Clubs/Spades
+     * call just because another slot already claimed that id.
+     * Waste used to flip unconditionally (one slot). Evaluate v1.4.77: that
+     * turned four confident waste Clubs (6C/10C, wideMarginDirect C0.83/S0.77)
+     * into Spades whenever a false duplicate existed, and it did not fix any
+     * waste Spades→Clubs miss on that run.
      * Tableau/foundation duplicates are resolved by [resolveDuplicateCardIds],
      * not this pass: v1.4.69 flipped every qualifying near-tie on a duplicate
      * id and C↔S jumped 40→64 (5172→5148).
@@ -111,13 +115,13 @@ object DeckConstraintPass {
     private fun resolveBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
         entries.forEach { entry ->
             if (entry.card.suit.isRed) return@forEach
+            if (!qualifiesForBlackDeckOccupancy(entry)) return@forEach
             val partner = partnerSuit(entry.card.suit)
             val partnerCard = entry.card.copy(suit = partner, suitAmbiguous = false)
             val others = entries.filter { it.recognizedIndex != entry.recognizedIndex }
             val partnerTaken = others.any { it.card.id == partnerCard.id }
             val currentTaken = others.any { it.card.id == entry.card.id }
             val waste = entry.pile == PileRef.Waste
-            if (!waste && !qualifiesForBlackDeckOccupancy(entry)) return@forEach
             when {
                 currentTaken && !partnerTaken -> {
                     if (waste) entry.card = partnerCard

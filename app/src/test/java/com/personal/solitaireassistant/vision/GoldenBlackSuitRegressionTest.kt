@@ -29,7 +29,12 @@ class GoldenBlackSuitRegressionTest {
             Triple("20260823_210146", "tableau:2", 0 to Suit.Clubs),
             Triple("20260814_205456", "foundation:1", 0 to Suit.Clubs),
             Triple("20260815_132843", "foundation:0", 0 to Suit.Clubs),
-            Triple("20260815_165137", "foundation:1", 0 to Suit.Clubs)
+            Triple("20260815_165137", "foundation:1", 0 to Suit.Clubs),
+            Triple("20260822_225525", "tableau:2", 0 to Suit.Clubs),
+            Triple("20260824_202636", "tableau:2", 0 to Suit.Clubs),
+            Triple("20260822_224536", "tableau:0", 0 to Suit.Clubs),
+            Triple("20260822_230705", "tableau:2", 1 to Suit.Clubs),
+            Triple("20260823_224918", "tableau:2", 0 to Suit.Clubs)
         )
         val detector = GameStateDetector(context, minConfidence = 0.55f)
         val failures = mutableListOf<String>()
