@@ -143,6 +143,31 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun ocrTenDoesNotOverrideWhenBothCropsReadQueen() {
+        val queen = Card(Rank.Queen, Suit.Hearts, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Ten,
+            legacyCard = queen,
+            tightCard = queen,
+            baseCard = queen
+        )
+        assertNull(override)
+    }
+
+    @Test
+    fun ocrThreeDoesNotOverrideWhenCropsDisagreeJackAndFour() {
+        val jack = Card(Rank.Jack, Suit.Spades, faceUp = true)
+        val four = Card(Rank.Four, Suit.Clubs, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Three,
+            legacyCard = jack,
+            tightCard = four,
+            baseCard = jack
+        )
+        assertNull(override)
+    }
+
+    @Test
     fun ocrMatchingCandidateStillWins() {
         val override = WasteRankCorrections.ocrRankOverride(
             ocrRank = Rank.Jack,

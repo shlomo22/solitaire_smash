@@ -353,6 +353,12 @@ internal object WasteRankCorrections {
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            // Both waste crops already produced a rank. A later OCR hit is
+            // often the covered fan card (ink-anchored region sits left of
+            // the playable face): Q♥ vs 10♥, Q♣ vs 10♣, J♠ vs 3♣.
+            // Keep the pair override only when one crop is missing, so OCR
+            // can still break a single-sided Jack/Three or Jack/Five read.
+            if (legacyRank != null && tightRank != null) return null
             if (ocrRank == Rank.Six && fusionRank == Rank.Nine &&
                 !sixCanStealNine(exactRankScores)
             ) {
