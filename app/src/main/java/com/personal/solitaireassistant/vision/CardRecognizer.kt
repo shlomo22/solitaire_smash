@@ -439,12 +439,25 @@ class CardRecognizer(
                     val suitScoreMap = suitScoresFromMasks(suitSourceMasks, suitCandidates)
                     val rankScoreMap =
                         rankTemplateScoreMap(effectiveRankCrop, exactCardBounds, trimmedToVisibleStrip)
-                    val (suit, suitTraceRaw) =
+                    val (inferredSuit, suitTraceRaw) =
                         inferSuitWithTrace(crop, inkRed, suitScoreMap, suitSourceMasks)
+                    val headerBlack = maybeAdoptHeaderBlackSuit(
+                        fullSuit = inferredSuit,
+                        suitScoreMap = suitScoreMap,
+                        headerCrop = rankCrop,
+                        trimmedToVisibleStrip = trimmedToVisibleStrip,
+                        inkRed = inkRed
+                    )
+                    val suit = headerBlack ?: inferredSuit
+                    val suitTraceAdopted = if (headerBlack != null && headerBlack != inferredSuit) {
+                        suitTraceRaw.withPost("header-black-suit:${inferredSuit}->$headerBlack")
+                    } else {
+                        suitTraceRaw
+                    }
                     // Diagnostic-only: expose the raw whole-card ink ratio behind
                     // inkRed, since every downstream suit-source label only ever
                     // shows the derived boolean, not the numbers that decided it.
-                    val suitTrace = suitTraceRaw.withPost(
+                    val suitTrace = suitTraceAdopted.withPost(
                         "ink-ratio:red=${"%.4f".format(inkStats.redInkRatio)}," +
                             "black=${"%.4f".format(inkStats.blackInkRatio)},inkRed=$inkRed" +
                             (if (inkRegion != null) ",inkRegion=header" else "")
@@ -1155,16 +1168,6 @@ class CardRecognizer(
                 }
             }.maxByOrNull { it.second }
             if (filtered != null && filtered.second >= 0.45f) {
-                // OpenCV has no C-vs-S margin gate. A 0.48–0.52 opencv
-                // "winner" used to lock Spades while the bitmap scores were
-                // a 0.01 near-tie (Evaluate: 4C vs 4S~, 10C vs 10S~). Decline
-                // that Spades lock so ambiguousBlackSuit can prefer Clubs.
-                if (inkRed == false &&
-                    filtered.first == Suit.Spades &&
-                    strongBlackNearTiePrefersClubs(suitScoreMap)
-                ) {
-                    return null to RecognitionTrace(suitTemplates = templateStr)
-                }
                 return filtered.first to RecognitionTrace(
                     suitSource = "suit-opencv",
                     suitScore = filtered.second,
@@ -1400,20 +1403,50 @@ class CardRecognizer(
         if (leader != null) {
             return Triple(leader, ambiguous, debug)
         }
-        // resolveBlackSuitLeader declined (typically lowTopMargin-noShape).
-        // bestBitmapSuitLoose / the fullSpade>fullClub coinflip then locked
-        // Spades on a 0.01 lead. Evaluate v1.4.77: every on-device miss in
-        // that strong-near-tie band was a pixel-verified Club (10C, KC, 4C,
-        // 8C, QC). Prefer Clubs; keep ambiguous so deck occupancy can still
-        // move it if the partner id is the only free one.
-        if (strongBlackNearTiePrefersClubs(scores)) {
-            return Triple(Suit.Clubs, true, debug)
-        }
         val loose = bestBitmapSuitLoose(crop, red = false)
         if (loose != null) return Triple(loose, true, debug)
         val fallback = shape?.suit
             ?: if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
         return Triple(fallback, true, debug)
+    }
+
+    /**
+     * Cascade first-pass suit scores the full cardHeight box, which overlaps
+     * the next card. Evaluate v1.4.78's blanket "prefer Clubs on a 0.01 tie"
+     * fixed 10C/KC/QC and then created 11 new Spades→Clubs. When that full
+     * crop is a strong C↔S near-tie, re-resolve on the header strip only
+     * and adopt the result only if the thin-leader/shape pass is actually
+     * decisive — never another coinflip.
+     */
+    private fun maybeAdoptHeaderBlackSuit(
+        fullSuit: Suit?,
+        suitScoreMap: Map<Suit, Float>,
+        headerCrop: Bitmap?,
+        trimmedToVisibleStrip: Boolean,
+        inkRed: Boolean?
+    ): Suit? {
+        if (inkRed != false || !trimmedToVisibleStrip || headerCrop == null) return null
+        if (!isStrongBlackNearTie(suitScoreMap)) return null
+        val decisive = resolveBlackSuitIfDecisive(headerCrop) ?: return null
+        return if (decisive.first != fullSuit) decisive.first else null
+    }
+
+    fun resolveBlackSuitIfDecisive(crop: Bitmap): Pair<Suit, Boolean>? {
+        val shape = SuitBadgeHeuristics.guessBlackSuit(crop)
+        if (shape != null && shape.margin >= BLACK_SHAPE_MIN_MARGIN) {
+            return shape.suit to (shape.margin < 0.45f)
+        }
+        val tiebreakShape = SuitBadgeHeuristics.guessBlackSuit(crop, TOP_BLACK_SHAPE_VETO_MARGIN)
+        val scores = blackSuitScoresFromCrop(crop)
+        val (leader, ambiguous) = resolveBlackSuitLeader(scores, crop, tiebreakShape)
+        if (leader != null) return leader to ambiguous
+        if (max(scores.fullClub, scores.fullSpade) >= 0.55f &&
+            scores.fullMargin >= BLACK_SUIT_MARGIN
+        ) {
+            val wide = if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
+            return wide to false
+        }
+        return null
     }
 
     private fun ambiguousRedSuit(crop: Bitmap): Pair<Suit, Boolean> {
@@ -2348,11 +2381,8 @@ class CardRecognizer(
          */
         const val BLACK_TOP_CLUB_STRONG_SPADE_FULL_CLUB_MAX = 0.88f
         /**
-         * After the thin-leader pass declines, a 0.01 full-score lead used to
-         * pick Spades via loose/coinflip. Real Evaluate misses in this band
-         * were all Clubs (C0.90/S0.91). Floor matches the second-pass
-         * STRONG_AMBIGUOUS_SUIT_FLOOR so we only bias the same strong ties
-         * that skip the narrow-crop recheck.
+         * Strong C↔S near-tie on the full cascade crop. Used to gate a
+         * header-only re-resolve — not a Clubs/Spades preference.
          */
         const val STRONG_BLACK_NEAR_TIE_FLOOR = 0.80f
         const val STRONG_BLACK_NEAR_TIE_MARGIN = 0.025f
@@ -2366,16 +2396,16 @@ class CardRecognizer(
          */
         const val WASTE_OCR_EARLY_EXIT_CONFIDENCE = 0.62f
 
-        fun strongBlackNearTiePrefersClubs(scores: BlackSuitTemplateScores): Boolean {
+        fun isStrongBlackNearTie(scores: BlackSuitTemplateScores): Boolean {
             val best = max(scores.fullClub, scores.fullSpade)
             return best >= STRONG_BLACK_NEAR_TIE_FLOOR &&
                 scores.fullMargin < STRONG_BLACK_NEAR_TIE_MARGIN
         }
 
-        fun strongBlackNearTiePrefersClubs(suitScores: Map<Suit, Float>): Boolean {
+        fun isStrongBlackNearTie(suitScores: Map<Suit, Float>): Boolean {
             val club = suitScores[Suit.Clubs] ?: 0f
             val spade = suitScores[Suit.Spades] ?: 0f
-            return strongBlackNearTiePrefersClubs(
+            return isStrongBlackNearTie(
                 BlackSuitTemplateScores(club, spade, 0f, 0f)
             )
         }

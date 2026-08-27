@@ -391,6 +391,55 @@ class DeckConstraintPassTest {
     }
 
     @Test
+    fun tableauAmbiguousBlackSuitFlipsWhenDuplicateElsewhere() {
+        val taken = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.King,
+            suit = Suit.Spades,
+            confidence = 0.90f,
+            diagnostic = "match-King-Spades@0.90"
+        )
+        val ambiguous = slot(
+            pile = PileRef.Tableau(2),
+            index = 0,
+            rank = Rank.King,
+            suit = Suit.Spades,
+            confidence = 0.87f,
+            diagnostic = "match-King-Spades-ambiguous@0.87",
+            suitAmbiguous = true,
+            suitTemplates = "C:0.90 S:0.91"
+        )
+        val recognized = mutableListOf(taken.slot, ambiguous.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(taken.card),
+                emptyList(),
+                listOf(ambiguous.card)
+            ) + List(4) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Spades, result.tableau[0].last().suit)
+            assertEquals(Suit.Clubs, result.tableau[2].last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
     fun tableauNearTieDuplicateIsNotOccupancyFlipped() {
         val high = slot(
             pile = PileRef.Tableau(0),

@@ -105,11 +105,11 @@ object DeckConstraintPass {
      * call just because another slot already claimed that id.
      * Waste used to flip unconditionally (one slot). Evaluate v1.4.77: that
      * turned four confident waste Clubs (6C/10C, wideMarginDirect C0.83/S0.77)
-     * into Spades whenever a false duplicate existed, and it did not fix any
-     * waste Spades→Clubs miss on that run.
-     * Tableau/foundation duplicates are resolved by [resolveDuplicateCardIds],
-     * not this pass: v1.4.69 flipped every qualifying near-tie on a duplicate
-     * id and C↔S jumped 40→64 (5172→5148).
+     * into Spades whenever a false duplicate existed. Confident waste stays.
+     * Tableau occupancy only flips an *ambiguous* C↔S read (not a mere 0.04
+     * near-tie): v1.4.69 flipped every qualifying near-tie and C↔S jumped
+     * 40→64 (5172→5148). Duplicate ids that are not ambiguous still go
+     * through [resolveDuplicateCardIds].
      * Red ambiguous duplicates stay on the old ambiguous pass below.
      */
     private fun resolveBlackSuitByDeckOccupancy(entries: MutableList<Entry>) {
@@ -124,7 +124,9 @@ object DeckConstraintPass {
             val waste = entry.pile == PileRef.Waste
             when {
                 currentTaken && !partnerTaken -> {
-                    if (waste) entry.card = partnerCard
+                    if (waste || isAmbiguousBlackRead(entry)) {
+                        entry.card = partnerCard
+                    }
                 }
                 partnerTaken && !currentTaken ->
                     entry.card = entry.card.copy(suitAmbiguous = false)
@@ -158,10 +160,12 @@ object DeckConstraintPass {
         }
     }
 
-    private fun qualifiesForBlackDeckOccupancy(entry: Entry): Boolean =
+    private fun isAmbiguousBlackRead(entry: Entry): Boolean =
         entry.card.suitAmbiguous ||
-            entry.originalDiagnostic.contains("-ambiguous") ||
-            isBlackSuitNearTie(entry)
+            entry.originalDiagnostic.contains("-ambiguous")
+
+    private fun qualifiesForBlackDeckOccupancy(entry: Entry): Boolean =
+        isAmbiguousBlackRead(entry) || isBlackSuitNearTie(entry)
 
     private fun isBlackSuitNearTie(entry: Entry): Boolean {
         val scores = RecognitionTrace.parseSuitScores(entry.originalSuitTemplates)

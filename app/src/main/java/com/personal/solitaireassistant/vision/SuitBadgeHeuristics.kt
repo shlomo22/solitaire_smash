@@ -32,13 +32,17 @@ object SuitBadgeHeuristics {
         if (w < 20 || h < 20) return null
         // Smash uses the standard corner index: rank top-left, pip top-right.
         // The huge center glyph sits lower and must never be treated as the pip.
-        return findPipIn(cardCrop, (w * 0.48f).toInt(), 0, w, (h * 0.26f).toInt().coerceAtLeast(12))
+        // A cascade header strip is already ~44px tall; 0.26 of that floors
+        // at 12px and misses the pip beside the rank. Search the full strip.
+        val primaryH = if (h <= 80) h else (h * 0.26f).toInt().coerceAtLeast(12)
+        val fallbackH = if (h <= 80) h else (h * 0.22f).toInt().coerceAtLeast(12)
+        return findPipIn(cardCrop, (w * 0.48f).toInt(), 0, w, primaryH)
             ?: findPipIn(
                 cardCrop,
                 (w * 0.38f).toInt(),
                 0,
                 w,
-                (h * 0.22f).toInt().coerceAtLeast(12)
+                fallbackH
             )
     }
 
