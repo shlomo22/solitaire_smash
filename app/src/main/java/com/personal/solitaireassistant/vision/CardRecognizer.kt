@@ -69,7 +69,8 @@ class CardRecognizer(
         private set
 
     // Templates are loaded lazily on first use, but recognize() is called from
-    // up to 7 tableau columns at once (GameStateDetector.detect's computeColumn).
+    // up to 7 tableau columns plus 4 foundations at once
+    // (GameStateDetector.detect's computeColumn / computeFoundation).
     // This body sets loaded=true BEFORE populating the template maps, so without
     // mutual exclusion a second thread arriving mid-load would see loaded==true,
     // return early, and match against still-empty maps - every card on that frame
@@ -867,7 +868,11 @@ class CardRecognizer(
             bitmapRankHit,
             rankScoreMap
         )
-        if (strongBitmap && !cascadeSixSevenOcr) {
+        val jackQueenOcr = CascadeRankCorrections.shouldChallengeStrongJackQueen(
+            bitmapRankHit,
+            rankScoreMap
+        )
+        if (strongBitmap && !cascadeSixSevenOcr && !jackQueenOcr) {
             return RankResolution(
                 rank = bitmapRankHit,
                 bitmapRankHit = bitmapRankHit,
@@ -878,7 +883,11 @@ class CardRecognizer(
                 strongBitmap = true
             )
         }
-        val rankHit = if (cascadeSixSevenOcr) null else bestRank(crop, trimmedToVisibleStrip)
+        val rankHit = if (cascadeSixSevenOcr || jackQueenOcr) {
+            null
+        } else {
+            bestRank(crop, trimmedToVisibleStrip)
+        }
         // RankInkHeuristics.guess reads the large glyph in a card's CENTER -
         // on a tableau cascade card trimmed to just its own ~45-54px visible
         // header strip there is no center glyph, only the small corner digit
@@ -890,14 +899,22 @@ class CardRecognizer(
         // cause behind all four attempts at this bug so far - none of them
         // touched this heuristic, which is entirely separate from
         // rankSourceMasks/rankTemplateScoreMap.
-        val glyph = if (trimmedToVisibleStrip || cascadeSixSevenOcr) null else RankInkHeuristics.guess(crop)
-        val ocrAttempt = if (needsOcrTiebreak(bitmapRankHit, rankHit, glyph) || cascadeSixSevenOcr) {
+        val glyph = if (trimmedToVisibleStrip || cascadeSixSevenOcr || jackQueenOcr) {
+            null
+        } else {
+            RankInkHeuristics.guess(crop)
+        }
+        val ocrAttempt = if (
+            needsOcrTiebreak(bitmapRankHit, rankHit, glyph) ||
+            cascadeSixSevenOcr ||
+            jackQueenOcr
+        ) {
             val profile = when {
-                cascadeSixSevenOcr -> RankCornerOcr.CornerRoiProfile.DEFAULT
+                cascadeSixSevenOcr || jackQueenOcr -> RankCornerOcr.CornerRoiProfile.DEFAULT
                 trimmedToVisibleStrip -> RankCornerOcr.CornerRoiProfile.TRIMMED
                 else -> RankCornerOcr.CornerRoiProfile.DEFAULT
             }
-            val ocrBitmap = if (cascadeSixSevenOcr) ocrCrop else crop
+            val ocrBitmap = if (cascadeSixSevenOcr || jackQueenOcr) ocrCrop else crop
             rankCornerOcr?.attempt(ocrBitmap, profile)
                 ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
         } else {
@@ -949,6 +966,7 @@ class CardRecognizer(
         val ranks = candidates.map { it.first }.toSet()
         if (ranks.contains(Rank.Ten) && ranks.contains(Rank.Queen)) return true
         if (ranks.contains(Rank.King) && ranks.contains(Rank.Ten)) return true
+        if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Queen)) return true
         if (ranks.contains(Rank.Jack) && ranks.contains(Rank.Three)) return true
         if (ranks.contains(Rank.Six) && ranks.contains(Rank.Seven)) return true
         if (ranks.size >= 2) return true
@@ -1375,7 +1393,7 @@ class CardRecognizer(
         val loose = bestBitmapSuitLoose(crop, red = false)
         if (loose != null) return Triple(loose, true, debug)
         val fallback = shape?.suit
-            ?: if (scores.fullSpade >= scores.fullClub) Suit.Spades else Suit.Clubs
+            ?: if (scores.fullSpade > scores.fullClub) Suit.Spades else Suit.Clubs
         return Triple(fallback, true, debug)
     }
 
@@ -1702,9 +1720,19 @@ class CardRecognizer(
                 ocrGuess,
                 rankScoreMap
             )?.let { return it }
+            CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
+                bitmapHit,
+                ocrGuess,
+                rankScoreMap
+            )?.let { return it }
             return base
         }
         CascadeRankCorrections.ocrSixOverridesStrongSeven(
+            bitmapHit,
+            ocrGuess,
+            rankScoreMap
+        )?.let { return it }
+        CascadeRankCorrections.ocrJackQueenOverridesStrongBitmap(
             bitmapHit,
             ocrGuess,
             rankScoreMap
@@ -1727,6 +1755,18 @@ class CardRecognizer(
         }
         if (ocrGuess.rank == Rank.Queen &&
             ranks.contains(Rank.Ten) &&
+            ranks.contains(Rank.Queen)
+        ) {
+            return Rank.Queen to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Jack &&
+            ranks.contains(Rank.Jack) &&
+            ranks.contains(Rank.Queen)
+        ) {
+            return Rank.Jack to ocrGuess.confidence.coerceAtLeast(0.52f)
+        }
+        if (ocrGuess.rank == Rank.Queen &&
+            ranks.contains(Rank.Jack) &&
             ranks.contains(Rank.Queen)
         ) {
             return Rank.Queen to ocrGuess.confidence.coerceAtLeast(0.52f)
@@ -1862,6 +1902,16 @@ class CardRecognizer(
             tenScore - queenScore < 0.08f
         ) {
             return Rank.Queen to queenScore
+        }
+        // J and Q share a tall stem; full-card Jack crops (golden JH/JS bottoms)
+        // often lose to Queen by a razor margin while OCR still reads "J".
+        // Decline so needsOcrTiebreak isn't skipped by the strong-bitmap gate.
+        if ((top.first == Rank.Queen || top.first == Rank.Jack) &&
+            jackScore >= 0.50f &&
+            queenScore >= 0.50f &&
+            kotlin.math.abs(queenScore - jackScore) < 0.08f
+        ) {
+            return null
         }
         // A Smash "10" has a tall 1 that matches K unless Ten wins clearly.
         if (top.first == Rank.King &&

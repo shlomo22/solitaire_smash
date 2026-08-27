@@ -518,7 +518,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Ace",
+        "rank": "Six",
         "suit": "Clubs"
       }
     },

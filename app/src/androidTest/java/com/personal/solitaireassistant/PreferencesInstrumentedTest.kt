@@ -17,7 +17,7 @@ class PreferencesInstrumentedTest {
         val prefs = AssistantPreferences(context)
         prefs.updateCaptureIntervalMs(1000L)
         val settings = prefs.settings.first()
-        assertTrue(settings.captureIntervalMs in 250L..3000L)
+        assertTrue(settings.captureIntervalMs in 150L..3000L)
     }
 }
 

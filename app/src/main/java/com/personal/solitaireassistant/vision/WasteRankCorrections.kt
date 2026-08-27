@@ -151,7 +151,23 @@ internal object WasteRankCorrections {
         if (!fourCandidate && !nineCandidate && !sevenCandidate) return null
 
         val sixScore = rankScore(exactRankScores, Rank.Six)
-        if (ocrRank == Rank.Six) return Rank.Six
+        val eightScore = rankScore(exactRankScores, Rank.Eight)
+        // Smash 8 and 6 share stacked loops. v1.4.44's Six-over-Seven path
+        // was stealing real waste Eights (golden 20260825_131411 8♥, 132126 8♦).
+        if (ocrRank == Rank.Eight) return null
+        if (eightScore >= 0.45f && eightScore >= sixScore) return null
+        if (ocrRank == Rank.Six) {
+            // OCR "6" on a real Nine is common. Only steal a fused Nine when
+            // Six templates are actually in the race (the documented Six-as-Nine
+            // gap is ~0.03). A leading Nine with a lone OCR 6 stays Nine —
+            // otherwise 9D→10S vanishes and the arrow snaps to Draw Stock.
+            if (nineCandidate && !fourCandidate && !sevenCandidate) {
+                val nineScore = rankScore(exactRankScores, Rank.Nine)
+                if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
+                return null
+            }
+            return Rank.Six
+        }
 
         if (sevenCandidate) {
             val sevenScore = rankScore(exactRankScores, Rank.Seven)
@@ -169,11 +185,44 @@ internal object WasteRankCorrections {
     }
 
     /**
+     * Waste-only: fused Six/Seven on a real Eight. Directed — never the reverse —
+     * so it cannot re-break genuine Sixes the way a new 6/8 confusion pair would.
+     */
+    fun correctEightOnWaste(
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float>,
+        inkGuess: RankInkHeuristics.Guess?,
+        ocrRank: Rank?
+    ): Rank? {
+        val sixOrSeven = legacyCard?.rank == Rank.Six ||
+            tightCard?.rank == Rank.Six ||
+            baseCard?.rank == Rank.Six ||
+            legacyCard?.rank == Rank.Seven ||
+            tightCard?.rank == Rank.Seven ||
+            baseCard?.rank == Rank.Seven
+        if (!sixOrSeven) return null
+
+        val eightScore = rankScore(exactRankScores, Rank.Eight)
+        val sixScore = rankScore(exactRankScores, Rank.Six)
+        val sevenScore = rankScore(exactRankScores, Rank.Seven)
+
+        if (ocrRank == Rank.Eight) return Rank.Eight
+        if (inkGuess?.rank == Rank.Eight && inkGuess.confidence >= 0.48f) return Rank.Eight
+        if (tightCard?.rank == Rank.Eight && eightScore >= sixScore - 0.05f) return Rank.Eight
+        if (eightScore >= 0.48f && eightScore + 0.02f >= maxOf(sixScore, sevenScore)) {
+            return Rank.Eight
+        }
+        return null
+    }
+
+    /**
      * Waste-only: when a legacy or tight crop already read Spades for [rank], trust
      * that over the fused Clubs pick. Do not guess Spades from a narrow C-vs-S
      * template margin alone — the C0.83/S0.77 cluster appears on genuine Clubs too.
      * Deck-uniqueness for ambiguous waste black suits is handled later in
-     * [DeckConstraintPass.resolveWasteBlackSuitByDeckOccupancy].
+     * [DeckConstraintPass].
      */
     fun correctBlackSuitOnWaste(
         rank: Rank,
@@ -187,14 +236,45 @@ internal object WasteRankCorrections {
     }
 
     /**
+     * Waste C↔S when neither crop already read the partner suit: trust a strong
+     * exact-template leader instead of the fused pick. Shape-based Spade
+     * overrides (v1.4.64) flipped genuine Clubs (8C/4C); this only uses the
+     * same suitTemplateScores already computed for waste fusion.
+     *
+     * Ambiguous fused reads may use the standard 0.80 / 0.04 exact bar.
+     * Confident fused reads need a wider 0.82 / 0.08 gap so a 0.03 C-vs-S
+     * cluster cannot invent Spades.
+     */
+    fun preferWasteExactBlackSuit(
+        fusedSuit: Suit?,
+        fusedAmbiguous: Boolean,
+        exactBest: Suit?,
+        exactBestScore: Float,
+        exactSecondScore: Float
+    ): Suit? {
+        if (fusedSuit == null || fusedSuit.isRed) return null
+        if (exactBest == null || exactBest.isRed) return null
+        if (exactBest == fusedSuit) return null
+        val margin = exactBestScore - exactSecondScore
+        val strongExact = exactBestScore >= 0.82f && margin >= 0.08f
+        val ambiguousExact = fusedAmbiguous &&
+            exactBestScore >= 0.80f &&
+            margin >= 0.04f
+        if (!strongExact && !ambiguousExact) return null
+        return exactBest
+    }
+
+    /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
      * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/7, 6/9, K/10, Q/K, Q/10).
+     * Eight vs Six/Seven is directed (OCR Eight wins; OCR Six does not steal Eight).
      */
     fun ocrRankOverride(
         ocrRank: Rank?,
         legacyCard: Card?,
         tightCard: Card?,
-        baseCard: Card?
+        baseCard: Card?,
+        exactRankScores: Map<Rank, Float> = emptyMap()
     ): Rank? {
         if (ocrRank == null) return null
 
@@ -251,17 +331,33 @@ internal object WasteRankCorrections {
             tightLegacyRanks.contains(Rank.Nine) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
-            return Rank.Six
+            return if (sixCanStealNine(exactRankScores)) Rank.Six else null
+        }
+        if (ocrRank == Rank.Eight &&
+            (tightLegacyRanks.contains(Rank.Six) ||
+                tightLegacyRanks.contains(Rank.Seven) ||
+                baseRank == Rank.Six ||
+                baseRank == Rank.Seven)
+        ) {
+            return Rank.Eight
         }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Seven) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
+            val eightScore = rankScore(exactRankScores, Rank.Eight)
+            val sixScore = rankScore(exactRankScores, Rank.Six)
+            if (eightScore >= 0.48f && eightScore + 0.02f >= sixScore) return Rank.Eight
             return Rank.Six
         }
 
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            if (ocrRank == Rank.Six && fusionRank == Rank.Nine &&
+                !sixCanStealNine(exactRankScores)
+            ) {
+                return null
+            }
             // King/Ten evidence (template score pattern + OCR plurality) was
             // confirmed genuinely ambiguous on real golden samples: the same
             // signal shape (Ten~0.54 template lead, King absent from top-4,
@@ -272,6 +368,12 @@ internal object WasteRankCorrections {
         }
 
         return null
+    }
+
+    private fun sixCanStealNine(exactRankScores: Map<Rank, Float>): Boolean {
+        val sixScore = rankScore(exactRankScores, Rank.Six)
+        val nineScore = rankScore(exactRankScores, Rank.Nine)
+        return sixScore + 0.05f >= nineScore && sixScore >= 0.38f
     }
 
     internal fun isConfusionPair(first: Rank, second: Rank): Boolean {

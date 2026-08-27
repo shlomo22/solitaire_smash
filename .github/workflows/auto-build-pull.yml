@@ -1,0 +1,26 @@
+name: Auto Build, Install & Launch
+
+# Fires on every push, to any branch. Narrow this to specific branches
+# (e.g. ["main", "dev"]) once you've confirmed it's working the way you want.
+on:
+  push:
+    branches: ["**"]
+
+jobs:
+  build-install-run:
+    # Requires a self-hosted runner registered from this repo's
+    # Settings > Actions > Runners, installed on the Windows machine
+    # your device is physically plugged into. See SETUP.md.
+    runs-on: [self-hosted, Windows]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build, install, and launch on the connected device
+        shell: powershell
+        run: .\scripts\build-install-run.ps1
+
+# Note: this workflow does NOT pull logs/screenshot/save data. That
+# happens on demand, whenever you're done playing/testing, by running
+# scripts\pull-artifacts.ps1 yourself - see SETUP.md.

@@ -9,6 +9,7 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -345,6 +346,52 @@ class DeckConstraintPassTest {
     }
 
     @Test
+    fun tableauNearTieDuplicateIsNotOccupancyFlipped() {
+        val high = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Ten,
+            suit = Suit.Clubs,
+            confidence = 0.95f,
+            diagnostic = "match-Ten-Clubs@0.95"
+        )
+        val nearTie = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Ten,
+            suit = Suit.Clubs,
+            confidence = 0.88f,
+            diagnostic = "match-Ten-Clubs@0.88",
+            suitTemplates = "C:0.83 S:0.81"
+        )
+        val recognized = mutableListOf(high.slot, nearTie.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(high.card),
+                listOf(nearTie.card)
+            ) + List(5) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[0].last().suit)
+            assertEquals(Suit.Spades, result.tableau[1].last().suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
     fun wasteBlackSuitKeepsClubsWhenPartnerSpadesAlreadyTaken() {
         val tableauSix = slot(
             pile = PileRef.Tableau(0),
@@ -380,6 +427,255 @@ class DeckConstraintPassTest {
             assertEquals(Suit.Spades, result.tableau[0].last().suit)
             assertEquals(Suit.Clubs, result.waste.last().suit)
             assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun nearTieBlackDuplicateFlipsLoserToPartnerSuit() {
+        val high = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Nine,
+            suit = Suit.Spades,
+            confidence = 0.90f,
+            diagnostic = "match-Nine-Spades@0.90"
+        )
+        val nearTie = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Nine,
+            suit = Suit.Spades,
+            confidence = 0.82f,
+            diagnostic = "match-Nine-Spades@0.82",
+            suitTemplates = "S:0.82 C:0.79"
+        )
+        val recognized = mutableListOf(high.slot, nearTie.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(high.card),
+                listOf(nearTie.card)
+            ) + List(5) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Spades, result.tableau[0].last().suit)
+            assertEquals(Suit.Clubs, result.tableau[1].last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun confidentBlackSuitNearTieDoesNotFlipWhenBothIdsFree() {
+        val only = slot(
+            pile = PileRef.Tableau(3),
+            index = 0,
+            rank = Rank.Eight,
+            suit = Suit.Clubs,
+            confidence = 0.84f,
+            diagnostic = "match-Eight-Clubs@0.84",
+            suitTemplates = "C:0.83 S:0.81"
+        )
+        val recognized = mutableListOf(only.slot)
+        val state = GameState(
+            tableau = listOf(emptyList(), emptyList(), emptyList(), listOf(only.card)) +
+                List(3) { emptyList() },
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[3].last().suit)
+            assertEquals(Suit.Clubs, recognized[0].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun aceGeomOverrideDuplicateQueenFlipsToFreeSpades() {
+        val taken = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Queen,
+            suit = Suit.Clubs,
+            confidence = 0.91f,
+            diagnostic = "match-Queen-Clubs@0.91"
+        )
+        val weak = slot(
+            pile = PileRef.Tableau(5),
+            index = 0,
+            rank = Rank.Queen,
+            suit = Suit.Clubs,
+            confidence = 0.72f,
+            diagnostic = "geom-override:match-Ace-Clubs@0.86",
+            suitTemplates = "C:0.70 S:0.63"
+        )
+        val recognized = mutableListOf(taken.slot, weak.slot)
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                listOf(taken.card),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                listOf(weak.card),
+                emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[1].last().suit)
+            assertEquals(Suit.Spades, result.tableau[5].last().suit)
+            assertEquals(Suit.Spades, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun aceGeomOverrideDuplicateJackFlipsToFreeClubs() {
+        val taken = slot(
+            pile = PileRef.Tableau(0),
+            index = 0,
+            rank = Rank.Jack,
+            suit = Suit.Spades,
+            confidence = 0.88f,
+            diagnostic = "match-Jack-Spades@0.88"
+        )
+        val weak = slot(
+            pile = PileRef.Tableau(4),
+            index = 0,
+            rank = Rank.Jack,
+            suit = Suit.Spades,
+            confidence = 0.72f,
+            diagnostic = "geom-override:match-Ace-Spades@0.87",
+            suitTemplates = "S:0.95 C:0.89"
+        )
+        val recognized = mutableListOf(taken.slot, weak.slot)
+        val state = GameState(
+            tableau = listOf(
+                listOf(taken.card),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                listOf(weak.card),
+                emptyList(),
+                emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Spades, result.tableau[0].last().suit)
+            assertEquals(Suit.Clubs, result.tableau[4].last().suit)
+            assertEquals(Suit.Clubs, recognized[1].engine.suit)
+        } finally {
+            bitmap.recycle()
+            recognizer.release()
+        }
+    }
+
+    @Test
+    fun aceGeomOverrideStealsTakenSpadesFromFalseQueen() {
+        val takenQc = slot(
+            pile = PileRef.Tableau(1),
+            index = 0,
+            rank = Rank.Queen,
+            suit = Suit.Clubs,
+            confidence = 0.91f,
+            diagnostic = "match-Queen-Clubs@0.91"
+        )
+        val aceGeomQc = slot(
+            pile = PileRef.Tableau(5),
+            index = 0,
+            rank = Rank.Queen,
+            suit = Suit.Clubs,
+            confidence = 0.72f,
+            diagnostic = "geom-override:match-Ace-Clubs@0.86",
+            suitTemplates = "C:0.70 S:0.63"
+        )
+        val falseQs = slot(
+            pile = PileRef.Tableau(6),
+            index = 0,
+            rank = Rank.Queen,
+            suit = Suit.Spades,
+            confidence = 0.80f,
+            diagnostic = "match-Queen-Spades@0.80",
+            suitTemplates = "S:0.90 C:0.40"
+        )
+        val recognized = mutableListOf(takenQc.slot, aceGeomQc.slot, falseQs.slot)
+        val state = GameState(
+            tableau = listOf(
+                emptyList(),
+                listOf(takenQc.card),
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                listOf(aceGeomQc.card),
+                listOf(falseQs.card)
+            ),
+            foundations = List(4) { emptyList() },
+            stock = emptyList(),
+            waste = emptyList()
+        )
+        val recognizer = CardRecognizer(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        try {
+            val result = DeckConstraintPass.apply(
+                bitmap = bitmap,
+                recognizer = recognizer,
+                state = state,
+                recognizedSlots = recognized
+            )
+            assertEquals(Suit.Clubs, result.tableau[1].last().suit)
+            assertEquals(Suit.Spades, result.tableau[5].last().suit)
+            assertEquals(Suit.Spades, recognized[1].engine.suit)
+            assertTrue(result.tableau[6].last().suit != Suit.Spades)
         } finally {
             bitmap.recycle()
             recognizer.release()

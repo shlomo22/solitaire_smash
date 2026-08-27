@@ -98,7 +98,7 @@ class TableauCascadeSupportTest {
             bottomCard = Card(Rank.Three, Suit.Spades, faceUp = true, known = true),
             distanceFromBottom = 1
         )
-        assertEquals(Suit.Hearts, geometric.suit)
+        assertEquals(Suit.Diamonds, geometric.suit)
         val hit = RecognitionHit(
             card = null,
             confidence = 0.40f,
@@ -112,6 +112,28 @@ class TableauCascadeSupportTest {
         val enriched = TableauCascadeSupport.enrichGeometricFromRejectedRead(geometric, hit)
         assertEquals(Rank.Four, enriched.rank)
         assertEquals(Suit.Diamonds, enriched.suit)
+        assertFalse(enriched.suitAmbiguous)
+    }
+
+    @Test
+    fun enrichGeometricMarksAmbiguousWhenColorFamilyScoresMissing() {
+        val geometric = TableauCascadeSupport.geometricCascadeCard(
+            bottomCard = Card(Rank.Five, Suit.Hearts, faceUp = true, known = true),
+            distanceFromBottom = 1
+        )
+        assertEquals(Suit.Clubs, geometric.suit) // black placeholder
+        // Wrong-color templates only — the Clubs→Diamonds failure mode.
+        val hit = RecognitionHit(
+            card = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true),
+            confidence = 0.84f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Six-Diamonds",
+            trace = RecognitionTrace(suitTemplates = "D:0.88 H:0.70")
+        )
+        val enriched = TableauCascadeSupport.enrichGeometricFromRejectedRead(geometric, hit)
+        assertEquals(Rank.Six, enriched.rank)
+        assertTrue(enriched.suitAmbiguous)
     }
 
     @Test
@@ -127,6 +149,322 @@ class TableauCascadeSupportTest {
         val promoted = TableauCascadeSupport.promoteTrustedRun(run)
 
         assertFalse(promoted.any { it.inferred })
+    }
+
+    @Test
+    fun prefersGeometricForFourFiveConfusionAgainstBottomAnchor() {
+        val bottomThree = Card(Rank.Three, Suit.Spades, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomThree, 1)
+        val direct = Card(Rank.Five, Suit.Diamonds, faceUp = true, known = true, suitAmbiguous = true)
+        assertEquals(Rank.Four, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomThree,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.86f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForFiveSixAtHighConfidenceWhenDoublyAnchored() {
+        val bottomFour = Card(Rank.Four, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFour, 1)
+        val direct = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true)
+        assertEquals(Rank.Five, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFour,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.97f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun doesNotPreferBottomOnlyFiveSixAtVeryHighConfidence() {
+        val bottomFour = Card(Rank.Four, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFour, 1)
+        val direct = Card(Rank.Six, Suit.Clubs, faceUp = true, known = true)
+        assertFalse(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFour,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.97f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForJackQueenAgainstBottomAnchor() {
+        val bottomTen = Card(Rank.Ten, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomTen, 1)
+        val direct = Card(Rank.Queen, Suit.Spades, faceUp = true, known = true)
+        assertEquals(Rank.Jack, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomTen,
+                bottomReadConfidence = 0.88f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.85f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForTwoThreeConfusionAgainstBottomAnchor() {
+        val bottomTwo = Card(Rank.Two, Suit.Spades, faceUp = true, known = true)
+        val geomThree = TableauCascadeSupport.geometricCascadeCard(bottomTwo, 1)
+        val directTwo = Card(Rank.Two, Suit.Hearts, faceUp = true, known = true)
+        assertEquals(Rank.Three, geomThree.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomTwo,
+                bottomReadConfidence = 0.90f,
+                geometric = geomThree,
+                directCard = directTwo,
+                directConfidence = 0.80f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForSixSevenConfusionWhenDoublyAnchored() {
+        val bottomFive = Card(Rank.Five, Suit.Diamonds, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFive, 1)
+        val direct = Card(Rank.Seven, Suit.Clubs, faceUp = true, known = true)
+        assertEquals(Rank.Six, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFive,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.80f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForColorMismatchOnConsistentRun() {
+        val bottomTwo = Card(Rank.Two, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomTwo, 1)
+        // Geometry: Three of black. Direct: Three of Diamonds (wrong color family).
+        val direct = Card(Rank.Three, Suit.Diamonds, faceUp = true, known = true)
+        assertEquals(Rank.Three, geometric.rank)
+        assertTrue(geometric.suit.isRed != direct.suit.isRed)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomTwo,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.95f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricWhenHeaderInkDisagreesWithDirectSuit() {
+        val bottomFive = Card(Rank.Five, Suit.Diamonds, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomFive, 1)
+        // Geometry: Six of black. Direct: Six of Diamonds with black header ink.
+        val direct = Card(Rank.Six, Suit.Diamonds, faceUp = true, known = true)
+        assertEquals(Rank.Six, geometric.rank)
+        assertTrue(!geometric.suit.isRed)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFive,
+                bottomReadConfidence = 0.88f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.94f,
+                rankCountConsistent = false,
+                inkDisagreesWithDirectSuit = true
+            )
+        )
+        assertFalse(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomFive,
+                bottomReadConfidence = 0.88f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.94f,
+                rankCountConsistent = false,
+                inkDisagreesWithDirectSuit = false
+            )
+        )
+    }
+
+    @Test
+    fun doesNotPreferTwoThreeGeometryFromAceBottomWithoutConsistentRun() {
+        // Misread Ace bottom invents geometric Two; a correct Three direct read
+        // must not be stolen when rank-count isn't locked.
+        val bottomAce = Card(Rank.Ace, Suit.Spades, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomAce, 1)
+        val direct = Card(Rank.Three, Suit.Hearts, faceUp = true, known = true)
+        assertEquals(Rank.Two, geometric.rank)
+        assertFalse(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomAce,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.80f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForEightNineWhenDoublyAnchored() {
+        val bottomSeven = Card(Rank.Seven, Suit.Diamonds, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomSeven, 2)
+        val direct = Card(Rank.Eight, Suit.Hearts, faceUp = true, known = true, suitAmbiguous = true)
+        assertEquals(Rank.Nine, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomSeven,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.81f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricWhenAmbiguousRankDisagreesWithConsistentRun() {
+        val bottomThree = Card(Rank.Three, Suit.Spades, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomThree, 5)
+        val direct = Card(Rank.Nine, Suit.Hearts, faceUp = true, known = true, suitAmbiguous = true)
+        assertEquals(Rank.Eight, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomThree,
+                bottomReadConfidence = 0.90f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.88f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
+    fun repairIllegalBottomRecoversThreeUnderFour() {
+        val above = Card(Rank.Four, Suit.Spades, faceUp = true, known = true)
+        val bottom = Card(Rank.Eight, Suit.Diamonds, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottom,
+            confidence = 0.72f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Eight-Diamonds",
+            trace = RecognitionTrace(suitTemplates = "D:0.88 H:0.70")
+        )
+        val repaired = TableauCascadeSupport.repairIllegalBottom(
+            cardAbove = above,
+            bottom = bottom,
+            bottomConfidence = 0.72f,
+            bottomHit = hit
+        )
+        assertEquals(Rank.Three, repaired.rank)
+        assertEquals(Suit.Diamonds, repaired.suit)
+        assertFalse(repaired.inferred)
+    }
+
+    @Test
+    fun repairIllegalBottomKeepsLegalBottom() {
+        val above = Card(Rank.Four, Suit.Spades, faceUp = true, known = true)
+        val bottom = Card(Rank.Three, Suit.Diamonds, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottom,
+            confidence = 0.72f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Three-Diamonds"
+        )
+        val repaired = TableauCascadeSupport.repairIllegalBottom(
+            cardAbove = above,
+            bottom = bottom,
+            bottomConfidence = 0.72f,
+            bottomHit = hit
+        )
+        assertEquals(bottom, repaired)
+    }
+
+    @Test
+    fun repairIllegalBottomKeepsStrongJackUnderWrongKing() {
+        val above = Card(Rank.King, Suit.Spades, faceUp = true, known = true)
+        val bottom = Card(Rank.Jack, Suit.Hearts, faceUp = true, known = true)
+        val hit = RecognitionHit(
+            card = bottom,
+            confidence = 0.83f,
+            isFaceDown = false,
+            isEmpty = false,
+            diagnostic = "match-Jack-Hearts@0.83",
+            trace = RecognitionTrace(suitTemplates = "H:0.94 D:0.80")
+        )
+        val repaired = TableauCascadeSupport.repairIllegalBottom(
+            cardAbove = above,
+            bottom = bottom,
+            bottomConfidence = 0.83f,
+            bottomHit = hit
+        )
+        assertEquals(Rank.Jack, repaired.rank)
+        assertEquals(Suit.Hearts, repaired.suit        )
+    }
+
+    @Test
+    fun prefersGeometricForEvaluateAceClusterOverQueen() {
+        val bottomJack = Card(Rank.Jack, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomJack, 1)
+        val direct = Card(Rank.Ace, Suit.Clubs, faceUp = true, known = true)
+        assertEquals(Rank.Queen, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomJack,
+                bottomReadConfidence = 0.83f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.86f,
+                rankCountConsistent = false
+            )
+        )
+    }
+
+    @Test
+    fun prefersGeometricForStrongishAceWhenGeometrySaysJack() {
+        val bottomTen = Card(Rank.Ten, Suit.Hearts, faceUp = true, known = true)
+        val geometric = TableauCascadeSupport.geometricCascadeCard(bottomTen, 1)
+        val direct = Card(Rank.Ace, Suit.Spades, faceUp = true, known = true)
+        assertEquals(Rank.Jack, geometric.rank)
+        assertTrue(
+            TableauCascadeSupport.prefersGeometricOverDirectRead(
+                bottomCard = bottomTen,
+                bottomReadConfidence = 0.86f,
+                geometric = geometric,
+                directCard = direct,
+                directConfidence = 0.82f,
+                rankCountConsistent = false
+            )
+        )
     }
 
     @Test

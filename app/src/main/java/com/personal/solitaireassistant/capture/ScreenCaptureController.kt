@@ -17,7 +17,6 @@ import android.view.WindowManager
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 class ScreenCaptureController(
     private val context: Context,
@@ -29,7 +28,6 @@ class ScreenCaptureController(
     private val running = AtomicBoolean(false)
     private val intervalMs = AtomicLong(750L)
     private val lastEmitMs = AtomicLong(0L)
-    private val latestBitmap = AtomicReference<Bitmap?>(null)
 
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -49,7 +47,7 @@ class ScreenCaptureController(
 
     fun start(captureIntervalMs: Long) {
         if (!running.compareAndSet(false, true)) return
-        intervalMs.set(captureIntervalMs.coerceIn(250L, 3000L))
+        intervalMs.set(captureIntervalMs.coerceIn(150L, 3000L))
 
         val metrics = currentMetrics()
         width = metrics.widthPixels
@@ -80,7 +78,7 @@ class ScreenCaptureController(
     }
 
     fun updateInterval(ms: Long) {
-        intervalMs.set(ms.coerceIn(250L, 3000L))
+        intervalMs.set(ms.coerceIn(150L, 3000L))
     }
 
     fun resizeIfNeeded() {
@@ -122,7 +120,6 @@ class ScreenCaptureController(
         workerThread?.quitSafely()
         workerThread = null
         workerHandler = null
-        latestBitmap.getAndSet(null)?.recycle()
     }
 
     private fun drainLatest(reader: ImageReader) {
@@ -141,9 +138,7 @@ class ScreenCaptureController(
             if (isMostlyBlack(bitmap)) {
                 onBlackFrame()
             }
-            latestBitmap.getAndSet(bitmap)?.let { old ->
-                if (!old.isRecycled) old.recycle()
-            }
+            // Caller takes ownership of this Bitmap (pipeline recycles it).
             onFrame(bitmap)
         } catch (t: Throwable) {
             Log.w(TAG, "Frame drain failed", t)

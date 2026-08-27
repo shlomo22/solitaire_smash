@@ -93,13 +93,14 @@ class AnalysisPipeline(
     // (up to several seconds) synchronously right there, which blocked that
     // thread from ever seeing a newer frame until the current one finished —
     // so a move made mid-analysis was invisible to capture until a whole
-    // extra cycle later. Copy and hand off to a dedicated analysis thread
-    // instead, so capture stays free to keep grabbing the latest frame the
-    // whole time analysis is running.
+    // extra cycle later. Hand the capture Bitmap to a dedicated analysis
+    // thread instead, so capture stays free to keep grabbing the latest
+    // frame the whole time analysis is running.
     fun onFrame(bitmap: Bitmap, settings: AssistantSettings) {
         settingsRef.set(settings)
-        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
-        pendingFrame.getAndSet(PendingFrame(copy, settings, System.currentTimeMillis()))
+        // Capture already copied Image → Bitmap; take ownership instead of
+        // paying a second full-frame ARGB copy before detect() can start.
+        pendingFrame.getAndSet(PendingFrame(bitmap, settings, System.currentTimeMillis()))
             ?.bitmap?.recycle()
         if (busy.compareAndSet(false, true)) {
             analysisExecutor.execute(::drainPendingFrames)
@@ -159,13 +160,6 @@ class AnalysisPipeline(
         }
         synchronized(snapshotLock) {
             lastDetection = detection
-            // Only keep snapshot pixels from genuine in-game frames. While the
-            // user has this app's Settings/Evaluate UI on screen, MediaProjection
-            // captures that UI — storing it would save a useless PNG for golden
-            // review and error-capture import.
-            if (boardVisuallyChanged && detection.livePlayScreen) {
-                retainFrameLocked(bitmap)
-            }
         }
         val elapsed = System.currentTimeMillis() - started
         // How long this frame sat in the pending-frame handoff before
@@ -181,6 +175,17 @@ class AnalysisPipeline(
             queueDelayMs = queueDelayMs,
             frameBitmap = bitmap
         )
+        // After the arrow — a full-frame blit for golden/error snapshots
+        // must not sit between detect() and overlay.
+        synchronized(snapshotLock) {
+            // Only keep snapshot pixels from genuine in-game frames. While the
+            // user has this app's Settings/Evaluate UI on screen, MediaProjection
+            // captures that UI — storing it would save a useless PNG for golden
+            // review and error-capture import.
+            if (boardVisuallyChanged && detection.livePlayScreen) {
+                retainFrameLocked(bitmap)
+            }
+        }
     }
 
     fun clear() {
@@ -621,12 +626,6 @@ class AnalysisPipeline(
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
         }
-        maybeCaptureRecognitionErrors(
-            detection = detection,
-            state = state,
-            signature = signature,
-            frameBitmap = frameBitmap
-        )
         showBestSuggestion(
             detection = detection,
             signature = signature,
@@ -636,6 +635,14 @@ class AnalysisPipeline(
             frameH = frameH,
             boardVisuallyChanged = boardVisuallyChanged,
             queueDelayMs = queueDelayMs
+        )
+        // After the arrow — a full-frame PNG copy for error capture must not
+        // sit on the path between detect() and overlay.
+        maybeCaptureRecognitionErrors(
+            detection = detection,
+            state = state,
+            signature = signature,
+            frameBitmap = frameBitmap
         )
     }
 
@@ -887,56 +894,20 @@ class AnalysisPipeline(
         best: ScoredMove,
         boardVisuallyChanged: Boolean
     ): ScoredMove? {
-        val previous = lastSuggestion?.scored
-        if (previous == null || best.move == previous.move) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        // Stickiness exists for a *static* board whose recognition flickers.
-        // After a real visual change the previous arrow is already stale —
-        // holding it another frame is the "I already played, still waiting"
-        // delay. Adopt the new best immediately; flicker damping still
-        // applies on unchanged pixels.
-        if (boardVisuallyChanged) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        if (pendingSuggestionCandidate == best.move) {
-            pendingSuggestionStreak++
-        } else {
-            pendingSuggestionCandidate = best.move
-            pendingSuggestionStreak = 1
-        }
-        if (pendingSuggestionStreak >= 2) {
-            pendingSuggestionCandidate = null
-            pendingSuggestionStreak = 0
-            return best
-        }
-        val stillRanked = ranked.firstOrNull { it.move == previous.move }
-        if (stillRanked == null) {
-            val previousSourcedFromWaste =
-                previous.move is Move.WasteToFoundation || previous.move is Move.WasteToTableau
-            if (previousSourcedFromWaste) {
-                // Waste is the fastest-changing, always-fully-visible pile - unlike the
-                // buried-tableau-card misread this damping was built for, a vanished
-                // waste-sourced move almost always means the player already drew past
-                // it. Holding here left a stale arrow anchored to the old waste
-                // position while the visible card underneath had already moved on to
-                // something unrelated - on screen this reads as the arrow connecting
-                // two nonsensical ranks (e.g. "J -> 3"), since the endpoints are fixed
-                // pixel positions, not the cards they were computed for.
-                pendingSuggestionCandidate = null
-                pendingSuggestionStreak = 0
-                return best
-            }
-            fileLogger.append(
-                "HOLD prev=${previous.move.label} vanished from ranked " +
-                    "(raw=${best.move.label} streak=$pendingSuggestionStreak/2)"
+        val result = SuggestionStickiness.apply(
+            previous = lastSuggestion?.scored,
+            best = best,
+            ranked = ranked,
+            boardVisuallyChanged = boardVisuallyChanged,
+            state = SuggestionStickiness.State(
+                pendingCandidate = pendingSuggestionCandidate,
+                pendingStreak = pendingSuggestionStreak
             )
-        }
-        return stillRanked
+        )
+        pendingSuggestionCandidate = result.state.pendingCandidate
+        pendingSuggestionStreak = result.state.pendingStreak
+        result.holdReason?.let { fileLogger.append(it) }
+        return result.display
     }
 
     private fun endpointsFor(

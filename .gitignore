@@ -13,3 +13,8 @@
 *.apk
 *.ap_
 *.dex
+
+# solitaire-smash-automation scripts
+/pulled/
+/tmp_golden_review/
+/scripts/local-machine.ps1

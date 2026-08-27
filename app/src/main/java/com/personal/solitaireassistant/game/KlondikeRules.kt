@@ -76,10 +76,10 @@ object KlondikeRules {
     }
 
     fun isSafeFoundationMove(state: GameState, card: Card): Boolean {
-        // Conservative Baker-style heuristic: allow ace/2 always; otherwise
-        // require both same-color next-lower cards already founded, or both
-        // opposite-color cards one rank below founded.
-        if (card.rank.value <= 2) return true
+        // Conservative Baker-style heuristic: Aces are always safe; Two and
+        // higher require both same-color next-lower cards already founded, or
+        // both opposite-color cards one rank below founded.
+        if (card.rank == Rank.Ace) return true
         val needed = card.rank.value - 1
         val opposite = Suit.entries.filter { it.isRed != card.suit.isRed }
         val sameColor = Suit.entries.filter { it != card.suit && it.isRed == card.suit.isRed }

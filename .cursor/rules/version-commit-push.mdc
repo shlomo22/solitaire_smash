@@ -3,14 +3,14 @@ description: After bumping app versionCode/versionName, always commit and push
 alwaysApply: true
 ---
 
-# Version bump → commit + push
+# Version bump → commit → push
 
-Whenever you change `versionCode` or `versionName` in `app/build.gradle.kts`:
+Whenever recognition/logic changes ship with a new **versionCode** / **versionName** bump in `app/build.gradle.kts`:
 
-1. Finish the code change(s) for that round.
+1. Finish the code change and bump the version (every testable build needs a distinguishable version).
 2. **Commit and push in the same turn** — do not leave a bumped version uncommitted or unpushed.
 3. Do not wait for the user to ask separately; bumping the version means the round is ready to ship to device.
 
-Commit message style (match recent history): short imperative summary + `(vX.Y.Z)` in the title.
+Commit message: short imperative summary + `(vX.Y.Z)` in the title, optional body with what to verify on Evaluate.
 
-If the user explicitly says not to push, commit locally only and say so.
+Do not skip push after commit. If the user explicitly says not to push, commit locally only and say so.

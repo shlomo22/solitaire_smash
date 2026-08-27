@@ -63,6 +63,7 @@ class SettingsViewModel(
     private val showGoldenReview = MutableStateFlow(false)
     private val showErrorCaptureImport = MutableStateFlow(false)
     private val errorCaptureImportIds = MutableStateFlow<List<String>>(emptyList())
+    private var didAutoEvaluateOnOpen = false
 
     private val coreState = combine(
         preferences.settings,
@@ -226,20 +227,37 @@ class SettingsViewModel(
             evaluating.value = true
             transient.value = "Evaluating golden set…"
             val report = withContext(Dispatchers.Default) {
-                val result = GoldenTruthEvaluator.evaluate(getApplication(), store)
                 val logger = AnalysisFileLogger(getApplication())
-                logger.append("=== golden evaluate ===")
-                result.summary().lines().forEach { line -> logger.append(line) }
-                val traceBlock = result.mismatchTraceBlock()
-                if (traceBlock.isNotBlank()) {
-                    traceBlock.lines().forEach { line -> logger.append(line) }
+                try {
+                    val result = GoldenTruthEvaluator.evaluate(getApplication(), store)
+                    logger.append("=== golden evaluate ===")
+                    result.summary().lines().forEach { line -> logger.append(line) }
+                    val traceBlock = result.mismatchTraceBlock()
+                    if (traceBlock.isNotBlank()) {
+                        traceBlock.lines().forEach { line -> logger.append(line) }
+                    }
+                    result
+                } finally {
+                    logger.append("===EVALUATE_DONE===")
                 }
-                result
             }
             evalReport.value = report.summary()
             evaluating.value = false
             transient.value = "Golden evaluation finished"
         }
+    }
+
+    /**
+     * Debug loop: run Golden truth Evaluate once when Settings first appears
+     * after a cold start / new ViewModel. Skip if we opened a review screen
+     * or there are no samples.
+     */
+    fun maybeAutoEvaluateOnOpen() {
+        if (didAutoEvaluateOnOpen) return
+        didAutoEvaluateOnOpen = true
+        if (showGoldenReview.value) return
+        if (store.count() <= 0) return
+        evaluateGoldenSet()
     }
 
     fun refreshGoldenCount() {
@@ -297,15 +315,19 @@ class SettingsViewModel(
             evaluatingErrors.value = true
             transient.value = "Evaluating error captures…"
             val report = withContext(Dispatchers.Default) {
-                val result = ErrorCaptureEvaluator.evaluate(getApplication(), errorCaptureStore)
                 val logger = AnalysisFileLogger(getApplication())
-                logger.append("=== error capture evaluate ===")
-                result.summary().lines().forEach { line -> logger.append(line) }
-                val detail = result.detailBlock()
-                if (detail.isNotBlank()) {
-                    detail.lines().forEach { line -> logger.append(line) }
+                try {
+                    val result = ErrorCaptureEvaluator.evaluate(getApplication(), errorCaptureStore)
+                    logger.append("=== error capture evaluate ===")
+                    result.summary().lines().forEach { line -> logger.append(line) }
+                    val detail = result.detailBlock()
+                    if (detail.isNotBlank()) {
+                        detail.lines().forEach { line -> logger.append(line) }
+                    }
+                    result
+                } finally {
+                    logger.append("===EVALUATE_DONE===")
                 }
-                result
             }
             errorEvalReport.value = report.summary()
             evaluatingErrors.value = false

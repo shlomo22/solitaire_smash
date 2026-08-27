@@ -8,9 +8,20 @@ import kotlin.math.abs
 internal object TableauCascadeSupport {
     const val MIN_READ_CONFIDENCE = 0.55f
     const val STRONG_DIRECT_READ_FLOOR = 0.75f
+    /** Adjacent glyph confusions need a higher bar to beat geometry. */
+    const val ADJACENT_CONFUSION_FLOOR = 0.94f
+    /** Color-family flips (Clubs→Diamonds). Allow strong wrong-color reads. */
+    const val COLOR_MISMATCH_FLOOR = 0.92f
     private const val WEAK_JACK_FLOOR = 0.65f
     private const val BOTTOM_ANCHOR_FLOOR = 0.80f
     private const val BOTTOM_ONLY_WEAK_FLOOR = 0.80f
+    private const val ILLEGAL_BOTTOM_OVERRIDE_FLOOR = 0.80f
+    /**
+     * Mid-cascade Ace reads are almost never legal (Ace is the bottom of a
+     * tableau run). 0.85 left Evaluate's 0.86–0.87 Ace cluster in place
+     * (20260818_080819 QS vs AC, 20260822_171728 9D vs AD, Jack vs Ace).
+     */
+    private const val ACE_FALSE_POSITIVE_FLOOR = 0.90f
 
     fun geometricCascadeCard(
         bottomCard: Card,
@@ -25,11 +36,57 @@ internal object TableauCascadeSupport {
         val known = bottomCard.known && inferredValue <= Rank.King.value
         return Card(
             rank = if (known) Rank.fromValue(inferredValue) else Rank.Ace,
-            suit = if (inferredRed) Suit.Hearts else Suit.Spades,
+            // Clubs/Diamonds placeholders — Spades/Hearts defaults biased
+            // Evaluate toward Clubs→Spades once geom overrides became scored.
+            suit = if (inferredRed) Suit.Diamonds else Suit.Clubs,
             faceUp = true,
             known = known,
-            inferred = true
+            inferred = true,
+            suitAmbiguous = true
         )
+    }
+
+    /**
+     * Card that should sit immediately under [upper] in a legal tableau run
+     * (rank one below, opposite color). Suit is only a color placeholder —
+     * use [enrichGeometricFromRejectedRead] when template scores are available.
+     */
+    fun geometricCardBelow(upper: Card): Card? {
+        if (!upper.known || upper.rank.value <= Rank.Ace.value) return null
+        return Card(
+            rank = Rank.fromValue(upper.rank.value - 1),
+            suit = if (upper.suit.isRed) Suit.Clubs else Suit.Diamonds,
+            faceUp = true,
+            known = true,
+            inferred = true,
+            suitAmbiguous = true
+        )
+    }
+
+    /**
+     * When the fully-visible bottom card cannot legally stack under the card
+     * above it, prefer the geometric card-below unless the bottom read is
+     * strong. New golden 20260826_070842: 5♥-4♠ over a real 3♦ misread as 8♦
+     * at 0.72 — geometry from 4♠ recovers 3 of red.
+     *
+     * 0.90 was too high: Evaluate 20260814_125128 / 192324 / 192510 read the
+     * bottom Jack correctly at 0.83, then this pass overwrote it to Queen to
+     * fit a wrong King immediately above (leadingUnknown mid-cascade). 0.80
+     * matches [BOTTOM_ANCHOR_FLOOR] and still lets the 0.72 Eight→Three case
+     * through.
+     */
+    fun repairIllegalBottom(
+        cardAbove: Card?,
+        bottom: Card,
+        bottomConfidence: Float,
+        bottomHit: RecognitionHit
+    ): Card {
+        if (cardAbove == null || !cardAbove.faceUp || !cardAbove.known) return bottom
+        if (!bottom.known) return bottom
+        if (bottom.canStackOnTableau(cardAbove)) return bottom
+        if (bottomConfidence >= ILLEGAL_BOTTOM_OVERRIDE_FLOOR) return bottom
+        val expected = geometricCardBelow(cardAbove) ?: return bottom
+        return enrichGeometricFromRejectedRead(expected, bottomHit).copy(inferred = false)
     }
 
     fun isReliableRead(hit: RecognitionHit, card: Card?): Boolean =
@@ -49,7 +106,8 @@ internal object TableauCascadeSupport {
         geometric: Card,
         directCard: Card?,
         directConfidence: Float,
-        rankCountConsistent: Boolean
+        rankCountConsistent: Boolean,
+        inkDisagreesWithDirectSuit: Boolean = false
     ): Boolean {
         if (directCard == null || !directCard.known) return false
         if (!geometric.known || !bottomCard.known) return false
@@ -59,6 +117,39 @@ internal object TableauCascadeSupport {
         if (!rankMismatch && !colorMismatch) return false
 
         if (rankCountConsistent && directConfidence < STRONG_DIRECT_READ_FLOOR) {
+            return true
+        }
+        // Doubly-anchored adjacent glyph confusions stay wrong past 0.94
+        // (Evaluate Five→Six unchanged through v1.4.56). Trust geometry.
+        if (rankCountConsistent &&
+            rankMismatch &&
+            isAdjacentConfusionPair(directCard.rank, geometric.rank)
+        ) {
+            return true
+        }
+        // Color-family flips on a doubly-anchored run (Clubs→Diamonds / Spades→Hearts).
+        // The 0.92 floor left Evaluate's cross-color buckets intact — mid-cascade
+        // diamond reads of true clubs often score ≥0.92 on the red pip.
+        if (rankCountConsistent && colorMismatch) {
+            return true
+        }
+        // Header-strip ink color contradicts the direct suit (black ink on a
+        // "Diamonds" read). v1.4.61's rankCountConsistent-only color path was a
+        // no-op when geomCount ≠ rankCount; ink disagreement is a local signal
+        // that still requires geometric color ≠ direct (binary ⇒ ink agrees
+        // with geometry) so we don't unlock plain color flips (v1.4.52 C↔S).
+        if (inkDisagreesWithDirectSuit &&
+            colorMismatch &&
+            bottomReadConfidence >= BOTTOM_ANCHOR_FLOOR
+        ) {
+            return true
+        }
+        // suitAmbiguous + wrong rank under a consistent run is almost always a
+        // bad mid-strip read (8↔9 / 3→4 cases carried ~).
+        if (rankCountConsistent &&
+            rankMismatch &&
+            directCard.suitAmbiguous
+        ) {
             return true
         }
 
@@ -73,7 +164,18 @@ internal object TableauCascadeSupport {
 
         if (directCard.rank == Rank.Ace &&
             geometric.rank != Rank.Ace &&
-            directConfidence < STRONG_DIRECT_READ_FLOOR
+            directConfidence < ACE_FALSE_POSITIVE_FLOOR
+        ) {
+            return true
+        }
+
+        // Bottom-only adjacent pairs: only the historically validated set.
+        // Two/Three and Six/Seven stay doubly-anchored-only — a misread Ace
+        // bottom otherwise invents geometric Two and steals a correct Three
+        // (Evaluate Three→Two stayed at 12 after adding 2/3 broadly).
+        // v1.4.58 removed the floor and cost -6 rank slots; restore it.
+        if (isBottomOnlyAdjacentConfusionPair(directCard.rank, geometric.rank) &&
+            directConfidence < ADJACENT_CONFUSION_FLOOR
         ) {
             return true
         }
@@ -89,11 +191,28 @@ internal object TableauCascadeSupport {
         return false
     }
 
-    /**
-     * When the bottom cascade card is read reliably, the fixed Smash overlap
-     * spacing makes rank/color derivation trustworthy — lift inferred so runs
-     * like 6S-5H-4S-3D become movable.
-     */
+    private fun isAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
+        when (setOf(first, second)) {
+            setOf(Rank.Two, Rank.Three),
+            setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Four, Rank.Five),
+            setOf(Rank.Five, Rank.Six),
+            setOf(Rank.Six, Rank.Seven),
+            setOf(Rank.Eight, Rank.Nine),
+            setOf(Rank.Jack, Rank.Queen) -> true
+            else -> false
+        }
+
+    private fun isBottomOnlyAdjacentConfusionPair(first: Rank, second: Rank): Boolean =
+        when (setOf(first, second)) {
+            setOf(Rank.Three, Rank.Four),
+            setOf(Rank.Four, Rank.Five),
+            setOf(Rank.Five, Rank.Six),
+            setOf(Rank.Eight, Rank.Nine),
+            setOf(Rank.Jack, Rank.Queen) -> true
+            else -> false
+        }
+
     /**
      * Geometric fallback only knows red vs black — when a rejected direct read
      * still has strong suit-template scores, keep the geometric rank but adopt
@@ -119,8 +238,14 @@ internal object TableauCascadeSupport {
             if (best == Suit.Clubs) Suit.Spades else Suit.Clubs
         }
         val partnerScore = scores[partner] ?: 0f
-        if (bestScore < 0.65f || bestScore - partnerScore < 0.03f) return geometric
-        return geometric.copy(suit = best)
+        if (bestScore < 0.65f || bestScore - partnerScore < 0.03f) {
+            // Color-correct placeholder without Spades/Hearts bias.
+            return geometric.copy(
+                suit = if (geometric.suit.isRed) Suit.Diamonds else Suit.Clubs,
+                suitAmbiguous = true
+            )
+        }
+        return geometric.copy(suit = best, suitAmbiguous = false)
     }
 
     fun promoteTrustedRun(faceUpRun: List<Card>): List<Card> {
