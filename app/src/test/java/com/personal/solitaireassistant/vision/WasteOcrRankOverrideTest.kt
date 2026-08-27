@@ -179,6 +179,30 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun ocrEightOverridesFourFusion() {
+        val fourHearts = Card(Rank.Four, Suit.Hearts, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Eight,
+            legacyCard = null,
+            tightCard = fourHearts,
+            baseCard = fourHearts
+        )
+        assertEquals(Rank.Eight, override)
+    }
+
+    @Test
+    fun correctSixOnWasteDoesNotStealFourWhenJackIsOnACrop() {
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = Card(Rank.Jack, Suit.Clubs, faceUp = true, known = true),
+            tightCard = Card(Rank.Four, Suit.Clubs, faceUp = true, known = true),
+            baseCard = Card(Rank.Jack, Suit.Clubs, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Six to 0.38f, Rank.Four to 0.36f, Rank.Jack to 0.42f),
+            ocrRank = Rank.Three
+        )
+        assertNull(rank)
+    }
+
+    @Test
     fun ocrEightOverridesSixFusion() {
         val sixHearts = Card(Rank.Six, Suit.Hearts, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(

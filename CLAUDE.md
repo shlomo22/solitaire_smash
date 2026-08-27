@@ -232,13 +232,18 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   can independently latch the 2nd card: it counts only white/red ink, so a black
   front card can fail the 6% gate.
 
-## Current state (as of v1.4.81 / versionCode 152, pushed, not yet Evaluate-verified)
+## Current state (as of v1.4.82 / versionCode 153, pushed, not yet Evaluate-verified)
 
-**v1.4.80 / 151** restored the v1.4.77 suit path and Evaluate-matched **5179/5317**.
-**v1.4.81** gates `ocrRankOverride`'s `isConfusionPair` fallback when *both* waste
-crops already produced a rank — so a later left-fan OCR (the covered 2nd card)
-cannot turn agreed Queen into Ten or Jack+Four into Three. Single-crop
-Jack/Three and Jack/Five OCR overrides are unchanged. Awaiting Evaluate.
+**v1.4.81 / 152** Evaluate: **5182/5317 (+3)**. `QH vs 10H` and both `QC vs 10C`
+cleared. `JS vs 3C` became `JS vs 6C` (`correctSixOnWaste` stole Four at the 0.38
+floor). Rank 59, suit 86, C→S 23, S→C 14.
+
+**v1.4.82** — do not Six-steal a Four when a waste crop already read Jack
+(`JS vs 6C`, `JC vs 6C` with legacy Jack). OCR Eight may override Four
+(`8H vs 4H`; tight-crop OCR `'8'@0.62`). Do **not** adopt OCR Jack over Four
+— `20260825_143855` is a real waste Six whose tight corner OCR'd `J`. Awaiting
+Evaluate. Expected: 032046 JC and the three 8H slots; 230337 becomes JS vs JC
+(still a suit miss).
 
 Golden set: **151 samples / 5317 labeled slots**. On-device floor:
 

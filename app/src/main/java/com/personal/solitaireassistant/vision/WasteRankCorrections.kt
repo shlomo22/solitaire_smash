@@ -150,6 +150,14 @@ internal object WasteRankCorrections {
             baseCard?.rank == Rank.Seven
         if (!fourCandidate && !nineCandidate && !sevenCandidate) return null
 
+        // A Jack crop often templates as Four; Six then steals at the 0.38
+        // floor (v1.4.81: JS vs 3C became JS vs 6C). Real Sixes that OCR as
+        // "6" still take the ocrRank==Six path below.
+        val jackCandidate = legacyCard?.rank == Rank.Jack ||
+            tightCard?.rank == Rank.Jack ||
+            baseCard?.rank == Rank.Jack
+        if (jackCandidate) return null
+
         val sixScore = rankScore(exactRankScores, Rank.Six)
         val eightScore = rankScore(exactRankScores, Rank.Eight)
         // Smash 8 and 6 share stacked loops. v1.4.44's Six-over-Seven path
@@ -336,8 +344,10 @@ internal object WasteRankCorrections {
         if (ocrRank == Rank.Eight &&
             (tightLegacyRanks.contains(Rank.Six) ||
                 tightLegacyRanks.contains(Rank.Seven) ||
+                tightLegacyRanks.contains(Rank.Four) ||
                 baseRank == Rank.Six ||
-                baseRank == Rank.Seven)
+                baseRank == Rank.Seven ||
+                baseRank == Rank.Four)
         ) {
             return Rank.Eight
         }
