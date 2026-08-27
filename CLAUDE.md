@@ -235,6 +235,24 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   neighbor OCR is 5/3; OCR Jack may override a tight Four. Queen/Ten and Jack+Three
   fan cases cleared. Remaining rank misses are mostly **no-OCR** Four→Six
   (`230705` JD, `132126`/`132140` 8D).
+- **Root-caused the no-OCR Four/Six/Four cases above: waste OCR crops start flush
+  at the card's own top edge, landing on a drop-shadow band that
+  `RankCornerOcr.preprocess()` paints as ink.** Pixel-checked all four named
+  no-OCR samples (`230705` JD, `132126`/`132140` 8D, `080754` 5D — all four
+  correct-per-truth, engine misread as Four/Six/Four): rows 0-5 of every waste
+  OCR region (both the WASTE-profile whole-region ROI and
+  `BoardLocator.wasteRankCornerRegion`'s DIRECT-profile corner ROI — both
+  card-top-anchored) are a desaturated dark-purple drop-shadow/border-transition
+  band (~RGB(50,36,98)) that passes `SmashColorAnalyzer.isBlackInk`, so
+  `preprocess()` paints a spurious solid black bar across the top of the
+  binarized crop handed to ML Kit, sitting directly above the rank glyph (which
+  never starts before ~6.7% of card height in these four samples — verified via
+  a Python replica of the exact ink-mask/preprocess pipeline against the real
+  golden PNGs). **v1.4.85** insets both ROI paths' top edge by 4% of card
+  height to skip the band. Python re-simulation confirms the digit comes out
+  fully isolated with no artifact once inset. Not yet device-verified — this is
+  a preprocessing-noise fix, not a template/score change, so it can't be
+  validated further offline; next Evaluate run is the real test.
 - **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
   session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
   is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
@@ -262,6 +280,11 @@ tableau arrows (color is enough) and would drop Evaluate.
 
 **Active work: waste top identity** (playable card → wrong Waste→Tableau /
 Waste→Foundation arrow). Do not start another C↔S scoring/header/occupancy round.
+
+**v1.4.85 / versionCode 156 (pushed, not yet Evaluate-verified):** waste OCR
+ROI top-inset fix for the drop-shadow-band false positive above. Run Evaluate
+and pull artifacts to check whether `230705`/`132126`/`132140`/`080754` and
+the broader no-OCR Four→Six/Five→Four buckets move.
 
 **Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
 **rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
