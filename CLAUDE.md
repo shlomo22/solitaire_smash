@@ -253,6 +253,11 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   fully isolated with no artifact once inset. Not yet device-verified — this is
   a preprocessing-noise fix, not a template/score change, so it can't be
   validated further offline; next Evaluate run is the real test.
+  **Correction on `080754`**: it turned out not to be a true no-OCR case — the
+  real-device log behind v1.4.86 shows OCR already read `'5'@0.62` there; it
+  just had no override rule to act on it (fixed by v1.4.86 below, independent
+  of the shadow-band inset). The shadow-band theory's remaining live test is
+  `230705`/`132126`/`132140`, where OCR was genuinely producing nothing.
 - **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
   session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
   is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
@@ -281,10 +286,13 @@ tableau arrows (color is enough) and would drop Evaluate.
 **Active work: waste top identity** (playable card → wrong Waste→Tableau /
 Waste→Foundation arrow). Do not start another C↔S scoring/header/occupancy round.
 
-**v1.4.85 / versionCode 156 (pushed, not yet Evaluate-verified):** waste OCR
-ROI top-inset fix for the drop-shadow-band false positive above. Run Evaluate
-and pull artifacts to check whether `230705`/`132126`/`132140`/`080754` and
-the broader no-OCR Four→Six/Five→Four buckets move.
+**v1.4.85 / versionCode 156 (pushed):** waste OCR ROI top-inset fix for the
+drop-shadow-band false positive above. **v1.4.86 / versionCode 157 (pushed,
+from a concurrent session/Cursor):** dedicated `ocrRankOverride` rule letting
+OCR Five beat a tight-crop Four (mirrors the existing Jack-over-Four rule),
+fixing `080754` directly. Neither is Evaluate-verified yet — run Evaluate and
+pull artifacts to check whether `230705`/`132126`/`132140` (the real
+shadow-band test) and `080754` (the override-rule test) move.
 
 **Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
 **rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
@@ -297,10 +305,11 @@ wrong Six-on-Jack labels already cost rounds.
 
 Remaining buckets, descending live-play value:
 - Waste no-OCR Four→Six magnet — `230705` JD vs 6D, `132126`/`132140` 8D vs 6D.
-  Tight Four, `correctSixOnWaste` at 0.38, every OCR region miss. Needs more
-  playable 5/6/8/J samples before another template.
-- Waste OCR Five over Four not adopted — `080754` 5D vs 4D (`ocr='5'` on a
-  left-shifted crop). Same class as Jack-over-Four, not yet gated the same way.
+  Tight Four, `correctSixOnWaste` at 0.38, every OCR region miss. v1.4.85's
+  shadow-band ROI inset targets exactly this; unverified. Needs more playable
+  5/6/8/J samples before another template if it doesn't move.
+- ~~Waste OCR Five over Four not adopted (`080754`)~~ — fixed by v1.4.86's
+  dedicated `ocrRankOverride` rule. Unverified on-device.
 - Waste black-suit crop bias — **C0.83/S0.77** `wideMarginDirect→Clubs`
   (`6S vs 6C`, `210739 JS vs JC`, `3S vs 3C`). Not a 0.01 tie. Parked.
 - FaceDown→FaceUp occupancy (18) and long-cascade compounding — buried slots,
