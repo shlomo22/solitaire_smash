@@ -219,6 +219,19 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun ocrFiveOverridesFourFusion() {
+        // Evaluate 20260824_080754: tight Four, OCR '5'@0.62, fused Four.
+        val fourDiamonds = Card(Rank.Four, Suit.Diamonds, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Five,
+            legacyCard = null,
+            tightCard = fourDiamonds,
+            baseCard = fourDiamonds
+        )
+        assertEquals(Rank.Five, override)
+    }
+
+    @Test
     fun ocrEightOverridesFourFusion() {
         val fourHearts = Card(Rank.Four, Suit.Hearts, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(

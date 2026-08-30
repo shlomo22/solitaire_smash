@@ -281,8 +281,10 @@ internal object WasteRankCorrections {
 
     /**
      * Prefer corner OCR over waste fusion when OCR reads a rank that disagrees with
-     * the fused PNG pick on a known confusion pair (3/J, 5/J, 6/4, 6/7, 6/9, K/10, Q/K, Q/10).
-     * Eight vs Six/Seven is directed (OCR Eight wins; OCR Six does not steal Eight).
+     * the fused PNG pick on a known confusion pair (3/J, 5/J, 5/4, 6/4, 6/7, 6/9,
+     * K/10, Q/K, Q/10). Eight vs Six/Seven is directed (OCR Eight wins; OCR Six
+     * does not steal Eight). Five vs Four is directed (OCR Five wins on a tight
+     * Four; Evaluate 080754 OCR='5' still fused Four until v1.4.86).
      */
     fun ocrRankOverride(
         ocrRank: Rank?,
@@ -369,6 +371,19 @@ internal object WasteRankCorrections {
         ) {
             return Rank.Jack
         }
+        // Five templates as Four on a tight waste crop (080754 5D vs 4D:
+        // legacy=null, tight=Four, OCR='5'@0.62, fused Four). Same directed
+        // override as Jack-over-Four. Skip when a crop already ranked Jack —
+        // that is the Jack+Four fan case handled below.
+        if (ocrRank == Rank.Five &&
+            (tightRank == Rank.Four ||
+                legacyRank == Rank.Four ||
+                baseRank == Rank.Four) &&
+            Rank.Five !in tightLegacyRanks &&
+            Rank.Jack !in tightLegacyRanks
+        ) {
+            return Rank.Five
+        }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Seven) &&
             !tightLegacyRanks.contains(Rank.Six)
@@ -429,6 +444,7 @@ internal object WasteRankCorrections {
             setOf(Rank.King, Rank.Queen),
             setOf(Rank.Jack, Rank.Three),
             setOf(Rank.Five, Rank.Jack),
+            setOf(Rank.Five, Rank.Four),
             setOf(Rank.Six, Rank.Four),
             setOf(Rank.Six, Rank.Nine),
             setOf(Rank.Six, Rank.Seven) -> true
