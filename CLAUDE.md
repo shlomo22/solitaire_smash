@@ -270,6 +270,18 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   Eight's own ink/template score win instead, sidestepping the OCR failure
   rather than fixing it. Next Evaluate run is the real test of whether that
   lands where the geometry fix didn't.
+  **Correction on "falsified": the shadow-band theory wasn't wrong, it was
+  incomplete.** v1.4.91 found v1.4.90's ink/score Eight-from-Four guess cost
+  net −30 (new Four→Eight and Six→Eight false positives) and reverted just
+  that part, keeping the no-OCR Four→Six gate. v1.4.92 then went back to the
+  ROI itself: `RankCornerOcr`'s WASTE profile and `wasteRankCornerRegion` were
+  both still only 0.32/0.30 tall — tall enough to clear the drop-shadow band
+  but not tall enough to fit a full Smash "8" (two stacked loops). That
+  matches the two-band ink measurement from the original v1.4.85 investigation
+  (7-25% and 34-77% of card height) - the second band wasn't a separate
+  decorative watermark as first assumed, it was the digit's own lower loop
+  being clipped. v1.4.92 widens/heightens both ROI paths to 0.48×0.42, on top
+  of the existing 4% top inset. Not yet Evaluate-verified.
 - **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
   session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
   is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
@@ -364,10 +376,14 @@ check and the Two/Three-restraint solver tweaks documented above.
 `ocr=miss:empty` (see the shadow-band correction above). The solver tweaks
 and the run-consistency diagnostic are still unverified — Evaluate doesn't
 score solver quality, and the diagnostic only surfaces via live play, not
-the Evaluate flow (see its note above). **v1.4.90 / versionCode 161 (pulled,
-not yet Evaluate-verified):** stops `correctSixOnWaste`'s silent Six-steal on
-a genuine OCR miss and lets Eight's own score win — the next candidate fix
-for `132126`/`132140`.
+the Evaluate flow (see its note above). **v1.4.90-1.4.92 / versionCode
+161-163 (from a concurrent session/Cursor, pulled, not yet Evaluate-verified):**
+v1.4.90 stopped `correctSixOnWaste`'s silent Six-steal on a genuine OCR miss;
+v1.4.91 reverted v1.4.90's ink/score Eight-from-Four guess after it cost net
+−30 (kept the Six-steal gate); v1.4.92 enlarged both waste OCR ROI paths to
+0.48×0.42 (was 0.45×0.32 / 0.44×0.30) so a full two-loop Smash "8" isn't
+clipped — see the shadow-band correction above. This is the current best
+candidate fix for `132126`/`132140`.
 
 **Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
 **rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
