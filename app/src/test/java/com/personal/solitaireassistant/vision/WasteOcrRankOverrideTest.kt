@@ -94,6 +94,60 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun ocrSixMatchingTightDoesNotBeatLegacyNine() {
+        // Evaluate 114135/121738/121822: legacy=Nine, tight=Six, OCR=6.
+        val nineHearts = Card(Rank.Nine, Suit.Hearts, faceUp = true)
+        val sixHearts = Card(Rank.Six, Suit.Hearts, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Six,
+            legacyCard = nineHearts,
+            tightCard = sixHearts,
+            baseCard = nineHearts,
+            exactRankScores = mapOf(Rank.Nine to 0.55f, Rank.Six to 0.40f)
+        )
+        assertNull(override)
+    }
+
+    @Test
+    fun correctSixOnWasteDoesNotStealNineWhenFourAlsoPresent() {
+        // Evaluate 190337: legacy=Four, tight=Nine, OCR=6.
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = Card(Rank.Four, Suit.Spades, faceUp = true, known = true),
+            tightCard = Card(Rank.Nine, Suit.Spades, faceUp = true, known = true),
+            baseCard = Card(Rank.Nine, Suit.Spades, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Nine to 0.55f, Rank.Six to 0.40f, Rank.Four to 0.42f),
+            ocrRank = Rank.Six
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun correctSixOnWasteDoesNotStealWhenLegacyIsEight() {
+        // Evaluate 202636: legacy=Eight, tight=Four → was fused Six.
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = Card(Rank.Eight, Suit.Diamonds, faceUp = true, known = true),
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Four to 0.50f, Rank.Six to 0.45f, Rank.Eight to 0.42f),
+            ocrRank = Rank.Three
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun correctEightOnWasteTrustsLegacyEightOverFour() {
+        val rank = WasteRankCorrections.correctEightOnWaste(
+            legacyCard = Card(Rank.Eight, Suit.Diamonds, faceUp = true, known = true),
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Four to 0.50f, Rank.Six to 0.45f, Rank.Eight to 0.42f),
+            inkGuess = null,
+            ocrRank = Rank.Three
+        )
+        assertEquals(Rank.Eight, rank)
+    }
+
+    @Test
     fun correctSixOnWasteDoesNotStealLeadingNine() {
         val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true, known = true)
         val rank = WasteRankCorrections.correctSixOnWaste(

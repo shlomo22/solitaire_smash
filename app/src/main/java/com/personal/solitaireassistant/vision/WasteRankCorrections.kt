@@ -165,6 +165,13 @@ internal object WasteRankCorrections {
             baseCard?.rank == Rank.Jack
         if (jackCandidate) return null
 
+        // Same magnet on a real Eight that tight-crops as Four
+        // (20260824_202636: legacy=Eight, tight=Four → fused Six).
+        val eightCandidate = legacyCard?.rank == Rank.Eight ||
+            tightCard?.rank == Rank.Eight ||
+            baseCard?.rank == Rank.Eight
+        if (eightCandidate) return null
+
         val sixScore = rankScore(exactRankScores, Rank.Six)
         val eightScore = rankScore(exactRankScores, Rank.Eight)
         // Smash 8 and 6 share stacked loops. v1.4.44's Six-over-Seven path
@@ -172,11 +179,11 @@ internal object WasteRankCorrections {
         if (ocrRank == Rank.Eight) return null
         if (eightScore >= 0.45f && eightScore >= sixScore) return null
         if (ocrRank == Rank.Six) {
-            // OCR "6" on a real Nine is common. Only steal a fused Nine when
-            // Six templates are actually in the race (the documented Six-as-Nine
-            // gap is ~0.03). A leading Nine with a lone OCR 6 stays Nine —
-            // otherwise 9D→10S vanishes and the arrow snaps to Draw Stock.
-            if (nineCandidate && !fourCandidate && !sevenCandidate) {
+            // OCR "6" on a real Nine is common (114135/121738/121822 9H vs 6H:
+            // legacy=Nine, tight=Six, OCR=6). Gate whenever Nine is on a crop,
+            // even if Four/Seven also appear — the old !fourCandidate shortcut
+            // let OCR Six win outright on Nine+Four fans (190337 9S vs 6S).
+            if (nineCandidate) {
                 val nineScore = rankScore(exactRankScores, Rank.Nine)
                 if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
                 return null
@@ -211,6 +218,10 @@ internal object WasteRankCorrections {
         inkGuess: RankInkHeuristics.Guess?,
         ocrRank: Rank?
     ): Rank? {
+        // Fuller legacy crop already read Eight while tight latched Four and
+        // Six-steal won (20260824_202636 8D vs 6D). Trust the legacy Eight.
+        if (legacyCard?.rank == Rank.Eight) return Rank.Eight
+
         val sixOrSeven = legacyCard?.rank == Rank.Six ||
             tightCard?.rank == Rank.Six ||
             baseCard?.rank == Rank.Six ||
@@ -299,7 +310,16 @@ internal object WasteRankCorrections {
         val tightRank = tightCard?.rank
         val baseRank = baseCard?.rank
         val candidateRanks = setOfNotNull(legacyRank, tightRank, baseRank)
-        if (ocrRank in candidateRanks) return ocrRank
+        if (ocrRank in candidateRanks) {
+            // OCR agreeing with a crop normally confirms. When crops disagree,
+            // agreeing with the tight/wrong side alone forced Six over a correct
+            // legacy Nine (114135: legacy=Nine, tight=Six, OCR=6 → 9H vs 6H).
+            // Only early-confirm when OCR matches the fuller legacy crop (or
+            // crops already agree / one side is missing).
+            val cropsAgreeOrSingle =
+                legacyRank == null || tightRank == null || legacyRank == tightRank
+            if (cropsAgreeOrSingle || ocrRank == legacyRank) return ocrRank
+        }
 
         val tightLegacyRanks = setOfNotNull(legacyRank, tightRank)
         if (ocrRank == Rank.Ten &&
@@ -342,6 +362,13 @@ internal object WasteRankCorrections {
             tightLegacyRanks.contains(Rank.Four) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
+            // Nine+Four fan with OCR "6" (190337): do not auto-Six; require the
+            // same competitive Six-vs-Nine bar used elsewhere.
+            if (tightLegacyRanks.contains(Rank.Nine) &&
+                !sixCanStealNine(exactRankScores)
+            ) {
+                return null
+            }
             return Rank.Six
         }
         if (ocrRank == Rank.Six &&
