@@ -235,7 +235,8 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
-    fun correctEightOnWasteRecoversFromFourViaInk() {
+    fun correctEightOnWasteDoesNotStealFourViaInkAlone() {
+        // v1.4.90 Evaluate: ink Eight on real Fours → Four→Eight (16) net −30.
         val rank = WasteRankCorrections.correctEightOnWaste(
             legacyCard = null,
             tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
@@ -244,20 +245,7 @@ class WasteOcrRankOverrideTest {
             inkGuess = RankInkHeuristics.Guess(Rank.Eight, 0.52f),
             ocrRank = null
         )
-        assertEquals(Rank.Eight, rank)
-    }
-
-    @Test
-    fun correctEightOnWasteRecoversFromFourViaScores() {
-        val rank = WasteRankCorrections.correctEightOnWaste(
-            legacyCard = null,
-            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
-            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
-            exactRankScores = mapOf(Rank.Four to 0.44f, Rank.Six to 0.40f, Rank.Eight to 0.43f),
-            inkGuess = null,
-            ocrRank = null
-        )
-        assertEquals(Rank.Eight, rank)
+        assertNull(rank)
     }
 
     @Test
