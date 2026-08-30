@@ -179,10 +179,16 @@ internal object WasteRankCorrections {
         if (ocrRank == Rank.Eight) return null
         if (eightScore >= 0.45f && eightScore >= sixScore) return null
         if (ocrRank == Rank.Six) {
-            // OCR "6" on a real Nine is common (114135/121738/121822 9H vs 6H:
-            // legacy=Nine, tight=Six, OCR=6). Gate whenever Nine is on a crop,
-            // even if Four/Seven also appear — the old !fourCandidate shortcut
-            // let OCR Six win outright on Nine+Four fans (190337 9S vs 6S).
+            // Fuller legacy crop already Nine: OCR "6" + tight Six is the
+            // Smash nine false-positive cluster (114135/121738/121822).
+            if (legacyCard?.rank == Rank.Nine) return null
+            // Tight Nine with legacy Four (190337): OCR 6 is the Six magnet,
+            // not a real Six. Keep Nine.
+            if (tightCard?.rank == Rank.Nine && legacyCard?.rank == Rank.Four) {
+                return null
+            }
+            // OCR "6" on a fused Nine elsewhere: only steal when Six templates
+            // are actually in the race (documented Six-as-Nine gap ~0.03).
             if (nineCandidate) {
                 val nineScore = rankScore(exactRankScores, Rank.Nine)
                 if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
@@ -362,19 +368,19 @@ internal object WasteRankCorrections {
             tightLegacyRanks.contains(Rank.Four) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
-            // Nine+Four fan with OCR "6" (190337): do not auto-Six; require the
-            // same competitive Six-vs-Nine bar used elsewhere.
-            if (tightLegacyRanks.contains(Rank.Nine) &&
-                !sixCanStealNine(exactRankScores)
-            ) {
-                return null
-            }
+            // Nine+Four fan with OCR "6" (190337): keep Nine — do not auto-Six.
+            if (tightLegacyRanks.contains(Rank.Nine)) return null
             return Rank.Six
         }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Nine) &&
             !tightLegacyRanks.contains(Rank.Six)
         ) {
+            // Four+Nine with OCR 6 (190337): the Four gate above already
+            // returned null when Nine is present. Same fan can hit this
+            // Nine-only gate — keep Nine unless Six templates strictly win
+            // and Four is not also on a crop.
+            if (tightLegacyRanks.contains(Rank.Four)) return null
             return if (sixCanStealNine(exactRankScores)) Rank.Six else null
         }
         if (ocrRank == Rank.Eight &&

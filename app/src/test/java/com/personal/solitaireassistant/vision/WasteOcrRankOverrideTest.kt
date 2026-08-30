@@ -109,6 +109,31 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun correctSixOnWasteDoesNotStealWhenLegacyIsNine() {
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = Card(Rank.Nine, Suit.Hearts, faceUp = true, known = true),
+            tightCard = Card(Rank.Six, Suit.Hearts, faceUp = true, known = true),
+            baseCard = Card(Rank.Six, Suit.Hearts, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Nine to 0.45f, Rank.Six to 0.44f),
+            ocrRank = Rank.Six
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun ocrSixDoesNotStealNineWhenLegacyIsFour() {
+        // Evaluate 190337: legacy=Four, tight=Nine, OCR=6.
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Six,
+            legacyCard = Card(Rank.Four, Suit.Spades, faceUp = true),
+            tightCard = Card(Rank.Nine, Suit.Spades, faceUp = true),
+            baseCard = Card(Rank.Nine, Suit.Spades, faceUp = true),
+            exactRankScores = mapOf(Rank.Nine to 0.45f, Rank.Six to 0.44f, Rank.Four to 0.42f)
+        )
+        assertNull(override)
+    }
+
+    @Test
     fun correctSixOnWasteDoesNotStealNineWhenFourAlsoPresent() {
         // Evaluate 190337: legacy=Four, tight=Nine, OCR=6.
         val rank = WasteRankCorrections.correctSixOnWaste(

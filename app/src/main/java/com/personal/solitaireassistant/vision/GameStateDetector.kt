@@ -930,6 +930,16 @@ class GameStateDetector(
         val correctedRank = when {
             wasteEightOverride != null -> wasteEightOverride
             wasteOcrOverride != null -> wasteOcrOverride
+            // Prefer fuller-crop Nine over tight/OCR Six magnet before
+            // correctSixOnWaste / base fusion can re-pick Six (v1.4.87 left
+            // 114135×3 as fused-Six after OCR override went null).
+            legacyCard?.rank == Rank.Nine &&
+                (tightCard?.rank == Rank.Six ||
+                    wasteOcrAttempt?.guess?.rank == Rank.Six) -> Rank.Nine
+            // 190337: tight Nine, legacy Four, OCR 6 → keep Nine.
+            tightCard?.rank == Rank.Nine &&
+                legacyCard?.rank == Rank.Four &&
+                wasteOcrAttempt?.guess?.rank == Rank.Six -> Rank.Nine
             wasteSixOverride != null -> wasteSixOverride
             wasteQueenOverride != null -> wasteQueenOverride
             wasteKingOverride != null -> wasteKingOverride
