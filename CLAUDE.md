@@ -401,6 +401,36 @@ responsiveness gets worse instead of better, this whole round is the first
 thing to revert - user explicitly authorized that risk given how directly
 this blocks winning games on time.
 
+**Round 2 (v1.4.94, same session): the real dominant cost, found from
+a real pulled `analysis.log`.** User feedback after round 1: "feels the same
+as before." The log proved why - `AnalysisPipeline.boardFingerprint`'s
+single rolling hash (mentioned above, already widened 5→4 bits/channel in an
+earlier round) was *still* not tolerant enough: the same recognized move
+("Draw from stock") got re-logged with a different confidence value on
+almost every frame across a ~20s idle span where nothing on the board
+changed. Since a hash has zero tolerance for even one sample flipping its
+quantization bucket, and the fingerprint self-samples ~3640 points (54×60 +
+40×10) every frame from a real MediaProjection capture (which has some
+amount of inherent per-frame pixel jitter even on static content - GPU
+compositor rounding, dithering), the "unchanged" cache path was essentially
+never engaging. Every single frame paid a full `detect()` call (observed
+130ms-1800ms in the log, worse during a new-deal animation) regardless of
+whether the board had actually moved - this is almost certainly the
+dominant contributor to "still slow," bigger than either round-1 fix.
+Changed `boardFingerprint`/`fingerprintRegion` from "hash must match
+exactly" to "count of differing quantized samples must stay within
+`FINGERPRINT_NOISE_TOLERANCE` (8, out of ~3640)" - stores the last frame's
+sample array instead of a single hash and compares element-wise. Same
+sample count/positions/quantization as before, so no new accuracy exposure;
+purely changes the equality test from exact to near-exact. Also confirmed
+from the same log that the round-1 OCR circuit breaker did fire correctly
+(4 times, capped a would-be 10-attempt search) - it just wasn't enough on
+its own given this larger issue sitting underneath it. Not yet
+device-verified - needs another real play session + pulled log to check
+whether `detect()` calls are now mostly skipped on a static board (look for
+short/absent `timing: ... detect=` gaps between identical logged moves) and
+whether the arrow now updates closer to the true capture interval.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
