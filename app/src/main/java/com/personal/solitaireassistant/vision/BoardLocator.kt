@@ -69,11 +69,17 @@ class BoardLocator(
     private val profile: BoardGeometryProfile = BoardGeometryProfile()
 ) {
     companion object {
-        /** Screen-space rank-corner patch for OCR on fanned waste crops. */
+        /**
+         * Screen-space rank-corner patch for OCR on fanned waste crops. Insets
+         * the top edge past the card's own drop-shadow/border-transition band
+         * (see RankCornerOcr.cornerRankRoi's WASTE topInsetFraction) - that band
+         * sits right at row 0 of any card-top-anchored region and otherwise
+         * paints a spurious ink bar above the rank glyph in the OCR preprocess.
+         */
         fun wasteRankCornerRegion(cardRegion: BoardRegion): BoardRegion =
             BoardRegion(
                 left = cardRegion.left,
-                top = cardRegion.top,
+                top = cardRegion.top + cardRegion.height * 0.04f,
                 right = cardRegion.left + cardRegion.width * 0.44f,
                 bottom = cardRegion.top + cardRegion.height * 0.30f
             )

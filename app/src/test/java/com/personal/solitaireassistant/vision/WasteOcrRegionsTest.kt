@@ -35,7 +35,9 @@ class WasteOcrRegionsTest {
         val card = BoardRegion(707f, 503f, 846f, 714f)
         val corner = BoardLocator.wasteRankCornerRegion(card)
         assertEquals(707f, corner.left, 0.01f)
-        assertEquals(503f, corner.top, 0.01f)
+        // Top is inset 4% of card height past the card's own drop-shadow/
+        // border-transition band, not flush with the card's top edge.
+        assertEquals(511.44f, corner.top, 0.01f)
         assertTrue(corner.width >= 50f)
         assertTrue(corner.height >= 50f)
     }

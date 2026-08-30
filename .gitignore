@@ -18,3 +18,6 @@
 /pulled/
 /tmp_golden_review/
 /scripts/local-machine.ps1
+
+# GitHub Actions self-hosted runner (install on the machine, never commit)
+/actions-runner/

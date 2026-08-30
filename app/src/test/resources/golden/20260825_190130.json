@@ -878,7 +878,7 @@
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Six",
+        "rank": "Jack",
         "suit": "Clubs"
       }
     }

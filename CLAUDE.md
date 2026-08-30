@@ -136,9 +136,11 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   `diag=match-<rank>-<suit>-ambiguous@...` (set once, at the *first* pass) before
   assuming a fix aimed at the second-pass recheck will change it. The likely next lever
   is either the first pass's own `bestBitmapSuitLoose`/coinflip fallback, or teaching
-  `DeckConstraintPass` to break a genuine sub-0.02-margin tie using deck-uniqueness
-  (e.g. "is there already a King of Spades elsewhere on the board?") — not yet
-  attempted.
+  `DeckConstraintPass` occupancy, or a header-strip re-vote. **Parked as of v1.4.80.**
+  Two weeks of those levers net-regressed (see Current state). Occupancy cannot
+  break the 10C/KC/QC boards — both black ids are free. Leaving suit unassigned
+  on a near-tie would only suppress foundation arrows (tableau only needs color)
+  and would drop Evaluate. Do not spend another round on C↔S scoring.
 - **`TableauCascadeSupport.isReliableRead`** gates whether a mid-cascade slot uses its
   own direct rank/suit read or falls back to `geometricCascadeCard` (bottom-card rank +
   arithmetic distance). It used to check only a flat `MIN_READ_CONFIDENCE = 0.55f` —
@@ -216,50 +218,94 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   the likely better lever is a `WasteRankCorrections`-style override rule using the
   measured ~0.03 score gap (matching how existing rules already handle Four/Jack and
   Six/Four confusions there), not another template.
+- **Waste fan: OCR on a left crop reads the covered 2nd card as waste top.** Draw-3
+  waste fans leftward; only the rightmost face is playable. `wasteTop()` is a single
+  slot. `attemptWasteRankOcr` tries tight, then legacy, then `wasteOcrCardRegions`
+  (ink-anchored is left of the front card). After both template crops miss or agree
+  on the front rank, a later region can OCR the peeking neighbor at ≥0.62 and
+  `ocrRankOverride`'s `isConfusionPair` fallback adopts it. Pixel-confirmed:
+  `20260824_080444` fan is 8♠ / **10♥** / **Q♥** (playable), engine `QH vs 10H`
+  (`waste-ocr-rank:Ten` from `whole@707` / `whole@700`); `20260825_131401` fan is
+  Q♥ / **10♦** / **Q♣**, engine `QC vs 10C`; `20260823_230337` fan is K♣ / **3♥** /
+  **J♠**, engine `JS vs 3C`. This is also the live-play false Waste→Tableau arrow
+  (legal for the covered card, illegal for the exposed one). `locateWasteTopRegion`
+  can independently latch the 2nd card: it counts only white/red ink, so a black
+  front card can fail the 6% gate. **v1.4.81–1.4.84 gated this:** skip
+  `isConfusionPair` when both crops already ranked; keep Jack on Jack+Four when
+  neighbor OCR is 5/3; OCR Jack may override a tight Four. Queen/Ten and Jack+Three
+  fan cases cleared. Remaining rank misses are mostly **no-OCR** Four→Six
+  (`230705` JD, `132126`/`132140` 8D).
+- **Root-caused the no-OCR Four/Six/Four cases above: waste OCR crops start flush
+  at the card's own top edge, landing on a drop-shadow band that
+  `RankCornerOcr.preprocess()` paints as ink.** Pixel-checked all four named
+  no-OCR samples (`230705` JD, `132126`/`132140` 8D, `080754` 5D — all four
+  correct-per-truth, engine misread as Four/Six/Four): rows 0-5 of every waste
+  OCR region (both the WASTE-profile whole-region ROI and
+  `BoardLocator.wasteRankCornerRegion`'s DIRECT-profile corner ROI — both
+  card-top-anchored) are a desaturated dark-purple drop-shadow/border-transition
+  band (~RGB(50,36,98)) that passes `SmashColorAnalyzer.isBlackInk`, so
+  `preprocess()` paints a spurious solid black bar across the top of the
+  binarized crop handed to ML Kit, sitting directly above the rank glyph (which
+  never starts before ~6.7% of card height in these four samples — verified via
+  a Python replica of the exact ink-mask/preprocess pipeline against the real
+  golden PNGs). **v1.4.85** insets both ROI paths' top edge by 4% of card
+  height to skip the band. Python re-simulation confirms the digit comes out
+  fully isolated with no artifact once inset. Not yet device-verified — this is
+  a preprocessing-noise fix, not a template/score change, so it can't be
+  validated further offline; next Evaluate run is the real test.
+- **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
+  session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
+  is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
+  Relabel after a crop; do not Six-steal those back.
 
-## Current state (as of v1.4.20 / versionCode 91, pushed, not yet device-verified)
+## Current state (as of v1.4.84 / versionCode 155, Evaluate-verified)
 
-Golden set is now 77 samples / 2882 labeled slots (grew from 61 via a 26-sample "new
-golden" push, minus 5 samples deleted for batch truth corruption — see "Golden-set
-batch corruption" above). Last confirmed-on-device accuracy: **95% (1942/2041)** on the
-pre-push 61-sample set — this has been the stable baseline across three back-to-back
-Evaluate runs this session (v1.4.15/86 baseline, v1.4.19/90 KC/KS suit-tiebreak change,
-v1.4.20's predecessor): confusion counts were byte-identical across those runs,
-confirming the KC/KS change was harmless but also didn't move the number (see
-`resolveBlackSuit`/`ambiguousBlackSuit` note above). v1.4.20/91 (the `Seven→Jack` /
-`TableauCascadeSupport.isReliableRead` fix above) is pushed but not yet Evaluate-verified
-against the new 77-sample set — expected to be the first change this session to
-actually move accuracy.
+**v1.4.84 Evaluate: 5189/5317 (+3 vs 5186).** Rank 52, suit 85, C→S 23 / S→C 13,
+occupancy 24, missing 4. `032046` (Spades label), `143855` waste (Jack label +
+OCR Jack), `230055` (OCR Jack over Four) cleared. `205220` rank is Jack, still
+`JC vs JS` (truth still Clubs; pixels Spades).
 
-**One regression this session, reverted the same round**: v1.4.17/88 tried re-anchoring
-`firstFaceTop` (the position used for every exposed cascade card except the fully-visible
-bottom one) to the reliably-measured bottom card instead of accumulating forward via
-`downStep`/`faceDownOverlap`. It fixed the one golden-verified King-of-Hearts miss it
-targeted, but dropped accuracy to 93% (1897/2041) — new `Six/Eight/Five→Ace` confusions
-(51 combined) appeared, an order of magnitude worse than what it fixed. Reverted in
-v1.4.18/89. Root cause of the regression itself was never fully diagnosed (see "Don't"
-below) — treat any future attempt in this area as starting from scratch, not as a retry
-of a mostly-working idea.
+| version | accuracy | rank | suit | C→S / S→C |
+|---|---|---|---|---|
+| v1.4.80 / 151 | 5179/5317 | 62 | 87 | 24 / 14 |
+| v1.4.81 / 152 | 5182/5317 (+3) | 59 | 86 | 23 / 14 |
+| v1.4.82 / 153 | 5185/5317 (+3) | 56 | 86 | 24 / 13 |
+| v1.4.83 / 154 | 5186/5317 (+1) | 54 | 86 | 24 / 13 |
+| **v1.4.84 / 155** | **5189/5317 (+3)** | **52** | **85** | **23 / 13** |
 
-Remaining confusion buckets worth investigating next, in roughly descending value:
-- `Eight → Seven` (2) — this is the known `GoldenTruthEvaluator` neighbor-match
-  artifact above; not expected to be fixable by touching recognition.
-- `Seven → Jack` and likely other silent mid-cascade misreads — root-caused and fixed
-  this session, see `TableauCascadeSupport.isReliableRead` note above. Awaiting
-  device verification.
-- Black-suit ambiguous ties resolved wrong by the first pass's own coinflip fallback
-  (confirmed case: `20260819_211539` tableau:2, King of Clubs → King of Spades,
-  `full=C0.90/S0.91`) — see the detailed note above. Next lever is probably
-  `DeckConstraintPass` deck-uniqueness, not another single-card scoring tweak.
-- Long-cascade compounding errors beyond the Seven→Jack mechanism (e.g. sample
-  `20260819_211539` tableau:3, a 12-card cascade with several consecutive wrong reads)
-  — worth re-checking once v1.4.20 is verified, since some of these may already be
-  fixed by the same `rankCountConsistent` gate.
-- Waste-pile Six misread as Nine/Four/Eight (85% failure rate, 11/13 golden samples)
-  — root-caused this session (weak `rank_six*.png` template scores, see the detailed
-  note above), but no safe fix found yet: three candidate templates were built and
-  rejected for causing broad false positives against other ranks. Next attempt should
-  try a `WasteRankCorrections` override rule instead of another template.
+**C↔S is parked.** Cascade headers score C0.90/S0.91 on the same pixels. Every
+post-pass that “breaks” the tie has a favorite side and overfires. Occupancy
+cannot break 10C/KC/QC (both ids free). Leave-suit-unassigned would not fix live
+tableau arrows (color is enough) and would drop Evaluate.
+
+**Active work: waste top identity** (playable card → wrong Waste→Tableau /
+Waste→Foundation arrow). Do not start another C↔S scoring/header/occupancy round.
+
+**v1.4.85 / versionCode 156 (pushed, not yet Evaluate-verified):** waste OCR
+ROI top-inset fix for the drop-shadow-band false positive above. Run Evaluate
+and pull artifacts to check whether `230705`/`132126`/`132140`/`080754` and
+the broader no-OCR Four→Six/Five→Four buckets move.
+
+**Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
+**rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
+wrong. Label that exposed card, not the peeking neighbor. Skip near-duplicate
+`6C vs 6S` / `JS vs JC` (parked C0.83). Pixel-check new files before they stay;
+wrong Six-on-Jack labels already cost rounds.
+
+**Older geometry regression (still don't retry):** v1.4.17/88 re-anchored
+`firstFaceTop` to the bottom card; 95%→93% (1897/2041). Reverted v1.4.18/89.
+
+Remaining buckets, descending live-play value:
+- Waste no-OCR Four→Six magnet — `230705` JD vs 6D, `132126`/`132140` 8D vs 6D.
+  Tight Four, `correctSixOnWaste` at 0.38, every OCR region miss. Needs more
+  playable 5/6/8/J samples before another template.
+- Waste OCR Five over Four not adopted — `080754` 5D vs 4D (`ocr='5'` on a
+  left-shifted crop). Same class as Jack-over-Four, not yet gated the same way.
+- Waste black-suit crop bias — **C0.83/S0.77** `wideMarginDirect→Clubs`
+  (`6S vs 6C`, `210739 JS vs JC`, `3S vs 3C`). Not a 0.01 tie. Parked.
+- FaceDown→FaceUp occupancy (18) and long-cascade compounding — buried slots,
+  high-risk, not the arrow the user plays.
+- H↔D (9+8) and parked C↔S (23+13).
 
 ## Don't
 
@@ -280,6 +326,9 @@ Remaining confusion buckets worth investigating next, in roughly descending valu
   complete no-op for the case you're chasing.
 - Don't treat a golden-set mismatch as a confirmed app bug without cropping and
   visually checking the real pixels first.
+- Don't spend another round on C↔S template scores, header re-votes, Clubs/Spades
+  bias, or occupancy-on-near-tie. v1.4.69, v1.4.78, and v1.4.79 all net-lost.
+  v1.4.80 is the floor; leave it.
 - Don't suggest stopping/wrapping up preemptively — this project runs as a long,
   iterative fix-verify loop and the user has consistently wanted to keep going past
   the point earlier sessions guessed was a reasonable stopping point.

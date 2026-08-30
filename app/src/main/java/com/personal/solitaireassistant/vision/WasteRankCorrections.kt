@@ -80,7 +80,14 @@ internal object WasteRankCorrections {
         // Five candidate, rather than requiring the absolute 0.50 floor above
         // (confirmed case: fiveScore 0.47 vs jackScore 0.40, five reads of
         // OCR "5" with zero competing reads).
-        if (ocrRank == Rank.Five && fiveScore >= jackScore - 0.05f) return Rank.Five
+        // Both crops already ranked: a later OCR 5 is the covered fan card
+        // (v1.4.82: 032046 Jack+Four then whole@707 ocr='5' → JC vs 5S).
+        if (ocrRank == Rank.Five &&
+            fiveScore >= jackScore - 0.05f &&
+            (legacyCard?.rank == null || tightCard?.rank == null)
+        ) {
+            return Rank.Five
+        }
         if (inkGuess?.rank == Rank.Five &&
             inkGuess.confidence >= 0.48f &&
             fiveScore >= jackScore - 0.10f
@@ -149,6 +156,14 @@ internal object WasteRankCorrections {
             tightCard?.rank == Rank.Seven ||
             baseCard?.rank == Rank.Seven
         if (!fourCandidate && !nineCandidate && !sevenCandidate) return null
+
+        // A Jack crop often templates as Four; Six then steals at the 0.38
+        // floor (v1.4.81: JS vs 3C became JS vs 6C). Real Sixes that OCR as
+        // "6" still take the ocrRank==Six path below.
+        val jackCandidate = legacyCard?.rank == Rank.Jack ||
+            tightCard?.rank == Rank.Jack ||
+            baseCard?.rank == Rank.Jack
+        if (jackCandidate) return null
 
         val sixScore = rankScore(exactRankScores, Rank.Six)
         val eightScore = rankScore(exactRankScores, Rank.Eight)
@@ -336,10 +351,23 @@ internal object WasteRankCorrections {
         if (ocrRank == Rank.Eight &&
             (tightLegacyRanks.contains(Rank.Six) ||
                 tightLegacyRanks.contains(Rank.Seven) ||
+                tightLegacyRanks.contains(Rank.Four) ||
                 baseRank == Rank.Six ||
-                baseRank == Rank.Seven)
+                baseRank == Rank.Seven ||
+                baseRank == Rank.Four)
         ) {
             return Rank.Eight
+        }
+        // Jack templates as Four on a tight waste crop. OCR "J" on that same
+        // card is the playable glyph (205220, 230055, 143855). The old veto
+        // was 143855, whose pixels are a Jack labeled Six.
+        if (ocrRank == Rank.Jack &&
+            (tightRank == Rank.Four ||
+                legacyRank == Rank.Four ||
+                baseRank == Rank.Four) &&
+            Rank.Jack !in tightLegacyRanks
+        ) {
+            return Rank.Jack
         }
         if (ocrRank == Rank.Six &&
             tightLegacyRanks.contains(Rank.Seven) &&
@@ -351,8 +379,25 @@ internal object WasteRankCorrections {
             return Rank.Six
         }
 
+        // Jack templates as Four on the tight crop; a later left-fan OCR
+        // then reads the covered 5 or 3 (032046 3/5/J, 230337 K/3/J).
+        // Keep the crop Jack. Do not wait for isConfusionPair to return
+        // null and then let correctFiveJack steal.
+        if (legacyRank == Rank.Jack &&
+            tightRank == Rank.Four &&
+            (ocrRank == Rank.Five || ocrRank == Rank.Three)
+        ) {
+            return Rank.Jack
+        }
+
         val fusionRank = baseRank ?: legacyRank ?: tightRank
         if (fusionRank != null && isConfusionPair(ocrRank, fusionRank)) {
+            // Both waste crops already produced a rank. A later OCR hit is
+            // often the covered fan card (ink-anchored region sits left of
+            // the playable face): Q♥ vs 10♥, Q♣ vs 10♣, J♠ vs 3♣.
+            // Keep the pair override only when one crop is missing, so OCR
+            // can still break a single-sided Jack/Three or Jack/Five read.
+            if (legacyRank != null && tightRank != null) return null
             if (ocrRank == Rank.Six && fusionRank == Rank.Nine &&
                 !sixCanStealNine(exactRankScores)
             ) {

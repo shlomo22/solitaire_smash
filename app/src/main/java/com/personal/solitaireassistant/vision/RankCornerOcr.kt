@@ -125,9 +125,20 @@ class RankCornerOcr {
                 CornerRoiProfile.TRIMMED -> 0.50f to 1.0f
                 CornerRoiProfile.DIRECT -> return null
             }
+            // Waste crops start flush at the card's own top edge, which puts a
+            // ~2-3%-of-height drop-shadow/border-transition band (a desaturated
+            // dark purple, e.g. RGB(50,36,98)) right inside row 0 - it passes
+            // SmashColorAnalyzer.isBlackInk and preprocess() paints it as a solid
+            // black bar across the top of the binarized crop, sitting directly
+            // above the rank glyph (which never starts before ~6.7% of card
+            // height in pixel-checked golden samples: 20260822_230705,
+            // 20260825_132126/132140, 20260824_080754). Skip a small top margin
+            // for WASTE so that spurious bar isn't fed to ML Kit.
+            val topInsetFraction = if (profile == CornerRoiProfile.WASTE) 0.04f else 0f
+            val roiTop = (h * topInsetFraction).toInt().coerceIn(0, h - 1)
             val roiW = (w * widthFraction).toInt().coerceIn(8, w)
-            val roiH = (h * heightFraction).toInt().coerceIn(8, h)
-            return Bitmap.createBitmap(cardCrop, 0, 0, roiW, roiH)
+            val roiH = (h * heightFraction).toInt().coerceIn(8, h - roiTop)
+            return Bitmap.createBitmap(cardCrop, 0, roiTop, roiW, roiH)
         }
 
         fun upscale(source: Bitmap, scale: Int = 3): Bitmap {
