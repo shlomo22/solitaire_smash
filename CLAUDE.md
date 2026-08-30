@@ -311,6 +311,96 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   signal needs an actual play session with `diag: tableau` lines pulled
   afterward, never an Evaluate-only pull.
 
+## Live-play pipeline performance (arrow latency / flicker)
+
+User complaint (v1.4.93 round): the arrow is slow to appear and sometimes
+flickers to a wrong move before settling on the correct one, badly enough to
+cost games on time. Concurrency/perf changes are the highest-uncertainty risk
+category (see "Validation discipline" above) - no Python replica applies,
+Evaluate doesn't measure it either (Evaluate is single-shot per golden image,
+no frame-to-frame timing or stickiness in play), so this can only be reasoned
+about from the code and confirmed by watching real play afterward.
+
+**Architecture facts gathered before touching anything:**
+- `ScreenCaptureController.intervalMs` defaults to 750ms internally, but
+  `AssistantSettings.captureIntervalMs` (what the app actually starts capture
+  with) defaults to 200ms - and `AssistantPreferences`' migration logic
+  actively resets a persisted 750 or 300 back to 200, so the interval has
+  already been tuned down twice in earlier rounds. Not touched again here for
+  lack of new evidence it's still the bottleneck.
+- `AnalysisPipeline.onFrame` hands frames to a single-threaded
+  `analysisExecutor` with keep-only-latest semantics (`pendingFrame.getAndSet`
+  drops the previous unprocessed frame) - correct for freshness, but it means
+  total throughput is gated entirely by one frame's `detect()`+select time;
+  a slow frame doesn't just delay itself, it delays the *next* frame picked
+  up too.
+- `GameStateDetector.detect()` itself is already well concurrent (see
+  "Recognition pipeline architecture" above): foundations + all 7 tableau
+  columns run on a dedicated pool, submitted *before* the sequential waste
+  template/fusion work so that work overlaps the pool instead of blocking it.
+  Waste OCR runs on its own single-thread executor, overlapped the same way,
+  and is only `.get()`'d at the very end. This is already deliberate, recent
+  work, not a naive sequential pipeline.
+- Within that overlap, `CardRecognizer.attemptWasteRankOcr` was the one
+  documented-but-unaddressed cost outlier: its own comment already says
+  trying every region x whole/corner combination "is what made waste
+  recognition the dominant per-frame cost" - up to ~10-12 sequential blocking
+  ML Kit calls (500ms timeout each) when nothing hits the confidence early-
+  exit. The 132126/132140 Evaluate log (see the shadow-band section above)
+  is real evidence this isn't hypothetical: all 10 attempts came back
+  `ocr=miss:empty` on that sample, meaning the full worst-case cost was paid.
+
+**Changes made this round:**
+- **`CardRecognizer.WASTE_OCR_EMPTY_CIRCUIT_BREAKER = 4`** (new): aborts
+  `attemptWasteRankOcr`'s region search after 4 consecutive genuine
+  `ocr=miss:empty` results (ML Kit finding literally no text, not just an
+  ambiguous read) instead of exhausting all ~10-12 attempts. Only shortens
+  the search on frames that were already headed for no OCR result - cannot
+  change which answer wins on a frame where OCR does find something, so it
+  should be latency-only and accuracy-neutral. Logs
+  `ocr-circuit-breaker:N-empty` in the trace when it fires.
+- **`SuggestionStickiness.apply`'s new `visualChangeStreak` parameter**
+  (default 1, so all pre-existing call sites and tests are unaffected):
+  distinguishes "this is the first frame since the board was static" (streak
+  1 - the fast, intended "a move just landed, show it now" case) from "the
+  board is still visually changing frame over frame" (streak 2+ - most
+  likely mid-animation, e.g. a card-slide). The immediate-adopt bypass that
+  used to fire on *every* visually-changed frame regardless of streak now
+  only fires on streak 1; streak 2+ falls through to the same
+  two-agreeing-reads confirmation the static-board path already used. This
+  is the direct fix for "flickers to a wrong move before settling": that
+  pattern traces to `boardVisuallyChanged` staying true for the whole span of
+  an animation (each frame pixel-differs from the last one), and the old
+  code treating every one of those frames as an independent "trust this
+  instantly" signal with zero cross-frame confirmation as long as pixels
+  kept moving. A read that matches whatever is *already displayed* is still
+  always immediate regardless of streak - only a *differing* candidate during
+  an ongoing visual change is held back. `AnalysisPipeline` tracks the streak
+  itself (`visualChangeStreak` field, incremented when `boardVisuallyChanged`
+  is true, reset to 0 otherwise and on session boundaries) and passes it
+  through. Covered by four new `SuggestionStickinessTest` cases exercising
+  streak 1 vs 2+, agreement-is-still-immediate, and two-agreeing-reads
+  adoption.
+
+**Not changed, and why:** the `fastUpdateAfterMove` and inner "stabilizing"
+confidence floors (0.57 and 0.48 by default) were considered but left alone -
+lowering/raising them is exactly the kind of magic-number tuning that needs
+real device confidence-distribution data to justify, which isn't available
+here, and the two floors overlap (raising one alone likely wouldn't reduce
+anything, since frames that stop qualifying for the higher one would just
+fall through to the still-permissive lower one). The streak fix operates at
+the mechanism level instead, so it doesn't need that data.
+
+**Not yet device-verified.** Both changes are reasoned from the code, not
+measured. Watch real play for: (1) whether the arrow still flickers between
+different moves during/right after a card-slide, (2) whether frames with a
+hard-to-read waste card visibly feel less laggy, (3) whether legitimate rapid
+back-to-back moves still feel responsive (the streak reset on any static
+frame should preserve this, but hasn't been observed on-device). If arrow
+responsiveness gets worse instead of better, this whole round is the first
+thing to revert - user explicitly authorized that risk given how directly
+this blocks winning games on time.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move

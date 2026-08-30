@@ -53,6 +53,11 @@ class AnalysisPipeline(
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0
+    // Consecutive frames in a row with a changed pixel fingerprint (0 = last
+    // frame was static). Lets SuggestionStickiness tell "the move just
+    // landed" (streak 1) apart from "still mid-animation" (streak 2+) - see
+    // its own doc comment for why that distinction matters for flicker.
+    private var visualChangeStreak = 0
     private var lastSignature: String? = null
     private var lastSuggestion: SuggestedMove? = null
     private var lastSuggestionSignature: String? = null
@@ -191,6 +196,7 @@ class AnalysisPipeline(
     fun clear() {
         lastSignature = null
         stableHits = 0
+        visualChangeStreak = 0
         lastSuggestion = null
         lastSuggestionSignature = null
         lastLoggedOutcome = null
@@ -497,6 +503,7 @@ class AnalysisPipeline(
         val rawState = detectionRaw.state
         if (!detectionRaw.livePlayScreen) {
             stableHits = 0
+            visualChangeStreak = 0
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
@@ -519,6 +526,7 @@ class AnalysisPipeline(
         }
         if (rawState == null) {
             stableHits = 0
+            visualChangeStreak = 0
             lastSignature = null
             lastSuggestion = null
             lastSuggestionSignature = null
@@ -572,6 +580,7 @@ class AnalysisPipeline(
             lastSignature = signature
             stableHits = 1
         }
+        visualChangeStreak = if (boardVisuallyChanged) visualChangeStreak + 1 else 0
 
         val knownFaceUp = countKnownFaceUp(state)
         val minConf = settingsRef.get().minMatchConfidence
@@ -902,7 +911,8 @@ class AnalysisPipeline(
             state = SuggestionStickiness.State(
                 pendingCandidate = pendingSuggestionCandidate,
                 pendingStreak = pendingSuggestionStreak
-            )
+            ),
+            visualChangeStreak = visualChangeStreak
         )
         pendingSuggestionCandidate = result.state.pendingCandidate
         pendingSuggestionStreak = result.state.pendingStreak

@@ -28,7 +28,23 @@ internal object SuggestionStickiness {
         best: ScoredMove,
         ranked: List<ScoredMove>,
         boardVisuallyChanged: Boolean,
-        state: State
+        state: State,
+        /**
+         * How many consecutive frames in a row have come back pixel-changed
+         * (1 = this is the first changed frame since a static frame; 2+ = the
+         * board is still visually mid-transition, e.g. a multi-frame card-
+         * slide animation). Only the *first* changed frame gets the
+         * immediate-adopt fast path below - a real device complaint was the
+         * arrow flickering to a wrong move and then correcting a moment
+         * later, which traces to this function previously treating every
+         * still-changing frame as an equally valid "the move just landed"
+         * signal and re-adopting whatever that frame's possibly-noisy read
+         * produced, with no cross-frame confirmation at all for as long as
+         * pixels kept moving. Defaults to 1 (first-changed-frame) so callers
+         * that don't track a streak keep the original always-immediate
+         * behavior.
+         */
+        visualChangeStreak: Int = 1
     ): Result {
         if (previous == null || best.move == previous.move) {
             return Result(best, idle)
@@ -39,6 +55,7 @@ internal object SuggestionStickiness {
         // play vanish and this would otherwise snap the arrow to the stock
         // (seen on device: 9D→10S flashes, then Draw Stock sticks).
         if (boardVisuallyChanged &&
+            visualChangeStreak <= 1 &&
             (!best.move.isStockFallbackHint() || previous.move.isStockFallbackHint())
         ) {
             return Result(best, idle)

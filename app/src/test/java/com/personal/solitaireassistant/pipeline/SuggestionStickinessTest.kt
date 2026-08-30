@@ -117,4 +117,77 @@ class SuggestionStickinessTest {
         assertNull(result.display)
         assertEquals(1, result.state.pendingStreak)
     }
+
+    @Test
+    fun firstChangedFrameStillAdoptsNewMoveImmediately() {
+        // visualChangeStreak defaults to 1 (first changed frame) - mirrors
+        // visualChangeAdoptsNewTableauPlayImmediately but pins the default
+        // explicitly so a future signature change can't silently alter it.
+        val result = SuggestionStickiness.apply(
+            previous = wasteToCol0,
+            best = tableauMove,
+            ranked = listOf(tableauMove, drawStock),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            visualChangeStreak = 1
+        )
+        assertEquals(tableauMove.move, result.display?.move)
+    }
+
+    @Test
+    fun stillAnimatingFrameDoesNotFlickerToNewMoveImmediately() {
+        // A real device complaint: the arrow flickers to a wrong move and
+        // then corrects a moment later. streak 2+ means the board is still
+        // visually changing frame over frame (e.g. mid card-slide
+        // animation) - a differing read on one of those frames should not
+        // instantly replace what's already shown.
+        val result = SuggestionStickiness.apply(
+            previous = wasteToCol0,
+            best = tableauMove,
+            ranked = listOf(tableauMove, drawStock),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            visualChangeStreak = 2
+        )
+        assertNull(result.display)
+        assertEquals(tableauMove.move, result.state.pendingCandidate)
+        assertEquals(1, result.state.pendingStreak)
+    }
+
+    @Test
+    fun stillAnimatingFrameAdoptsAfterTwoAgreeingReads() {
+        val first = SuggestionStickiness.apply(
+            previous = wasteToCol0,
+            best = tableauMove,
+            ranked = listOf(tableauMove, drawStock),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            visualChangeStreak = 2
+        )
+        val second = SuggestionStickiness.apply(
+            previous = wasteToCol0,
+            best = tableauMove,
+            ranked = listOf(tableauMove, drawStock),
+            boardVisuallyChanged = true,
+            state = first.state,
+            visualChangeStreak = 3
+        )
+        assertEquals(tableauMove.move, second.display?.move)
+    }
+
+    @Test
+    fun stillAnimatingFrameThatAgreesWithCurrentDisplayIsImmediate() {
+        // Regardless of streak, a read that matches what's already on
+        // screen needs no extra confirmation - only a *differing* read
+        // during an animation is held back.
+        val result = SuggestionStickiness.apply(
+            previous = wasteToCol0,
+            best = wasteToCol0,
+            ranked = listOf(wasteToCol0, drawStock),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            visualChangeStreak = 3
+        )
+        assertEquals(wasteToCol0.move, result.display?.move)
+    }
 }

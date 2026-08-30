@@ -257,6 +257,7 @@ class CardRecognizer(
         var bestHit: RankCornerOcr.AttemptResult? = null
         val traces = mutableListOf<String>()
         val seen = mutableSetOf<String>()
+        var consecutiveEmptyMisses = 0
         // Each OCR attempt is a blocking ML Kit call; trying every region x
         // whole/corner combination unconditionally (up to ~10 sequential
         // calls) is what made waste recognition the dominant per-frame cost
@@ -264,38 +265,61 @@ class CardRecognizer(
         // parse comes back — that's the common case (a real rank corner:
         // "K", "10", "A", a single digit) — and only keep searching the
         // remaining regions when what's found so far is still weak/ambiguous.
+        // Circuit breaker: a real device log (Evaluate 132126/132140) showed
+        // all 10 attempts coming back "ocr=miss:empty" - ML Kit finding
+        // literally no text at all, not just an ambiguous one - on a card
+        // where every remaining candidate region is a different static-
+        // percentage crop of roughly the same card area. Once several
+        // regions in a row come back genuinely empty (not merely low-
+        // confidence or unparsed), further regions are very unlikely to
+        // suddenly find text, so stop paying for them. This only shortens
+        // the search on frames that were already going to end with no OCR
+        // result; it cannot change which answer wins when OCR does find
+        // something.
         run regions@{
             for (region in cardRegions) {
                 val key = ocrRegionKey(region)
                 if (!seen.add(key)) continue
+                val whole = attemptCornerRankOcr(
+                    bitmap,
+                    region,
+                    RankCornerOcr.CornerRoiProfile.WASTE
+                )
                 considerWasteOcrAttempt(
-                    attempt = attemptCornerRankOcr(
-                        bitmap,
-                        region,
-                        RankCornerOcr.CornerRoiProfile.WASTE
-                    ),
+                    attempt = whole,
                     regionTag = "whole@$key",
                     traces = traces,
                     bestHit = { bestHit },
                     updateBest = { bestHit = it }
                 )
+                consecutiveEmptyMisses = consecutiveEmptyMisses.updatedFor(whole)
                 if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
+                    return@regions
+                }
+                if (consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER) {
+                    traces += "ocr-circuit-breaker:$consecutiveEmptyMisses-empty"
                     return@regions
                 }
                 val corner = BoardLocator.wasteRankCornerRegion(region)
                 if (corner.width >= 8f && corner.height >= 8f) {
+                    val cornerAttempt = attemptCornerRankOcr(
+                        bitmap,
+                        corner,
+                        RankCornerOcr.CornerRoiProfile.DIRECT
+                    )
                     considerWasteOcrAttempt(
-                        attempt = attemptCornerRankOcr(
-                            bitmap,
-                            corner,
-                            RankCornerOcr.CornerRoiProfile.DIRECT
-                        ),
+                        attempt = cornerAttempt,
                         regionTag = "corner@${ocrRegionKey(corner)}",
                         traces = traces,
                         bestHit = { bestHit },
                         updateBest = { bestHit = it }
                     )
+                    consecutiveEmptyMisses = consecutiveEmptyMisses.updatedFor(cornerAttempt)
                     if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
+                        return@regions
+                    }
+                    if (consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER) {
+                        traces += "ocr-circuit-breaker:$consecutiveEmptyMisses-empty"
                         return@regions
                     }
                 }
@@ -305,6 +329,9 @@ class CardRecognizer(
         return bestHit?.copy(trace = trace)
             ?: RankCornerOcr.AttemptResult(null, trace)
     }
+
+    private fun Int.updatedFor(attempt: RankCornerOcr.AttemptResult): Int =
+        if (attempt.guess == null && attempt.trace == "ocr=miss:empty") this + 1 else 0
 
     /**
      * Diagnostic-only: tags each waste OCR attempt with the exact pixel bounds
@@ -2337,5 +2364,14 @@ class CardRecognizer(
          * them on every attempt.
          */
         const val WASTE_OCR_EARLY_EXIT_CONFIDENCE = 0.62f
+        /**
+         * Consecutive genuine "ocr=miss:empty" results (ML Kit finding no
+         * text at all, not just an ambiguous read) that abort the rest of
+         * attemptWasteRankOcr's region search. 4 covers whole+corner on the
+         * first two regions (the dynamically-located tight crop and the
+         * legacy-anchored fallback) before giving up on the remaining
+         * static-percentage candidates.
+         */
+        const val WASTE_OCR_EMPTY_CIRCUIT_BREAKER = 4
     }
 }
