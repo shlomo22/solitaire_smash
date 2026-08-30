@@ -256,8 +256,20 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   **Correction on `080754`**: it turned out not to be a true no-OCR case — the
   real-device log behind v1.4.86 shows OCR already read `'5'@0.62` there; it
   just had no override rule to act on it (fixed by v1.4.86 below, independent
-  of the shadow-band inset). The shadow-band theory's remaining live test is
-  `230705`/`132126`/`132140`, where OCR was genuinely producing nothing.
+  of the shadow-band inset).
+  **v1.4.89 Evaluate result on this theory**: `230705` no longer mismatches
+  (fixed — mechanism unconfirmed, since a correct read leaves no trace in the
+  mismatch-only log) and `080754` no longer mismatches (confirmed v1.4.86, per
+  above). But `132126`/`132140` (8D vs 6D) **still mismatch, and the real
+  device log still shows `ocr=miss:empty` on all 10 whole/corner region
+  attempts** — the shadow-band inset did not fix this case. The theory is
+  falsified for this specific sample: whatever blocks ML Kit here, it isn't
+  (only) the drop-shadow band. v1.4.90 (pulled, not yet Evaluate-verified)
+  takes a different angle on the same sample — stops `correctSixOnWaste`'s
+  silent 0.38-confidence Six-steal from firing on a genuine OCR miss and lets
+  Eight's own ink/template score win instead, sidestepping the OCR failure
+  rather than fixing it. Next Evaluate run is the real test of whether that
+  lands where the geometry fix didn't.
 - **Waste truth can be Six on a Jack (and Clubs on a Spade).** Pixel-checked this
   session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
   is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
@@ -274,11 +286,18 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   known duplicate-Six-of-Spades labeling defect, not a real exception), and
   every one of 214 adjacencies flagged against engine-recognized reads
   corresponded to a real rank/suit mismatch on at least one side (100%
-  precision on this set). Logged only (`tableau$col.runConsistency=broken:...`
-  in `analysis.log`) - does not reject frames or mutate state yet. Next step is
-  watching whether the signal holds on-device, then deciding how a confirmed
-  violation should feed back into recognition (re-scan the pair, fall back to
-  previous frame, etc.) rather than just logging it.
+  precision on this set). Logged only (`tableau$col.runConsistency=broken:...`)
+  - does not reject frames or mutate state yet.
+  **Visibility correction (v1.4.89 Evaluate run)**: this diagnostic writes to
+  `DetectionResult.diagnostics`, which the Golden-truth Evaluate flow never
+  reads (`GoldenTruthEvaluator` only logs `result.summary()` and
+  `mismatchTraceBlock()` - confirmed zero `runConsistency` occurrences in a
+  full Evaluate analysis.log even though nothing crashed and the run was
+  otherwise clean). It only reaches `analysis.log` via the live-play path
+  (`AnalysisPipeline`'s outcome logger dumps `detection.diagnostics` as
+  `diag: ...` lines on every ARROW/NO_MOVE outcome change). So checking this
+  signal needs an actual play session with `diag: tableau` lines pulled
+  afterward, never an Evaluate-only pull.
 
 ## Solver heuristics
 
@@ -304,12 +323,16 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
   `MoveSelectorTest` case by hand (none of them have a genuine bridge Two/Three
   with zero hidden tableau cards, so none flip) since gradle can't run here.
 
-## Current state (as of v1.4.84 / versionCode 155, Evaluate-verified)
+## Current state (as of v1.4.89 / versionCode 160, Evaluate-verified)
 
-**v1.4.84 Evaluate: 5189/5317 (+3 vs 5186).** Rank 52, suit 85, C→S 23 / S→C 13,
-occupancy 24, missing 4. `032046` (Spades label), `143855` waste (Jack label +
-OCR Jack), `230055` (OCR Jack over Four) cleared. `205220` rank is Jack, still
-`JC vs JS` (truth still Clubs; pixels Spades).
+**v1.4.89 Evaluate: 5347/5472 (98%).** Golden set grew to 155 samples/5472
+slots (4 new files) since v1.4.84, so this isn't a clean same-denominator
+diff vs the row below — rank 50 (was 52), suit 83 (was 85), occupancy 24,
+missing 4, two runs back-to-back gave identical numbers (no flake, no
+crash). `230705` and `080754` (the two waste no-OCR/OCR-override targets)
+both cleared. `132126`/`132140` did not - see the shadow-band correction
+above; `230705` clearing is credited cautiously since a correct read leaves
+no trace to confirm the mechanism.
 
 | version | accuracy | rank | suit | C→S / S→C |
 |---|---|---|---|---|
@@ -317,7 +340,8 @@ OCR Jack), `230055` (OCR Jack over Four) cleared. `205220` rank is Jack, still
 | v1.4.81 / 152 | 5182/5317 (+3) | 59 | 86 | 23 / 14 |
 | v1.4.82 / 153 | 5185/5317 (+3) | 56 | 86 | 24 / 13 |
 | v1.4.83 / 154 | 5186/5317 (+1) | 54 | 86 | 24 / 13 |
-| **v1.4.84 / 155** | **5189/5317 (+3)** | **52** | **85** | **23 / 13** |
+| v1.4.84 / 155 | 5189/5317 (+3) | 52 | 85 | 23 / 13 |
+| **v1.4.89 / 160** | **5347/5472 (golden set grew +155 slots)** | **50** | **83** | **22 / 11** |
 
 **C↔S is parked.** Cascade headers score C0.90/S0.91 on the same pixels. Every
 post-pass that “breaks” the tie has a favorite side and overfires. Occupancy
@@ -334,11 +358,16 @@ dedicated `ocrRankOverride` rules — OCR Five beats a tight-crop Four (fixes
 `080754`); OCR/tight Six no longer steals a real legacy Nine or Eight; legacy
 Nine now beats a tight/OCR Six magnet (`9H×3`, `190337`).
 **v1.4.89 / versionCode 160:** the `tableauRunConsistencyDiagnostics` sanity
-check and the Two/Three-restraint solver tweaks documented above. None of
-v1.4.85-1.4.89 is Evaluate-verified yet — run Evaluate and pull artifacts to
-check whether `230705`/`132126`/`132140` (the shadow-band test) move, and
-watch actual suggested moves during play for the solver changes (Evaluate
-doesn't cover those).
+check and the Two/Three-restraint solver tweaks documented above.
+**Evaluate-verified as of v1.4.89: 5347/5472 (98%)** — see the table below.
+`230705`/`080754` cleared; `132126`/`132140` still mismatch with genuine
+`ocr=miss:empty` (see the shadow-band correction above). The solver tweaks
+and the run-consistency diagnostic are still unverified — Evaluate doesn't
+score solver quality, and the diagnostic only surfaces via live play, not
+the Evaluate flow (see its note above). **v1.4.90 / versionCode 161 (pulled,
+not yet Evaluate-verified):** stops `correctSixOnWaste`'s silent Six-steal on
+a genuine OCR miss and lets Eight's own score win — the next candidate fix
+for `132126`/`132140`.
 
 **Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
 **rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank
