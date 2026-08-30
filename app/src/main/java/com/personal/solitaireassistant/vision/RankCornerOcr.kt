@@ -111,7 +111,12 @@ class RankCornerOcr {
             if (w < 12 || h < 12) return null
             val (widthFraction, heightFraction) = when (profile) {
                 CornerRoiProfile.DEFAULT -> 0.35f to 0.25f
-                CornerRoiProfile.WASTE -> 0.45f to 0.32f
+                // Taller than DEFAULT: Smash "8" is two stacked loops and the
+                // old 0.32 height clipped the lower loop on waste (Evaluate
+                // 132126/132140/155538: every OCR region miss, tight Four).
+                // OCR Eight already overrides Four in ocrRankOverride once it
+                // reads — safer than inventing Eight from ink (v1.4.90 −30).
+                CornerRoiProfile.WASTE -> 0.48f to 0.42f
                 // Width fraction validated for rankSourceMasks' trimmedToVisibleStrip
                 // branch against real golden pixels: digit ink always ends by ~30%
                 // of card width with the pip not starting before ~71%. Height uses

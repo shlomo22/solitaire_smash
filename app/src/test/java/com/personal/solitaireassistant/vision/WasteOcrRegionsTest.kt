@@ -38,6 +38,9 @@ class WasteOcrRegionsTest {
         // Top is inset 4% of card height past the card's own drop-shadow/
         // border-transition band, not flush with the card's top edge.
         assertEquals(511.44f, corner.top, 0.01f)
+        // Wider/taller so a full Smash "8" (two loops) fits (v1.4.92).
+        assertEquals(707f + card.width * 0.48f, corner.right, 0.01f)
+        assertEquals(503f + card.height * 0.42f, corner.bottom, 0.01f)
         assertTrue(corner.width >= 50f)
         assertTrue(corner.height >= 50f)
     }

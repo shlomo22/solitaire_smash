@@ -75,13 +75,15 @@ class BoardLocator(
          * (see RankCornerOcr.cornerRankRoi's WASTE topInsetFraction) - that band
          * sits right at row 0 of any card-top-anchored region and otherwise
          * paints a spurious ink bar above the rank glyph in the OCR preprocess.
+         * Bottom/right sized to fit a full Smash "8" (two loops); the prior
+         * 0.30 height clipped the lower loop (132126-class no-OCR misses).
          */
         fun wasteRankCornerRegion(cardRegion: BoardRegion): BoardRegion =
             BoardRegion(
                 left = cardRegion.left,
                 top = cardRegion.top + cardRegion.height * 0.04f,
-                right = cardRegion.left + cardRegion.width * 0.44f,
-                bottom = cardRegion.top + cardRegion.height * 0.30f
+                right = cardRegion.left + cardRegion.width * 0.48f,
+                bottom = cardRegion.top + cardRegion.height * 0.42f
             )
     }
 
