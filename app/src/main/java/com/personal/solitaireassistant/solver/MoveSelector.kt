@@ -112,7 +112,15 @@ object MoveSelector {
             val card = movedFoundationCard(before, move)
             val safe = card != null && KlondikeRules.isSafeFoundationMove(before, card)
             var foundationScore = if (safe) 80.0 else 15.0
-            if (card != null && isTableauUsefulLowCard(before, card)) {
+            // Restraint on a low card exists to preserve it as a tableau
+            // bridge for eventually exposing something buried behind it.
+            // Once every hidden card is already face-up there is nothing
+            // left to expose, so the bridge no longer earns its keep -
+            // stop deferring and let the card go up.
+            if (card != null &&
+                before.hiddenTableauCount() > 0 &&
+                isTableauUsefulLowCard(before, card)
+            ) {
                 foundationScore = if (safe) 25.0 else 5.0
                 reasons += "defer-low-foundation"
             }
@@ -279,7 +287,7 @@ object MoveSelector {
     }
 
     private fun isTableauUsefulLowCard(state: GameState, card: Card): Boolean {
-        if (card.rank != Rank.Two) return false
+        if (card.rank != Rank.Two && card.rank != Rank.Three) return false
 
         val onTableau = state.tableau.indexOfFirst { it.lastOrNull() == card }
         if (onTableau >= 0) {

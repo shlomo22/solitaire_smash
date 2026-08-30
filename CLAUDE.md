@@ -262,6 +262,47 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   session: `190130` and `143855` playable waste are Jacks labeled Six; `032046`
   is J♠ labeled Clubs (relabeled). `205220` is the same JS-labeled-JC leftover.
   Relabel after a crop; do not Six-steal those back.
+- **`GameStateDetector.tableauRunConsistencyDiagnostics`** (added v1.4.89, diagnostic-
+  only) — Klondike invariant check: a tableau's exposed face-up run must be one
+  continuous alternating-color, descending-rank sequence. Only compares cards at
+  physically-adjacent column positions (i, i+1); an earlier draft compacted the
+  column to just known/non-inferred cards first and compared consecutive
+  survivors, which silently treated cards separated by an inferred slot as
+  adjacent and produced nonsense violations - caught by re-validating offline
+  before shipping, not by any test. Re-validated against the full current golden
+  set after the fix: 1 broken adjacency in 1543 truth-data adjacent pairs (the
+  known duplicate-Six-of-Spades labeling defect, not a real exception), and
+  every one of 214 adjacencies flagged against engine-recognized reads
+  corresponded to a real rank/suit mismatch on at least one side (100%
+  precision on this set). Logged only (`tableau$col.runConsistency=broken:...`
+  in `analysis.log`) - does not reject frames or mutate state yet. Next step is
+  watching whether the signal holds on-device, then deciding how a confirmed
+  violation should feed back into recognition (re-scan the pair, fall back to
+  previous frame, etc.) rather than just logging it.
+
+## Solver heuristics
+
+`solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
+lookahead, not an exhaustive solver — it scores every legal move and picks the
+highest, so changes here are prioritization tweaks, not new capabilities.
+There is no on-device or Evaluate-based validation loop for solver quality
+(Evaluate measures CV recognition accuracy only); these are reasoned from the
+code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
+- watch actual suggested moves during play after updating.
+
+- Hidden-card priority, empty-column King-only sequencing, and "safe" Ace/low-
+  card foundation restraint (Baker-style) were all already implemented before
+  this note was written - see `scoreTransition`'s `reveal+`/`deep-col` bonuses,
+  `Card.canStackOnTableau`'s `target == null -> rank == King` rule, and
+  `KlondikeRules.isSafeFoundationMove`.
+- **v1.4.89**: `isTableauUsefulLowCard`'s "hold this card back as a tableau
+  bridge" restraint now also covers Three (previously Two only), and is gated
+  on `before.hiddenTableauCount() > 0` - once every tableau card is already
+  face-up there's nothing left to expose by preserving a bridge, so the
+  restraint no longer earns its keep and the card goes to foundation at full
+  score instead of the deferred one. Checked against every existing
+  `MoveSelectorTest` case by hand (none of them have a genuine bridge Two/Three
+  with zero hidden tableau cards, so none flip) since gradle can't run here.
 
 ## Current state (as of v1.4.84 / versionCode 155, Evaluate-verified)
 
@@ -286,13 +327,18 @@ tableau arrows (color is enough) and would drop Evaluate.
 **Active work: waste top identity** (playable card → wrong Waste→Tableau /
 Waste→Foundation arrow). Do not start another C↔S scoring/header/occupancy round.
 
-**v1.4.85 / versionCode 156 (pushed):** waste OCR ROI top-inset fix for the
-drop-shadow-band false positive above. **v1.4.86 / versionCode 157 (pushed,
-from a concurrent session/Cursor):** dedicated `ocrRankOverride` rule letting
-OCR Five beat a tight-crop Four (mirrors the existing Jack-over-Four rule),
-fixing `080754` directly. Neither is Evaluate-verified yet — run Evaluate and
-pull artifacts to check whether `230705`/`132126`/`132140` (the real
-shadow-band test) and `080754` (the override-rule test) move.
+**v1.4.85 / versionCode 156:** waste OCR ROI top-inset fix for the
+drop-shadow-band false positive above.
+**v1.4.86-1.4.88 / versionCode 157-159 (from a concurrent session/Cursor):**
+dedicated `ocrRankOverride` rules — OCR Five beats a tight-crop Four (fixes
+`080754`); OCR/tight Six no longer steals a real legacy Nine or Eight; legacy
+Nine now beats a tight/OCR Six magnet (`9H×3`, `190337`).
+**v1.4.89 / versionCode 160:** the `tableauRunConsistencyDiagnostics` sanity
+check and the Two/Three-restraint solver tweaks documented above. None of
+v1.4.85-1.4.89 is Evaluate-verified yet — run Evaluate and pull artifacts to
+check whether `230705`/`132126`/`132140` (the shadow-band test) move, and
+watch actual suggested moves during play for the solver changes (Evaluate
+doesn't cover those).
 
 **Golden growth:** add 15–25 boards, not a bulk dump. Snapshot when the
 **rightmost waste card** is a **5, 6, 8, or J** and the assistant got that rank

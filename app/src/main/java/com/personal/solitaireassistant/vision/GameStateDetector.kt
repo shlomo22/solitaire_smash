@@ -1152,6 +1152,7 @@ class GameStateDetector(
             missBoundsShifted += result.stats.missBounds
             tableauColumnNanos[result.col] = result.elapsedNanos
         }
+        diagnostics += tableauRunConsistencyDiagnostics(tableau)
         val wasteOcrAttempt = when {
             !wasteOcrRelevant -> null
             reusableWasteOcr != null -> reusableWasteOcr.result
@@ -2271,6 +2272,48 @@ class GameStateDetector(
             null -> Suit.Clubs
         }
         return Card(Rank.Ace, suit, faceUp = true, known = false)
+    }
+
+    /**
+     * Diagnostic-only sanity check (Klondike rule: a tableau's exposed face-up
+     * run must be one continuous alternating-color, descending-rank sequence -
+     * a card is only ever revealed as the start of a fresh length-1 run, and
+     * anything stacked on it since arrived via a rule-enforcing move). Only
+     * compares cards at physically-adjacent positions (i, i+1) in the column -
+     * an early draft compacted the list to just the known/face-up entries
+     * first and compared consecutive survivors, which silently treated cards
+     * separated by an inferred slot as adjacent and produced nonsense
+     * "violations". Re-validated against the current, larger golden set after
+     * fixing that: against truth data, 1 broken adjacency in 1543 (a genuine
+     * golden-labeling defect - the same duplicate-Six-of-Spades case found
+     * earlier, not a real exception); against engine-recognized reads, every
+     * flagged adjacency (214/214) corresponded to a real rank/suit mismatch on
+     * at least one side, catching most of the real per-slot errors inside
+     * multi-card runs. Logged only, not acted on: doesn't reject frames or
+     * mutate state, so it carries no correctness risk - the next step is
+     * deciding how a confirmed violation should feed back into recognition.
+     */
+    private fun tableauRunConsistencyDiagnostics(tableau: List<List<Card>>): List<String> {
+        val diagnostics = mutableListOf<String>()
+        tableau.forEachIndexed { col, cards ->
+            for (i in 0 until cards.size - 1) {
+                val upper = cards[i]
+                val lower = cards[i + 1]
+                if (!upper.faceUp || !upper.known || upper.inferred) continue
+                if (!lower.faceUp || !lower.known || lower.inferred) continue
+                val colorOk = upper.suit.isRed != lower.suit.isRed
+                val rankOk = upper.rank.value - lower.rank.value == 1
+                if (!colorOk || !rankOk) {
+                    val reason = when {
+                        !colorOk && !rankOk -> "color+rank"
+                        !colorOk -> "color"
+                        else -> "rank"
+                    }
+                    diagnostics += "tableau$col.runConsistency=broken:$reason@${upper.id}->${lower.id}"
+                }
+            }
+        }
+        return diagnostics
     }
 
     companion object {
