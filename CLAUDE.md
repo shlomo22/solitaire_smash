@@ -431,6 +431,39 @@ whether `detect()` calls are now mostly skipped on a static board (look for
 short/absent `timing: ... detect=` gaps between identical logged moves) and
 whether the arrow now updates closer to the true capture interval.
 
+**Round 2 reverted in round 3 (v1.4.95, same session) - real regression, not
+just "unverified."** User report right after playing on v1.4.94: "now it got
+much worse... the arrow sometimes completely disappears... never happened
+before the last change." A pulled log confirmed a concrete failure mode:
+an 80-second stretch logged the exact same move ("Draw from stock") with
+*exactly* the same confidence (0.60) at both ends, while `known` (known
+face-up count) quietly drifted from 2 to 10 in between with zero intervening
+log entries - proof the pipeline was reusing one stale cached `detect()`
+result for 80 seconds straight while the real board kept changing underneath
+it. The noise-tolerance fix's failure mode is exactly this: a real but small,
+same-color visual change (e.g. a waste card swap where only the ink glyph
+differs and the coarse 54×60/40×10 sample grid mostly lands on white
+background) can affect fewer quantized samples than any tolerance loose
+enough to also absorb genuine capture noise - so it can silently miss a real
+change and keep serving stale state, which is a correctness regression, not
+just "still slow." Reverted `boardFingerprint`/`fingerprintRegion` back to
+the exact-hash match (see the comment now in that function for the full
+history). The OCR circuit breaker and the `visualChangeStreak` stickiness
+fix from round 1 are unaffected by this revert and stay in place - neither
+showed this failure mode, and the mechanism that broke (frame-level
+caching) is unrelated to either of them.
+
+**Lesson for next attempt at the real "always slow" problem:** the
+underlying finding from round 2 (the hash has zero noise tolerance and the
+cache was barely ever engaging) is still true and still worth fixing - just
+not with a flat sample-count tolerance across a large, coarse grid. A safer
+angle would need either a much finer-grained per-region check (so a small
+localized change can't hide under a global tolerance budget) or actual
+device measurement of what a real "nothing changed" vs "waste card swapped"
+sample-diff distribution looks like, before picking a threshold - exactly
+the kind of broad-evidence-before-a-threshold-change discipline the
+geometry-constant warnings elsewhere in this file already describe.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
