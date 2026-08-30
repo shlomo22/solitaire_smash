@@ -222,6 +222,45 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun correctSixOnWasteDoesNotStealFourWithoutOcr() {
+        // Evaluate 132126/132140: tight Four, OCR miss, was fused Six at 0.38.
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Four to 0.42f, Rank.Six to 0.40f, Rank.Eight to 0.38f),
+            ocrRank = null
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun correctEightOnWasteRecoversFromFourViaInk() {
+        val rank = WasteRankCorrections.correctEightOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Four to 0.42f, Rank.Six to 0.40f, Rank.Eight to 0.38f),
+            inkGuess = RankInkHeuristics.Guess(Rank.Eight, 0.52f),
+            ocrRank = null
+        )
+        assertEquals(Rank.Eight, rank)
+    }
+
+    @Test
+    fun correctEightOnWasteRecoversFromFourViaScores() {
+        val rank = WasteRankCorrections.correctEightOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            exactRankScores = mapOf(Rank.Four to 0.44f, Rank.Six to 0.40f, Rank.Eight to 0.43f),
+            inkGuess = null,
+            ocrRank = null
+        )
+        assertEquals(Rank.Eight, rank)
+    }
+
+    @Test
     fun ocrTenDoesNotOverrideWhenBothCropsReadQueen() {
         val queen = Card(Rank.Queen, Suit.Hearts, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(

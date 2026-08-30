@@ -201,10 +201,11 @@ internal object WasteRankCorrections {
             val sevenScore = rankScore(exactRankScores, Rank.Seven)
             if (sixScore + 0.05f >= sevenScore && sixScore >= 0.38f) return Rank.Six
         }
-        if (fourCandidate) {
-            val fourScore = rankScore(exactRankScores, Rank.Four)
-            if (sixScore >= fourScore - 0.05f && sixScore >= 0.38f) return Rank.Six
-        }
+        // No silent Four→Six without OCR "6". The 0.38 floor magnet invents
+        // Six on real Eights/Jacks whose tight crop templates as Four and
+        // every OCR region misses (132126/132140/155538 8D, 205220 Jack).
+        // Real Six-as-Four recoveries already arrive via ocrRank==Six above
+        // (and via OCR on 040931-class boards).
         if (nineCandidate) {
             val nineScore = rankScore(exactRankScores, Rank.Nine)
             if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
@@ -227,22 +228,41 @@ internal object WasteRankCorrections {
         // Fuller legacy crop already read Eight while tight latched Four and
         // Six-steal won (20260824_202636 8D vs 6D). Trust the legacy Eight.
         if (legacyCard?.rank == Rank.Eight) return Rank.Eight
+        // OCR / center-glyph Eight must win even when crops only show Four —
+        // correctEight used to require Six/Seven already on a crop, so it
+        // never ran before correctSixOnWaste invented Six (132126).
+        if (ocrRank == Rank.Eight) return Rank.Eight
+        if (inkGuess?.rank == Rank.Eight && inkGuess.confidence >= 0.48f) {
+            return Rank.Eight
+        }
 
+        val fourCandidate = legacyCard?.rank == Rank.Four ||
+            tightCard?.rank == Rank.Four ||
+            baseCard?.rank == Rank.Four
         val sixOrSeven = legacyCard?.rank == Rank.Six ||
             tightCard?.rank == Rank.Six ||
             baseCard?.rank == Rank.Six ||
             legacyCard?.rank == Rank.Seven ||
             tightCard?.rank == Rank.Seven ||
             baseCard?.rank == Rank.Seven
-        if (!sixOrSeven) return null
+        if (!sixOrSeven && !fourCandidate) return null
 
         val eightScore = rankScore(exactRankScores, Rank.Eight)
         val sixScore = rankScore(exactRankScores, Rank.Six)
         val sevenScore = rankScore(exactRankScores, Rank.Seven)
+        val fourScore = rankScore(exactRankScores, Rank.Four)
 
-        if (ocrRank == Rank.Eight) return Rank.Eight
-        if (inkGuess?.rank == Rank.Eight && inkGuess.confidence >= 0.48f) return Rank.Eight
-        if (tightCard?.rank == Rank.Eight && eightScore >= sixScore - 0.05f) return Rank.Eight
+        if (tightCard?.rank == Rank.Eight && eightScore >= sixScore - 0.05f) {
+            return Rank.Eight
+        }
+        if (fourCandidate &&
+            eightScore >= 0.40f &&
+            eightScore + 0.02f >= sixScore &&
+            eightScore >= fourScore - 0.08f
+        ) {
+            return Rank.Eight
+        }
+        if (!sixOrSeven) return null
         if (eightScore >= 0.48f && eightScore + 0.02f >= maxOf(sixScore, sevenScore)) {
             return Rank.Eight
         }
