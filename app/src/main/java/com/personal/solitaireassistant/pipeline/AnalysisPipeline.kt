@@ -75,6 +75,7 @@ class AnalysisPipeline(
     // a row that saw a non-null DealBoundary reason; see that function's doc
     // comment.
     private var pendingDealBoundaryStreak = 0
+    private var lastRecordedMoveHistoryState: GameState? = null
     private val sessionRejected = mutableSetOf<String>()
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private var pendingSuggestionCandidate: Move? = null
@@ -219,6 +220,7 @@ class AnalysisPipeline(
         }
         lastStableState = null
         pendingDealBoundaryStreak = 0
+        lastRecordedMoveHistoryState = null
         pendingFrame.getAndSet(null)?.bitmap?.recycle()
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
@@ -277,6 +279,7 @@ class AnalysisPipeline(
         rejectedMoveStore.clear()
         if (settingsRef.get().saveMoveHistory) {
             moveHistoryStore.newSession()
+            lastRecordedMoveHistoryState = null
         }
         fileLogger.append("=== new deal detected ($reason) - rejected-move history cleared ===")
     }
@@ -428,9 +431,15 @@ class AnalysisPipeline(
      */
     private fun recordMoveHistoryAsync(frameBitmap: Bitmap, state: GameState) {
         val frameCopy = frameBitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        // Captured on the caller's thread, synchronously, so a burst of
+        // confirmed frames can't race two async saves into recording the
+        // same "previous" state twice - the diff each moves.log line
+        // describes is always against the state actually saved right before it.
+        val previous = lastRecordedMoveHistoryState
+        lastRecordedMoveHistoryState = state
         rejectionExecutor.execute {
             try {
-                moveHistoryStore.record(frameCopy, state)
+                moveHistoryStore.record(frameCopy, state, previous)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed saving move history", e)
             } finally {

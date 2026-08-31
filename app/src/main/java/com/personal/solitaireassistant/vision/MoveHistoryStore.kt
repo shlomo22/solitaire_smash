@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
+import com.personal.solitaireassistant.game.MoveTransitionDescriber
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -22,6 +23,15 @@ import java.util.Locale
  * about recognition mistakes - it is a full move-by-move record for a human
  * (or a future offline solver run) to look for a better line, so it saves
  * every confirmed move regardless of recognition confidence.
+ *
+ * Also appends one line per move to a cumulative `moves.log` in the same
+ * subfolder, describing what changed since the previous confirmed move
+ * ([MoveTransitionDescriber]) - a chronological summary that's much faster
+ * to review than opening every NNNN.txt pair by hand. It is still derived
+ * from the same per-frame recognition as the snapshots, so it inherits
+ * whatever misreads are already in them; see [MoveTransitionDescriber]'s
+ * own doc comment for what it can and can't infer (e.g. it only ever sees
+ * the top card of stock/waste/foundation piles, never the full pile order).
  *
  * Path: files/move_history/<deal-timestamp>/
  * Pull with:
@@ -47,8 +57,11 @@ class MoveHistoryStore(context: Context) {
      * Saves the current frame + a text summary of [state] as the next move
      * in the current session, lazily starting one if [newSession] was never
      * called (covers the very first game after the assistant starts).
+     * [previous] is the last state this store recorded (null for the very
+     * first move of a session) and is used only to append a `moves.log`
+     * line - the per-move snapshot/summary files don't depend on it.
      */
-    fun record(bitmap: Bitmap, state: GameState) {
+    fun record(bitmap: Bitmap, state: GameState, previous: GameState?) {
         val dir = sessionDir ?: File(rootDir(), timeFmt.format(Date())).also {
             it.mkdirs()
             sessionDir = it
@@ -60,6 +73,8 @@ class MoveHistoryStore(context: Context) {
             bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
         }
         File(dir, "$name.txt").writeText(describe(state))
+        val transition = MoveTransitionDescriber.describe(previous, state)
+        File(dir, "moves.log").appendText("$name $transition\n")
     }
 
     private fun describe(state: GameState): String = buildString {

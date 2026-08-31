@@ -700,6 +700,66 @@ lines" feature would need the recorder to capture the full waste/stock
 order and the discrete move list, not periodic confirmed snapshots - not
 attempted here for lack of a concrete request to build it.
 
+**v1.4.101: discrete move-list logging (`moves.log`), the first half of the
+"full waste/stock order + discrete move list" ask above.** User asked to go
+ahead and build it. Scoped down from the full ask on purpose, and the scope
+cut is the important part to remember:
+
+- **What got built**: `game/MoveTransitionDescriber.kt` (pure Kotlin, no
+  Android/vision deps, unit-tested in `MoveTransitionDescriberTest.kt` with
+  11 cases) diffs two consecutive confirmed `GameState`s into one line -
+  `"Four_Hearts: tableau0 -> foundation1"`, `"draw: Six_Clubs"`,
+  `"reveal: tableau1 -> King_Hearts"`, a multi-card run as
+  `"Six_Clubs (+1 more): tableau0 -> tableau1"` (reports the count, does not
+  guess which column an ambiguous run's *buried* cards came from), or a
+  generic `"tableau$col changed"`/`"state changed (see snapshot)"` fallback
+  when nothing above resolves cleanly - honesty over a wrong specific claim.
+  `MoveHistoryStore.record()` now takes the previous recorded `GameState`
+  (tracked in `AnalysisPipeline` as `lastRecordedMoveHistoryState`, captured
+  synchronously on the caller's thread before the async save so a burst of
+  confirmed frames can't race two saves into using a stale "previous") and
+  appends `"$moveIndex $description\n"` to a cumulative `moves.log` in the
+  session folder, alongside the existing NNNN.png/NNNN.txt pairs (unchanged).
+  Reset to null in `clear()` and whenever `moveHistoryStore.newSession()`
+  fires, so a new deal's first line is always "deal: opening layout", never
+  a stale diff against the previous game.
+- **What did NOT get built, and why**: the full waste/stock draw order.
+  `GameState.waste` only ever holds the single front/playable fan card - the
+  recognizer never tries to read the other 1-2 covered cards in a draw-3 fan
+  as separate identified `Card`s (that region is exactly the source of the
+  already-documented waste-top-identity misreads, e.g. the 0016/0017 case
+  above). Diffing consecutive waste-tops only recovers the front card of
+  each *reveal*, not the full pile - two-thirds of the true stock order (the
+  cards that get buried under later draws without ever becoming the front
+  card) is fundamentally unrecoverable from what this app currently
+  recognizes, regardless of how the recorder is built. Actually reading the
+  fan's buried cards would be a real, separate, higher-risk CV feature (new
+  recognition calls on already-unreliable regions, no golden-truth coverage
+  for it) - out of scope for a logging change, not attempted here.
+- **Bookkeeping correctness worth noting for future edits to this file**:
+  the diff logic runs in two size-ordered phases per tableau column - phase
+  1 handles every column that *grew* (via a clean prefix-extension) first
+  and records the moved card's id in `explainedAsDestination`; phase 2 then
+  handles every column that *shrank or stayed the same size*, and only
+  reports a loss/generic-change line when the lost card's id isn't already
+  in that set. Getting this ordering backwards was a real bug caught in my
+  own unit-test tracing before shipping (an earlier draft processed columns
+  in a single pass in index order, so a tableau-to-tableau move from column
+  0 to column 1 would double-report: "tableau0 lost 1 card" *and* the
+  correct "Five_Clubs: tableau0 -> tableau1" line, because column 0's loss
+  was evaluated before column 1's gain had a chance to populate
+  `explainedAsDestination`). Each column is classified into growth-phase-1
+  XOR everything-else-phase-2 by a strict size comparison so the two phases
+  never both describe the same column.
+- **Not yet device-verified.** This only touches the move-history feature
+  (default off), not recognition or live-play arrow logic, so the risk
+  profile is low, but it hasn't been checked against a real pulled game yet
+  - next real pull with "Save move history" on should be spot-checked for
+  whether `moves.log` reads as a sane chronological account of the game
+  (including whether the fallback lines fire more than expected, which
+  would mean the diff heuristics need loosening for some case not covered
+  by the 11 unit tests).
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
