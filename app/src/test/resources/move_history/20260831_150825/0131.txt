@@ -1,0 +1,13 @@
+stock: 1 cards
+waste: ?unread
+foundation0: Ten_Spades
+foundation1: Five_Spades
+foundation2: ?unread
+foundation3: -
+tableau0: Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades Ten_Spades ?unread
+tableau1: ?unread
+tableau2: 
+tableau3: 
+tableau4: Ten_Spades
+tableau5: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread
+tableau6: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread

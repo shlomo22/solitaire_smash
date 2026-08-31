@@ -1,0 +1,13 @@
+stock: 1 cards
+waste: ?unread
+foundation0: Ten_Diamonds
+foundation1: Ten_Hearts
+foundation2: ?unread
+foundation3: ?unread
+tableau0: ?unread
+tableau1: King_Diamonds~ Queen_Clubs~ Jack_Diamonds~ Ten_Spades Nine_Diamonds~ Eight_Spades Seven_Diamonds~ Six_Clubs~ Five_Diamonds~ Four_Clubs~ Three_Diamonds~ Two_Clubs~ Ace_Hearts~
+tableau2: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread
+tableau3: ?unread
+tableau4: ?unread
+tableau5: ?unread
+tableau6: ?unread
