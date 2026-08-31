@@ -601,6 +601,30 @@ edge found and fixed in v1.4.99.** User played a real game and pushed
   opening deal since foundations start and stay empty until the player's
   first real move. Not yet re-verified - needs the next played game.
 
+**v1.4.99 device-verified: fully fixed.** Next real-game pull (commit
+`2c34db6`) produced a single clean folder `20260831_150825/` with 134 moves,
+zero fragmentation, zero exact-duplicate saves (checked programmatically).
+Move-history save timing is done - no further rounds needed on this bucket
+unless a new real-game pull shows regression.
+
+**Move-history record surfaced a live example of the already-tracked
+waste-top-identity bug (not a move-history timing bug).** User reviewed the
+134-move folder and flagged `0016.txt`/`0016.png` vs `0017.txt`/`0017.png`:
+the two `.txt` summaries are byte-identical except the waste line
+(`Ace_Diamonds` -> `Six_Clubs`), and `0016.png` visually shows the waste fan
+mid-reveal (a "10" and a partially-covered "A" visible, Score 180). The
+pipeline's own confirmation gate (`stableHits>=2`) passed on move `0016`
+before self-correcting one entry later at `0017` - so this is not a
+move-history-hook-timing bug like the two fixed above (the hook only fires
+from the fully-confirmed branch, and it did): the underlying CV read itself
+was confident/stable enough to clear that bar on a covered mid-fan card
+(the Ace), exactly the mechanism already documented under "Active work:
+waste top identity" above (`RankCornerOcr`/`ocrRankOverride` latching a
+peeking neighbor instead of the true front card). No new code lever
+identified beyond what's already tracked there (the v1.4.92 ROI
+enlargement, not yet Evaluate-verified, is still the live candidate fix).
+Logged here as corroborating real-play evidence, not a new bug.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
