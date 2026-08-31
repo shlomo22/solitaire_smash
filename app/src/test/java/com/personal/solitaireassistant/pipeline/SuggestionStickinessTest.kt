@@ -201,9 +201,14 @@ class SuggestionStickinessTest {
     }
 
     @Test
-    fun runConsistencyViolationFallsThroughWhenPreviousAlsoVanished() {
-        // Nothing safe left to keep showing - defer to the normal
-        // vanished-move handling rather than freezing forever.
+    fun runConsistencyViolationHoldsUnconditionallyEvenWhenPreviousAlsoVanished() {
+        // v1.4.104's first cut only held when `previous` was still in
+        // `ranked`. A real pull (154 violations in one ~3-minute session)
+        // showed that branch essentially never fires: the same instability
+        // that trips the violation almost always knocks the displayed move
+        // out of `ranked` at the same moment too, so the flicker continued
+        // via the ordinary vanished-move path below. This holds regardless
+        // of whether `previous` is still rankable.
         val result = SuggestionStickiness.apply(
             previous = tableauMove,
             best = drawStock,
@@ -213,9 +218,8 @@ class SuggestionStickinessTest {
             hasRunConsistencyViolation = true
         )
         assertNull(result.display)
-        assertEquals(Move.DrawStock, result.state.pendingCandidate)
-        assertEquals(1, result.state.pendingStreak)
-        assertTrue(result.holdReason!!.contains("vanished from ranked"))
+        assertTrue(result.holdReason!!.contains("run-consistency"))
+        assertEquals(SuggestionStickiness.State(), result.state)
     }
 
     @Test

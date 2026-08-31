@@ -707,6 +707,61 @@ lines show up exactly during the windows a `tableauN.runConsistency=broken`
 diagnostic is also present, confirming the two are actually linked in
 practice and not just in theory.
 
+**Round 7 (v1.4.105, same session): v1.4.104's fix demonstrably failed on
+a real pull - broadened it instead of re-guessing.** User pulled a fresh
+`analysis.log` right after v1.4.104 was confirmed installed. Two sessions
+in the file: the first was a stale duplicate of the exact episode round 6
+already analyzed (byte-identical through `20:23:58`, not new evidence); the
+second (`21:24:20`-`21:27:18`, confirmed newer via an explicit `=== session
+start ===` marker) hit `tableau*.runConsistency=broken` **154 times in
+~3 minutes** - far more frequent than round 6's isolated 4.9-second episode
+suggested. Despite that, `grep` for round 6's own hold-reason text
+(`"run-consistency violation"`) found **zero** matches anywhere in the
+file - every hold in the violation-heavy stretch still used the old
+`"vanished from ranked"` wording, proving round 6's fix never actually
+fired on real data.
+
+Root cause of the failed fix: round 6 only froze the display when
+`previous`'s move was still present in `ranked` (the "safe" case - some
+legal fallback to keep showing). Real data showed that precondition is
+almost never true in practice: the same instability that trips a
+run-consistency violation typically knocks the *currently-displayed* move
+out of `ranked` at the same moment, since both derive from the same
+misread column. So the round-6 branch's guard condition excluded almost
+every real occurrence, and control fell straight through to the ordinary
+vanished-move path, which has no awareness of the violation and adopts
+normally after 2 confirming frames - exactly reproducing the original
+flicker.
+
+Presented this finding to the user with three options (broaden the freeze
+unconditionally / add hysteresis directly to `TableauCascadeSupport`'s
+threshold / investigate further first) rather than silently re-guessing a
+second time after the first attempt already failed on real evidence - user
+chose the broadened freeze. Removed the `ranked.any { it.move ==
+previous.move }` guard entirely: `SuggestionStickiness.apply` now holds
+the display unconditionally whenever `hasRunConsistencyViolation` is true
+and the raw best differs from what's shown, regardless of whether the
+previous move is still rankable. State is still left completely untouched
+(not advanced or reset) so a clean frame picks up the pending-streak
+tracking exactly where a run of violated frames left it. Explicitly did
+**not** touch `TableauCascadeSupport.BOTTOM_ANCHOR_FLOOR` or add hysteresis
+to the cascade logic itself - still the same higher-risk lever this file
+has two prior single-sample regressions from, and the user's chosen option
+doesn't require it.
+
+**Known, accepted trade-off, worth watching for on the next pull**: with
+violations this frequent (154/3min in the observed session), the arrow can
+now go stale for longer stretches than before - every violated frame is a
+frozen frame, not just the ones round 6 caught. If a long run of
+*consecutive* frames are all violated (as opposed to violations being
+scattered/intermittent), the arrow could sit unmoving for that whole
+stretch. Whether that reads as "much less flickery, occasionally slow to
+update" (the intended trade) or "the arrow stopped updating for several
+seconds" (a new complaint) can only be judged from the next real pull -
+check whether `HOLD prev=... kept (raw=... ignored: tableau run-consistency
+violation` lines cluster into long unbroken runs or stay scattered, and
+whether the user's subjective read is "better" or "arrow got stuck."
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game

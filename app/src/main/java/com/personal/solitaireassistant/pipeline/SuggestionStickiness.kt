@@ -61,22 +61,33 @@ internal object SuggestionStickiness {
          * satisfying the confirmation, before flipping to several frames
          * agreeing on a good one. Defaults to false so callers that don't
          * pass it keep prior behavior exactly.
+         *
+         * v1.4.104's first attempt at this only held when [previous]'s move
+         * was still present in [ranked], on the theory that a violation
+         * usually leaves *some* safe fallback to keep showing. A real pull
+         * (154 violations in one ~3-minute session) proved that wrong: the
+         * same instability that trips the violation check almost always
+         * knocks the currently-displayed move out of [ranked] at the same
+         * moment too, so that "safe" branch essentially never fired and the
+         * flicker continued unabated through the ordinary vanished-move
+         * path below. This version holds unconditionally instead - any
+         * violation freezes the display this frame, full stop, even if
+         * [previous]'s move is also gone. The cost is a possibly-longer
+         * stale arrow during a heavy-violation stretch instead of a
+         * flicker; user-accepted trade-off given the alternative already
+         * failed on real data.
          */
         hasRunConsistencyViolation: Boolean = false
     ): Result {
         if (previous == null || best.move == previous.move) {
             return Result(best, idle)
         }
-        if (hasRunConsistencyViolation && ranked.any { it.move == previous.move }) {
+        if (hasRunConsistencyViolation) {
             // Don't let a frame we already know is internally broken decide
-            // whether to switch away from a move we can still legally show.
-            // State is left untouched (not advanced or reset) so the next
-            // clean frame's pending-streak tracking picks up exactly where
-            // this one found it, as if this frame had never run. If even
-            // the previous move has vanished under this broken reading,
-            // fall through to the normal handling below instead - there's
-            // nothing safe left to keep showing, so the existing streak-
-            // based confirmation is the best available signal.
+            // whether to switch the display at all - state is left
+            // untouched (not advanced or reset) so the next clean frame's
+            // pending-streak tracking picks up exactly where this one found
+            // it, as if this frame had never run.
             return Result(
                 display = null,
                 state = state,
