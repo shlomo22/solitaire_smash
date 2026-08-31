@@ -10,7 +10,6 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import java.util.concurrent.Callable
-import java.util.concurrent.Executors
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -51,12 +50,17 @@ class GameStateDetector(
     // threads while trying to schedule more work onto it. Sized for 7
     // columns + 4 foundations so cheap foundation piles don't queue behind
     // a long cascade.
-    private val columnExecutor = Executors.newFixedThreadPool(
-        Runtime.getRuntime().availableProcessors().coerceIn(4, 11)
+    // PriorityThreadFactory elevates these workers' OS scheduling priority -
+    // this pool is awaited synchronously within the single-threaded frame-
+    // analysis hot path (see AnalysisPipeline.analysisExecutor), so it's on
+    // the same latency-critical path even though it lives in this class.
+    private val columnExecutor = PriorityThreadFactory.newFixedThreadPool(
+        Runtime.getRuntime().availableProcessors().coerceIn(4, 11),
+        "detect-column"
     )
     // Separate from columnExecutor so a long waste-OCR call cannot starve
     // the pile workers.
-    private val wasteOcrExecutor = Executors.newSingleThreadExecutor()
+    private val wasteOcrExecutor = PriorityThreadFactory.newSingleThreadExecutor("waste-ocr")
 
     // Diagnostic-only: per-detect() timing, reset at the top of detect().
     // Not thread-safe, but the pipeline only ever runs one detect() at a time.

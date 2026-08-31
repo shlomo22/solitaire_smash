@@ -27,6 +27,7 @@ import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GameStateDetector
 import com.personal.solitaireassistant.vision.GoldenSample
 import com.personal.solitaireassistant.vision.MoveHistoryStore
+import com.personal.solitaireassistant.vision.PriorityThreadFactory
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.RecognitionViolation
 import com.personal.solitaireassistant.vision.RejectedSnapshotStore
@@ -50,8 +51,15 @@ class AnalysisPipeline(
     private val rejectedSnapshotStore = RejectedSnapshotStore(appContext)
     private val errorCaptureStore = ErrorCaptureStore(appContext)
     private val moveHistoryStore = MoveHistoryStore(appContext)
+    // Background disk I/O (error-capture, move-history) - not latency critical,
+    // stays at default priority so it can't compete with the hot path below.
     private val rejectionExecutor = Executors.newSingleThreadExecutor()
-    private val analysisExecutor = Executors.newSingleThreadExecutor()
+    // The single-threaded hot path every frame funnels through (see the
+    // "keep-only-latest" comment on onFrame below) - elevated priority via
+    // PriorityThreadFactory so it isn't starved by other apps/system threads
+    // under CPU contention. See PriorityThreadFactory's doc for why FOREGROUND
+    // rather than URGENT_DISPLAY.
+    private val analysisExecutor = PriorityThreadFactory.newSingleThreadExecutor("analysis")
     private val busy = AtomicBoolean(false)
     private val settingsRef = AtomicReference(AssistantSettings())
     private var stableHits = 0

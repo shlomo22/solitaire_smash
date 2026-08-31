@@ -484,6 +484,68 @@ number for without real confidence-distribution data; needs a log from a
 session where the residual flicker was actually observed to know if it's
 this mechanism or something else.
 
+**Round 4 (v1.4.102, later session): OS thread scheduling priority - a new
+lever, distinct from every round above.** Rounds 1-3 all changed *what* gets
+computed or *when* a result is trusted; this round changes only how the OS
+schedules the threads that were already there, with zero logic change - the
+lowest-risk lever available for this problem, since it can't introduce the
+kind of correctness regression round 2 did (no shared mutable state touched,
+no caching/staleness surface at all). Checked first: none of the pipeline's
+executors (`AnalysisPipeline.analysisExecutor`/`rejectionExecutor`,
+`GameStateDetector.columnExecutor`/`wasteOcrExecutor`) set thread priority -
+plain `Executors.newSingleThreadExecutor()`/`newFixedThreadPool()`, which
+run at Android's default scheduling tier, the same tier as every other
+thread on the device including Solitaire Smash's own rendering/game-logic
+threads it's competing against for CPU. Process-level priority was already
+right (`CaptureService.startForeground()` already declares
+`FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`, giving the whole app process an
+elevated OOM/scheduling tier) - only thread-level priority within that
+process was left at default.
+
+Added `vision/PriorityThreadFactory.kt`: wraps a `ThreadFactory` that calls
+`android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND)`
+(-2) as the first action of each worker thread, before it enters the pool's
+task loop - `Process.setThreadPriority` sets the real Linux nice value the
+kernel scheduler uses (unlike `Thread.setPriority`, which Android mostly
+ignores), and since `Executors`' pool threads are long-lived and reused for
+every future task, setting it once when the thread is created covers the
+thread's whole life, not just the first task. Wired into the two hot-path
+executors that gate arrow latency: `analysisExecutor` (the single thread
+every frame funnels through) and `GameStateDetector`'s `columnExecutor`/
+`wasteOcrExecutor` (awaited synchronously inside every `detect()` call, so
+on the same latency-critical path despite living in a different class).
+Deliberately left `rejectionExecutor` (background disk I/O for error-capture
+and move-history) and `AnalysisFileLogger`'s executor at default priority -
+neither gates arrow latency, and elevating them would only add contention
+against the threads that do.
+
+Picked `THREAD_PRIORITY_FOREGROUND` (-2) over the more aggressive
+`THREAD_PRIORITY_URGENT_DISPLAY` (-8, the level Android itself reserves for
+actual frame-rendering/compositor threads) on purpose: the goal is winning
+scheduling races against other apps/system threads under contention, not
+starving Solitaire Smash's own rendering thread, which would make the game
+itself feel worse even if our arrow got faster - the same
+don't-reach-for-the-extreme-setting-without-evidence discipline the
+geometry-constant and fingerprint-tolerance warnings elsewhere in this file
+describe. `THREAD_PRIORITY_URGENT_DISPLAY` is the next lever to try if
+`FOREGROUND` doesn't move the needle enough on a real pull.
+
+**Not yet device-verified**, and worth being honest about the ceiling here:
+if the phone is otherwise idle while the user is playing (nothing else
+contending for CPU), thread priority only matters under contention, so the
+realistic upper bound on what this buys is smaller than the architectural
+levers in rounds 1-3. The existing `timing: ... detect=` log lines (same
+ones round 2's investigation used) are how to confirm whether this actually
+moves per-frame latency - compare `detect=` durations across a real play
+session before and after. The other lever identified but not attempted this
+round: parallelizing waste OCR itself. `CardRecognizer.attemptWasteRankOcr`'s
+own comment already says it's "what made waste recognition the dominant
+per-frame cost," and it still runs strictly sequentially region-by-region on
+a single-thread executor, unlike the tableau columns which were already
+parallelized in an earlier round - a genuinely higher-ceiling lever than
+thread priority, but a concurrency change (same risk category as rounds 2-3
+above), not attempted here without a specific plan for it yet.
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game
