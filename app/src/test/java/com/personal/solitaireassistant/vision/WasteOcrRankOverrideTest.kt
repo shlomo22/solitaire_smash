@@ -81,6 +81,20 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun ocrSixDoesNotStealWhenBothCropsReadNine() {
+        // Evaluate 190358/190512: legacy=Nine, tight=Nine, first OCR='6'@0.62.
+        val nineClubs = Card(Rank.Nine, Suit.Clubs, faceUp = true)
+        val override = WasteRankCorrections.ocrRankOverride(
+            ocrRank = Rank.Six,
+            legacyCard = nineClubs,
+            tightCard = nineClubs,
+            baseCard = nineClubs,
+            exactRankScores = mapOf(Rank.Nine to 0.44f, Rank.Six to 0.41f)
+        )
+        assertNull(override)
+    }
+
+    @Test
     fun ocrSixDoesNotStealLeadingNine() {
         val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(

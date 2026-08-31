@@ -382,6 +382,11 @@ internal object WasteRankCorrections {
             // Nine-only gate — keep Nine unless Six templates strictly win
             // and Four is not also on a crop.
             if (tightLegacyRanks.contains(Rank.Four)) return null
+            // Dual-crop Nine (190358/190512): first OCR "6" is the covered
+            // fan neighbor. sixCanStealNine must not override a pair that
+            // already agreed on Nine — finishWaste never reaches the later
+            // "keep legacy Nine" fallback once this returns Six.
+            if (legacyRank == Rank.Nine && tightRank == Rank.Nine) return null
             return if (sixCanStealNine(exactRankScores)) Rank.Six else null
         }
         if (ocrRank == Rank.Eight &&
