@@ -10,7 +10,6 @@ import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.personal.solitaireassistant.MainActivity
@@ -29,8 +28,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicReference
 
 class CaptureService : Service() {
@@ -148,30 +145,11 @@ class CaptureService : Service() {
 
     private fun handleFrame(bitmap: Bitmap) {
         val settings = settingsRef.get()
-        if (settings.debugSaveFrames) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)?.let { saveDebugFrame(it) }
-        }
         val pipe = pipeline
         if (pipe != null) {
             pipe.onFrame(bitmap, settings)
         } else if (!bitmap.isRecycled) {
             bitmap.recycle()
-        }
-    }
-
-    private fun saveDebugFrame(bitmap: Bitmap) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val dir = File(cacheDir, "frames").also { it.mkdirs() }
-                val file = File(dir, "latest.png")
-                FileOutputStream(file).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
-                }
-            } catch (t: Throwable) {
-                Log.w(TAG, "Failed saving debug frame", t)
-            } finally {
-                if (!bitmap.isRecycled) bitmap.recycle()
-            }
         }
     }
 
@@ -246,7 +224,6 @@ class CaptureService : Service() {
     }
 
     companion object {
-        private const val TAG = "CaptureService"
         const val ACTION_START = "com.personal.solitaireassistant.START_CAPTURE"
         const val ACTION_STOP = "com.personal.solitaireassistant.STOP_CAPTURE"
         const val EXTRA_RESULT_CODE = "result_code"

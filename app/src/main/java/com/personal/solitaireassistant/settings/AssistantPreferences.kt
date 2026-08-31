@@ -21,7 +21,6 @@ data class AssistantSettings(
     val overlayColorArgb: Int = Color(0xE6000000.toInt()).toArgb(),
     val captureIntervalMs: Long = 200L,
     val minMatchConfidence: Float = 0.72f,
-    val debugSaveFrames: Boolean = false,
     val autoCaptureRecognitionErrors: Boolean = false,
     val captureRawReadErrors: Boolean = false,
     val saveMoveHistory: Boolean = false
@@ -34,7 +33,6 @@ class AssistantPreferences(private val context: Context) {
         val overlayColor = intPreferencesKey("overlay_color")
         val captureIntervalMs = longPreferencesKey("capture_interval_ms")
         val minMatchConfidence = floatPreferencesKey("min_match_confidence")
-        val debugSaveFrames = intPreferencesKey("debug_save_frames")
         val autoCaptureRecognitionErrors = intPreferencesKey("auto_capture_recognition_errors")
         val captureRawReadErrors = intPreferencesKey("capture_raw_read_errors")
         val saveMoveHistory = intPreferencesKey("save_move_history")
@@ -56,7 +54,6 @@ class AssistantPreferences(private val context: Context) {
             },
             minMatchConfidence = prefs[Keys.minMatchConfidence]
                 ?: AssistantSettings().minMatchConfidence,
-            debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1,
             autoCaptureRecognitionErrors =
                 (prefs[Keys.autoCaptureRecognitionErrors] ?: 0) == 1,
             captureRawReadErrors = (prefs[Keys.captureRawReadErrors] ?: 0) == 1,
@@ -77,12 +74,6 @@ class AssistantPreferences(private val context: Context) {
     suspend fun updateMinMatchConfidence(value: Float) {
         context.dataStore.edit {
             it[Keys.minMatchConfidence] = value.coerceIn(0.4f, 0.95f)
-        }
-    }
-
-    suspend fun updateDebugSaveFrames(enabled: Boolean) {
-        context.dataStore.edit {
-            it[Keys.debugSaveFrames] = if (enabled) 1 else 0
         }
     }
 

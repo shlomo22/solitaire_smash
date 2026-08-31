@@ -124,10 +124,6 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.updateMinMatchConfidence(value) }
     }
 
-    fun setDebugFrames(enabled: Boolean) {
-        viewModelScope.launch { preferences.updateDebugSaveFrames(enabled) }
-    }
-
     fun setAutoCaptureRecognitionErrors(enabled: Boolean) {
         viewModelScope.launch { preferences.updateAutoCaptureRecognitionErrors(enabled) }
     }

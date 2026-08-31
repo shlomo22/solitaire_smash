@@ -649,14 +649,22 @@ class AnalysisPipeline(
             } else if (boardVisuallyChanged && knownFaceUp >= 2 && detection.confidence >= 0.48f) {
                 // Visual change detected but confidence is still settling — prefer a
                 // best-effort new arrow over keeping the previous move visible.
-                maybeResetRejectionsForNewDeal(state)
+                // Deliberately NOT calling maybeResetRejectionsForNewDeal or recording
+                // move history here (see the block below where a state is fully
+                // confirmed) - a multi-second deal animation passes through several
+                // wildly different intermediate reads at exactly this confidence tier
+                // (cards still sliding in, hidden-count and known-card-set jumping
+                // around frame to frame), and DealBoundary's jump heuristics read
+                // that as several different "new games" in a row. Confirmed on
+                // device: one real deal produced 4 separate move-history folders
+                // within 13 seconds this way, each holding near-duplicate frames of
+                // the same still-settling layout. lastStableState/recentStates still
+                // update eagerly below - cancelCurrentHint() and avoidStates need
+                // whatever is actually on screen regardless of confirmation tier.
                 lastStableState = state
                 if (recentStates.lastOrNull() != state) {
                     recentStates.addLast(state)
                     while (recentStates.size > 4) recentStates.removeFirst()
-                    if (settingsRef.get().saveMoveHistory) {
-                        recordMoveHistoryAsync(frameBitmap, state)
-                    }
                 }
                 showBestSuggestion(
                     detection = detection,

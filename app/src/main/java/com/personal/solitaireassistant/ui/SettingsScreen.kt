@@ -55,7 +55,6 @@ fun SettingsScreen(
     onOverlayColor: (Color) -> Unit,
     onInterval: (Long) -> Unit,
     onConfidence: (Float) -> Unit,
-    onDebugFrames: (Boolean) -> Unit,
     onSaveMoveHistory: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
     onCaptureRawReadErrors: (Boolean) -> Unit,
@@ -214,18 +213,6 @@ fun SettingsScreen(
                     onValueChange = onConfidence,
                     valueRange = 0.4f..0.95f
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Save debug frames")
-                    Switch(
-                        checked = settings.debugSaveFrames,
-                        onCheckedChange = onDebugFrames
-                    )
-                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),

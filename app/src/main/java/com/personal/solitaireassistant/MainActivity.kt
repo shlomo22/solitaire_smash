@@ -107,7 +107,6 @@ class MainActivity : ComponentActivity() {
                         onOverlayColor = viewModel::setOverlayColor,
                         onInterval = viewModel::setCaptureInterval,
                         onConfidence = viewModel::setConfidence,
-                        onDebugFrames = viewModel::setDebugFrames,
                         onSaveMoveHistory = viewModel::setSaveMoveHistory,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
                         onCaptureRawReadErrors = viewModel::setCaptureRawReadErrors,

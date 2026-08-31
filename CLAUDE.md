@@ -513,17 +513,61 @@ opt-in feature.
   screenshot inline on the single thread that gates arrow latency would
   reintroduce exactly the per-frame cost the "Live-play pipeline
   performance" section above spent multiple rounds cutting down.
-- New settings toggle "Save move history" (off by default), independent of
-  the pre-existing "Save debug frames" toggle (that one just writes the
-  latest raw capture to `files/frames/latest.png` on every frame,
-  overwritten each time - no move awareness, nothing kept over time; left
-  in place since the user didn't ask for it to be removed, just said they
-  didn't need it for this).
-- Not device-verified - needs an actual played-and-abandoned game, pulled
-  via `adb exec-out run-as com.personal.solitaireassistant sh -c 'cd
-  files/move_history && tar cf - .' > move_history.tar`, to confirm the
-  folder structure and text summaries are actually useful for spotting a
-  different winning line by hand.
+- New settings toggle "Save move history" (off by default).
+- The pre-existing "Save debug frames" toggle (`CaptureService.saveDebugFrame`,
+  wrote the latest raw capture to `cacheDir/frames/latest.png` on every frame,
+  overwritten each time) was **removed entirely** (v1.4.98, user request) -
+  no move awareness, nothing kept over time, superseded by this feature for
+  the user's actual need. Deleted the setting, its DataStore key, the Settings
+  toggle, and the write path; nothing else in the codebase read that file back.
+
+**v1.4.98: first real-device test surfaced two bugs, both from the same root
+cause, both fixed.** User pulled one real (short) game and reported: (1) a
+new `move_history` subfolder started mid-game, more than once; (2) a lot of
+near-duplicate images. Pixel/text-checked all 5 folders plus one unrelated
+orphan from a prior game: one real opening deal produced **4 separate
+folders within 13 seconds**, several holding two saves that differed by
+exactly one card (e.g. a column's last card read as `Four_Diamonds` then
+corrected to `Six_Hearts` a moment later) - a misread self-correcting
+mid-animation, not a real move.
+
+Root cause: both `maybeResetRejectionsForNewDeal` (which starts a new
+`MoveHistoryStore` session) and the move-history save were being called from
+*two* places in `handleDetection` - the fully-confirmed branch (`stableHits
+>= 2` or a high-confidence fast path) **and** the "still stabilizing,
+confidence >= 0.48" best-effort branch that exists only to keep the live
+arrow responsive while a frame is still weak. A multi-second deal animation
+spends most of its time in that second, weaker branch: cards are still
+sliding in, so hidden-card count and the set of known face-up cards jump
+around wildly frame to frame - exactly the kind of jump `DealBoundary`'s
+heuristics (`hidden-jump`, `known-set-turnover`) are designed to read as "a
+different game," and exactly the kind of frame-to-frame instability that
+produces a "new" `GameState` on every single frame.
+
+Fix: removed the `maybeResetRejectionsForNewDeal(state)` call and the
+move-history save from the "still stabilizing" branch. Both now fire only
+from the fully-confirmed branch. `lastStableState`/`recentStates` still
+update eagerly in the weak branch (unchanged) - `cancelCurrentHint()` and
+`showBestSuggestion`'s `avoidStates` need whatever is actually on screen
+regardless of confirmation tier, so removing those would have broken hint
+rejection. This is a **general correctness fix**, not move-history-specific:
+`maybeResetRejectionsForNewDeal` firing repeatedly during a deal animation
+was silently clearing the user's rejected-move history multiple times per
+deal even before this feature existed - the bug was always there, this
+feature just made it visible.
+
+Residual risk: `reliableFirstHit` (confidence >= 0.82, knownFaceUp >= 4) and
+`fastUpdateAfterMove` in the *outer* gate can still occasionally route a
+still-mid-animation frame straight to the confirmed branch if it happens to
+read cleanly for one frame. Not fixed here for lack of evidence it's still
+a real problem after this change - the observed folders all matched the
+weak-branch pattern. If the next real game still shows fragmentation, the
+next lever is debouncing `DealBoundary` itself (require the same
+`newGameReason` on 2 consecutive confirmed calls), not widening this fix
+further blind.
+
+Not yet re-verified - needs the next played game to confirm one deal now
+produces exactly one folder with no near-duplicate saves.
 
 ## Solver heuristics
 
