@@ -484,6 +484,47 @@ number for without real confidence-distribution data; needs a log from a
 session where the residual flicker was actually observed to know if it's
 this mechanism or something else.
 
+## Move history capture (v1.4.97)
+
+User request: a way to review a whole finished (including abandoned) game
+afterward and check whether a different early move would have won, since
+the assistant only ever scores the immediate position, not whether the
+current line is winnable. Not a recognition or performance change - a new
+opt-in feature.
+
+- **`vision/MoveHistoryStore`**: one subfolder per deal at
+  `files/move_history/<deal-timestamp>/`, one `NNNN.png` (screenshot) +
+  `NNNN.txt` (plain-text board state) pair per confirmed move, `0000` being
+  the opening deal. `describeCard` deliberately does not reuse `Card.toString()`
+  - its one-letter rank abbreviation collides (Ten/Two/Three all start with
+  'T'), fine for a debug log line but not for a record meant to be read back
+  accurately later.
+- Hooked into `AnalysisPipeline.handleDetection` at both places
+  `lastStableState` is reassigned to a genuinely new `GameState` (piggybacks
+  on the existing `recentStates.lastOrNull() != state` dedup check, so it's
+  one save per real move, immune to confidence-only noise since `GameState`
+  equality doesn't include confidence).
+- New deal detection (`DealBoundary.newGameReason`, already used to reset
+  rejected-move history) also starts a fresh `MoveHistoryStore` subfolder.
+- Runs off the hot path on purpose: `recordMoveHistoryAsync` copies the
+  bitmap synchronously (cheap) and does the actual PNG encode + disk write
+  on `rejectionExecutor` (the same background executor recognition-error
+  capture already uses), not on `analysisExecutor` - encoding a full board
+  screenshot inline on the single thread that gates arrow latency would
+  reintroduce exactly the per-frame cost the "Live-play pipeline
+  performance" section above spent multiple rounds cutting down.
+- New settings toggle "Save move history" (off by default), independent of
+  the pre-existing "Save debug frames" toggle (that one just writes the
+  latest raw capture to `files/frames/latest.png` on every frame,
+  overwritten each time - no move awareness, nothing kept over time; left
+  in place since the user didn't ask for it to be removed, just said they
+  didn't need it for this).
+- Not device-verified - needs an actual played-and-abandoned game, pulled
+  via `adb exec-out run-as com.personal.solitaireassistant sh -c 'cd
+  files/move_history && tar cf - .' > move_history.tar`, to confirm the
+  folder structure and text summaries are actually useful for spotting a
+  different winning line by hand.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move

@@ -19,6 +19,7 @@ import com.personal.solitaireassistant.vision.GoldenTruthJson
 import com.personal.solitaireassistant.pipeline.AnalysisFileLogger
 import com.personal.solitaireassistant.vision.GoldenTruthEvaluator
 import com.personal.solitaireassistant.vision.GoldenTruthStore
+import com.personal.solitaireassistant.vision.MoveHistoryStore
 import com.personal.solitaireassistant.vision.SlotGuess
 import com.personal.solitaireassistant.vision.toGoldenSlot
 import com.personal.solitaireassistant.vision.toRecognizedSlot
@@ -44,7 +45,8 @@ data class SettingsUiState(
     val evaluatingErrors: Boolean = false,
     val showGoldenReview: Boolean = false,
     val showErrorCaptureImport: Boolean = false,
-    val errorCaptureImportIds: List<String> = emptyList()
+    val errorCaptureImportIds: List<String> = emptyList(),
+    val moveHistoryPath: String = ""
 )
 
 class SettingsViewModel(
@@ -53,6 +55,7 @@ class SettingsViewModel(
 ) : AndroidViewModel(application) {
     private val store = GoldenTruthStore(application)
     private val errorCaptureStore = ErrorCaptureStore(application)
+    private val moveHistoryStore = MoveHistoryStore(application)
     private val transient = MutableStateFlow("")
     private val goldenCount = MutableStateFlow(store.count())
     private val errorCaptureCount = MutableStateFlow(errorCaptureStore.count())
@@ -104,7 +107,8 @@ class SettingsViewModel(
             evaluatingErrors = part1.evaluatingErrors,
             showGoldenReview = part1.showGoldenReview,
             showErrorCaptureImport = importPair.first,
-            errorCaptureImportIds = importPair.second
+            errorCaptureImportIds = importPair.second,
+            moveHistoryPath = moveHistoryStore.pathForDisplay()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
@@ -130,6 +134,10 @@ class SettingsViewModel(
 
     fun setCaptureRawReadErrors(enabled: Boolean) {
         viewModelScope.launch { preferences.updateCaptureRawReadErrors(enabled) }
+    }
+
+    fun setSaveMoveHistory(enabled: Boolean) {
+        viewModelScope.launch { preferences.updateSaveMoveHistory(enabled) }
     }
 
     fun setTransientMessage(message: String) {

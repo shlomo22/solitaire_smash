@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                         onInterval = viewModel::setCaptureInterval,
                         onConfidence = viewModel::setConfidence,
                         onDebugFrames = viewModel::setDebugFrames,
+                        onSaveMoveHistory = viewModel::setSaveMoveHistory,
                         onAutoCaptureRecognitionErrors = viewModel::setAutoCaptureRecognitionErrors,
                         onCaptureRawReadErrors = viewModel::setCaptureRawReadErrors,
                         onDeleteErrorCaptures = viewModel::deleteErrorCaptures,

@@ -56,6 +56,7 @@ fun SettingsScreen(
     onInterval: (Long) -> Unit,
     onConfidence: (Float) -> Unit,
     onDebugFrames: (Boolean) -> Unit,
+    onSaveMoveHistory: (Boolean) -> Unit,
     onAutoCaptureRecognitionErrors: (Boolean) -> Unit,
     onCaptureRawReadErrors: (Boolean) -> Unit,
     onDeleteErrorCaptures: () -> Unit,
@@ -223,6 +224,35 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.debugSaveFrames,
                         onCheckedChange = onDebugFrames
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Save move history")
+                    Switch(
+                        checked = settings.saveMoveHistory,
+                        onCheckedChange = onSaveMoveHistory
+                    )
+                }
+                if (settings.saveMoveHistory) {
+                    Text(
+                        "Saves a screenshot + board state after every confirmed move, " +
+                            "one subfolder per deal, so a finished game can be replayed " +
+                            "to look for a better line.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        "Folder: ${state.moveHistoryPath}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        "Pull: adb exec-out run-as com.personal.solitaireassistant " +
+                            "sh -c 'cd files/move_history && tar cf - .' > move_history.tar",
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }

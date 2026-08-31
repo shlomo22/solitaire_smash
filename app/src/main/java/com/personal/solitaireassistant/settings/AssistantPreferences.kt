@@ -23,7 +23,8 @@ data class AssistantSettings(
     val minMatchConfidence: Float = 0.72f,
     val debugSaveFrames: Boolean = false,
     val autoCaptureRecognitionErrors: Boolean = false,
-    val captureRawReadErrors: Boolean = false
+    val captureRawReadErrors: Boolean = false,
+    val saveMoveHistory: Boolean = false
 ) {
     val overlayColor: Color get() = Color(overlayColorArgb)
 }
@@ -36,6 +37,7 @@ class AssistantPreferences(private val context: Context) {
         val debugSaveFrames = intPreferencesKey("debug_save_frames")
         val autoCaptureRecognitionErrors = intPreferencesKey("auto_capture_recognition_errors")
         val captureRawReadErrors = intPreferencesKey("capture_raw_read_errors")
+        val saveMoveHistory = intPreferencesKey("save_move_history")
     }
 
     val settings: Flow<AssistantSettings> = context.dataStore.data.map { prefs ->
@@ -57,7 +59,8 @@ class AssistantPreferences(private val context: Context) {
             debugSaveFrames = (prefs[Keys.debugSaveFrames] ?: 0) == 1,
             autoCaptureRecognitionErrors =
                 (prefs[Keys.autoCaptureRecognitionErrors] ?: 0) == 1,
-            captureRawReadErrors = (prefs[Keys.captureRawReadErrors] ?: 0) == 1
+            captureRawReadErrors = (prefs[Keys.captureRawReadErrors] ?: 0) == 1,
+            saveMoveHistory = (prefs[Keys.saveMoveHistory] ?: 0) == 1
         )
     }
 
@@ -92,6 +95,12 @@ class AssistantPreferences(private val context: Context) {
     suspend fun updateCaptureRawReadErrors(enabled: Boolean) {
         context.dataStore.edit {
             it[Keys.captureRawReadErrors] = if (enabled) 1 else 0
+        }
+    }
+
+    suspend fun updateSaveMoveHistory(enabled: Boolean) {
+        context.dataStore.edit {
+            it[Keys.saveMoveHistory] = if (enabled) 1 else 0
         }
     }
 }

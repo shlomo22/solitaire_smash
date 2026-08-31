@@ -26,6 +26,7 @@ import com.personal.solitaireassistant.vision.ErrorCapturePolicy
 import com.personal.solitaireassistant.vision.ErrorCaptureStore
 import com.personal.solitaireassistant.vision.GameStateDetector
 import com.personal.solitaireassistant.vision.GoldenSample
+import com.personal.solitaireassistant.vision.MoveHistoryStore
 import com.personal.solitaireassistant.vision.RecognizedSlot
 import com.personal.solitaireassistant.vision.RecognitionViolation
 import com.personal.solitaireassistant.vision.RejectedSnapshotStore
@@ -48,6 +49,7 @@ class AnalysisPipeline(
     private val rejectedMoveStore = RejectedMoveStore(appContext)
     private val rejectedSnapshotStore = RejectedSnapshotStore(appContext)
     private val errorCaptureStore = ErrorCaptureStore(appContext)
+    private val moveHistoryStore = MoveHistoryStore(appContext)
     private val rejectionExecutor = Executors.newSingleThreadExecutor()
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
@@ -234,6 +236,9 @@ class AnalysisPipeline(
         val reason = DealBoundary.newGameReason(previous, state) ?: return
         sessionRejected.clear()
         rejectedMoveStore.clear()
+        if (settingsRef.get().saveMoveHistory) {
+            moveHistoryStore.newSession()
+        }
         fileLogger.append("=== new deal detected ($reason) - rejected-move history cleared ===")
     }
 
@@ -372,6 +377,27 @@ class AnalysisPipeline(
             violations = captureDecision.violations,
             violationSource = captureDecision.violationSource
         )
+    }
+
+    /**
+     * PNG-encoding a full board screenshot is real disk I/O; doing it inline
+     * on [handleDetection]'s call path (the single-threaded analysisExecutor
+     * that gates arrow latency for every frame) would reintroduce exactly the
+     * kind of per-frame cost this pipeline has spent several rounds cutting
+     * down. Copy the bitmap synchronously (cheap, in-memory) and do the
+     * actual save on [rejectionExecutor], same as recognition-error capture.
+     */
+    private fun recordMoveHistoryAsync(frameBitmap: Bitmap, state: GameState) {
+        val frameCopy = frameBitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        rejectionExecutor.execute {
+            try {
+                moveHistoryStore.record(frameCopy, state)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed saving move history", e)
+            } finally {
+                if (!frameCopy.isRecycled) frameCopy.recycle()
+            }
+        }
     }
 
     private fun saveErrorCaptureAsync(
@@ -628,6 +654,9 @@ class AnalysisPipeline(
                 if (recentStates.lastOrNull() != state) {
                     recentStates.addLast(state)
                     while (recentStates.size > 4) recentStates.removeFirst()
+                    if (settingsRef.get().saveMoveHistory) {
+                        recordMoveHistoryAsync(frameBitmap, state)
+                    }
                 }
                 showBestSuggestion(
                     detection = detection,
@@ -650,6 +679,9 @@ class AnalysisPipeline(
         if (recentStates.lastOrNull() != state) {
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
+            if (settingsRef.get().saveMoveHistory) {
+                recordMoveHistoryAsync(frameBitmap, state)
+            }
         }
         showBestSuggestion(
             detection = detection,
