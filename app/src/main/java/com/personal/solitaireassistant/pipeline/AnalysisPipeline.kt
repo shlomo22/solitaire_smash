@@ -88,6 +88,7 @@ class AnalysisPipeline(
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private var pendingSuggestionCandidate: Move? = null
     private var pendingSuggestionStreak = 0
+    private var violationHoldStreak = 0
     private var lastErrorCaptureSignature: String? = null
     private val assistantForeground = AtomicBoolean(false)
 
@@ -221,6 +222,7 @@ class AnalysisPipeline(
         lastFrameFingerprint = null
         pendingSuggestionCandidate = null
         pendingSuggestionStreak = 0
+        violationHoldStreak = 0
         synchronized(snapshotLock) {
             lastDetection = null
             lastFrameBitmap?.recycle()
@@ -1024,13 +1026,15 @@ class AnalysisPipeline(
             boardVisuallyChanged = boardVisuallyChanged,
             state = SuggestionStickiness.State(
                 pendingCandidate = pendingSuggestionCandidate,
-                pendingStreak = pendingSuggestionStreak
+                pendingStreak = pendingSuggestionStreak,
+                violationHoldStreak = violationHoldStreak
             ),
             visualChangeStreak = visualChangeStreak,
             hasRunConsistencyViolation = hasRunConsistencyViolation
         )
         pendingSuggestionCandidate = result.state.pendingCandidate
         pendingSuggestionStreak = result.state.pendingStreak
+        violationHoldStreak = result.state.violationHoldStreak
         result.holdReason?.let { fileLogger.append(it) }
         return result.display
     }

@@ -762,6 +762,64 @@ check whether `HOLD prev=... kept (raw=... ignored: tableau run-consistency
 violation` lines cluster into long unbroken runs or stay scattered, and
 whether the user's subjective read is "better" or "arrow got stuck."
 
+**Round 8 (v1.4.106, same session): round 7's predicted trade-off actually
+happened, on the very next pull - bounded the freeze instead of reverting
+it.** User reported "now it feels much slower than before" with a fresh
+log. Confirmed directly: from 21:42:41.697 to 21:42:47.963 (6.3 real
+seconds), the arrow froze on `Waste -> Tableau 6` through **46 consecutive**
+`HOLD ... run-consistency violation` lines while `Tableau 7 -> Tableau 6`
+kept getting recomputed and rejected every single detect() cycle - a
+*persistent*, non-oscillating violation, unlike round 6/7's case which
+flipped between valid/broken roughly every 800ms. The unconditional freeze
+from round 7 can't tell those two situations apart: an oscillating
+violation resolves itself in a couple of frames (which is what round 7 was
+built for and does fix), but a persistent one never clears on its own, so
+freezing "until it resolves" means freezing forever. Session totals: 121
+`runConsistency=broken` occurrences, 55 of them producing a `HOLD ...
+run-consistency violation` line - about half of all logged outcomes that
+session were frozen frames.
+
+Rather than revert to round 6/7's design (already proven insufficient) or
+guess a workaround, bounded the mechanism itself: `SuggestionStickiness.
+State` gained `violationHoldStreak`, and a new `MAX_VIOLATION_HOLD_FRAMES =
+4` caps how many consecutive frames a violation can freeze the display
+before giving up and falling through to the ordinary (non-violation)
+handling below - which still has its own 2-frame confirmation logic, so a
+persistent violation now costs at most a few frames of hold, not an
+unbounded freeze. 4 was chosen to comfortably exceed the ~2-frame
+confirmation the original oscillation needed while cutting off nowhere
+near the 46-frame case just observed - not device-verified at this exact
+value; the next lever to pull if 4 still shows visible flicker (too short)
+or noticeable freezing (too long) is this constant, not the on/off
+mechanism.
+
+**Wiring gap caught before shipping, not after**: `AnalysisPipeline.
+applySuggestionStickiness` already threads `pendingSuggestionCandidate`/
+`pendingSuggestionStreak` between calls via instance fields, since
+`SuggestionStickiness.apply` is a pure function with no memory of its own.
+`violationHoldStreak` needed the exact same treatment - a first pass added
+the field to `SuggestionStickiness.State` and the bounding logic but never
+added a matching persistent field in `AnalysisPipeline`, which would have
+made every call construct `State(..., violationHoldStreak = 0)` fresh
+regardless of history, so `heldStreak` would always compute as `0 + 1 = 1
+<= 4` and never actually reach the cap - silently reproducing round 7's
+unbounded-freeze bug immediately. Added `AnalysisPipeline.
+violationHoldStreak`, reset in `clear()`, read/written around the
+`SuggestionStickiness.apply` call the same way the other two pending
+fields already are. Three tests updated/added: the two existing
+violation-hold tests' expected end-state now includes
+`violationHoldStreak = 1` instead of an untouched `State()`, plus a new
+test driving the same violation 5 times in a row confirming frames 1-4
+hold and frame 5 falls through with the counter reset to 0.
+
+**Also noted, not investigated further this round**: this session's
+`detect=` timing was elevated (median 558ms vs the ~308ms reference from
+the v1.4.102 comparison) - plausibly just a harder/different board this
+session rather than a regression from anything in rounds 6-8 (none of
+which touch recognition timing), but worth checking on the next pull
+whether it's back near the reference range once the freeze itself stops
+dominating the user's sense of "slow."
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game

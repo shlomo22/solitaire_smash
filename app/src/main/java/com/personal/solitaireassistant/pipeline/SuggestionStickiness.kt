@@ -12,8 +12,29 @@ import com.personal.solitaireassistant.game.ScoredMove
 internal object SuggestionStickiness {
     data class State(
         val pendingCandidate: Move? = null,
-        val pendingStreak: Int = 0
+        val pendingStreak: Int = 0,
+        /** Consecutive frames held via [MAX_VIOLATION_HOLD_FRAMES] below. */
+        val violationHoldStreak: Int = 0
     )
+
+    /**
+     * Cap on how many consecutive frames a run-consistency violation can
+     * freeze the display before giving up and falling through to normal
+     * handling anyway. Round 6/7's oscillating-arrow bug needed about 2
+     * consecutive held frames to fully suppress (the board flipped between
+     * a valid and a self-flagged-broken reading roughly every 800ms). A
+     * real pull right after the unconditional-freeze fix (v1.4.105) showed
+     * the opposite failure mode: a *persistent* (non-oscillating) violation
+     * on one board froze the arrow for 46 consecutive frames - 6.3 real
+     * seconds - because the same two moves kept getting recomputed and
+     * rejected every single detect() cycle with nothing ever resolving.
+     * 4 comfortably covers the oscillation case with margin while cutting
+     * off nowhere near that observed worst case. Not device-verified at
+     * this specific value - the next lever to pull if 4 turns out to be
+     * too short (oscillation still visible) or too long (still freezes
+     * noticeably) is this constant, not the on/off freeze mechanism itself.
+     */
+    private const val MAX_VIOLATION_HOLD_FRAMES = 4
 
     data class Result(
         val display: ScoredMove?,
@@ -70,12 +91,14 @@ internal object SuggestionStickiness {
          * knocks the currently-displayed move out of [ranked] at the same
          * moment too, so that "safe" branch essentially never fired and the
          * flicker continued unabated through the ordinary vanished-move
-         * path below. This version holds unconditionally instead - any
-         * violation freezes the display this frame, full stop, even if
-         * [previous]'s move is also gone. The cost is a possibly-longer
-         * stale arrow during a heavy-violation stretch instead of a
-         * flicker; user-accepted trade-off given the alternative already
-         * failed on real data.
+         * path below. v1.4.105 held unconditionally instead - any violation
+         * freezes the display, full stop - which fixed the flicker but a
+         * real pull right after showed the opposite failure: a persistent
+         * (non-oscillating) violation froze the arrow for 46 consecutive
+         * frames, 6.3 real seconds, on one board. See
+         * [MAX_VIOLATION_HOLD_FRAMES] - the freeze is now bounded, giving up
+         * and falling through to normal handling once it's held too long
+         * rather than freezing indefinitely.
          */
         hasRunConsistencyViolation: Boolean = false
     ): Result {
@@ -83,17 +106,25 @@ internal object SuggestionStickiness {
             return Result(best, idle)
         }
         if (hasRunConsistencyViolation) {
-            // Don't let a frame we already know is internally broken decide
-            // whether to switch the display at all - state is left
-            // untouched (not advanced or reset) so the next clean frame's
-            // pending-streak tracking picks up exactly where this one found
-            // it, as if this frame had never run.
-            return Result(
-                display = null,
-                state = state,
-                holdReason = "HOLD prev=${previous.move.label} kept (raw=${best.move.label} " +
-                    "ignored: tableau run-consistency violation this frame)"
-            )
+            val heldStreak = state.violationHoldStreak + 1
+            if (heldStreak <= MAX_VIOLATION_HOLD_FRAMES) {
+                // Don't let a frame we already know is internally broken
+                // decide whether to switch the display at all. pendingCandidate/
+                // pendingStreak are left untouched so the normal streak logic
+                // below picks up exactly where a run of violated frames left
+                // it once one clears (or the cap below is hit).
+                return Result(
+                    display = null,
+                    state = state.copy(violationHoldStreak = heldStreak),
+                    holdReason = "HOLD prev=${previous.move.label} kept (raw=${best.move.label} " +
+                        "ignored: tableau run-consistency violation this frame, " +
+                        "streak=$heldStreak/$MAX_VIOLATION_HOLD_FRAMES)"
+                )
+            }
+            // Held long enough - this isn't resolving on its own, so stop
+            // freezing and fall through to normal handling below even
+            // though the board is still self-admittedly broken. Better to
+            // risk showing a wrong move than to freeze forever.
         }
         // Pixel-level "the board changed" is for adopting a *new card play*
         // after the user already moved. Draw/recycle is the always-legal

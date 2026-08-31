@@ -195,13 +195,13 @@ class SuggestionStickinessTest {
         )
         assertNull(result.display)
         assertTrue(result.holdReason!!.contains("run-consistency"))
-        // State is left completely untouched, not advanced - the next clean
-        // frame should behave as if this one never happened.
-        assertEquals(SuggestionStickiness.State(), result.state)
+        // pendingCandidate/pendingStreak are left untouched, but the new
+        // violation-hold streak advances to 1.
+        assertEquals(SuggestionStickiness.State(violationHoldStreak = 1), result.state)
     }
 
     @Test
-    fun runConsistencyViolationHoldsUnconditionallyEvenWhenPreviousAlsoVanished() {
+    fun runConsistencyViolationHoldsEvenWhenPreviousAlsoVanished() {
         // v1.4.104's first cut only held when `previous` was still in
         // `ranked`. A real pull (154 violations in one ~3-minute session)
         // showed that branch essentially never fires: the same instability
@@ -219,7 +219,49 @@ class SuggestionStickinessTest {
         )
         assertNull(result.display)
         assertTrue(result.holdReason!!.contains("run-consistency"))
-        assertEquals(SuggestionStickiness.State(), result.state)
+        assertEquals(SuggestionStickiness.State(violationHoldStreak = 1), result.state)
+    }
+
+    @Test
+    fun runConsistencyViolationFreezeIsBoundedThenFallsThrough() {
+        // v1.4.105's unconditional freeze fixed the flicker but a real pull
+        // right after showed the opposite failure: a *persistent* (non-
+        // oscillating) violation froze the arrow for 46 consecutive frames -
+        // 6.3 real seconds - because the same two moves kept getting
+        // recomputed and rejected every detect() cycle with nothing ever
+        // resolving. Drive the same violation 5 times in a row: the first 4
+        // hold, the 5th must give up and fall through to normal handling
+        // instead of freezing forever.
+        var state = SuggestionStickiness.State()
+        repeat(4) { i ->
+            val result = SuggestionStickiness.apply(
+                previous = tableauMove,
+                best = drawStock,
+                ranked = listOf(drawStock, tableauMove),
+                boardVisuallyChanged = false,
+                state = state,
+                hasRunConsistencyViolation = true
+            )
+            assertNull("frame ${i + 1} should still be held", result.display)
+            assertEquals(i + 1, result.state.violationHoldStreak)
+            state = result.state
+        }
+        val fifth = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = drawStock,
+            ranked = listOf(drawStock, tableauMove),
+            boardVisuallyChanged = false,
+            state = state,
+            hasRunConsistencyViolation = true
+        )
+        // Falls through to normal handling: previous is still ranked, so the
+        // ordinary (non-violation) logic keeps showing it for one more frame
+        // while it builds its own confirmation streak - it does not adopt
+        // drawStock outright on this exact frame either, but critically it
+        // is no longer following the violation-hold path (no run-consistency
+        // hold reason, and the display is no longer frozen indefinitely).
+        assertEquals(0, fifth.state.violationHoldStreak)
+        assertTrue(fifth.holdReason == null || !fifth.holdReason!!.contains("run-consistency"))
     }
 
     @Test
