@@ -71,6 +71,10 @@ class AnalysisPipeline(
     private var lastFrameBitmap: Bitmap? = null
     private val snapshotLock = Any()
     private var lastStableState: GameState? = null
+    // Consecutive confirmed-branch calls to maybeResetRejectionsForNewDeal in
+    // a row that saw a non-null DealBoundary reason; see that function's doc
+    // comment.
+    private var pendingDealBoundaryStreak = 0
     private val sessionRejected = mutableSetOf<String>()
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
     private var pendingSuggestionCandidate: Move? = null
@@ -214,6 +218,7 @@ class AnalysisPipeline(
             lastFrameBitmap = null
         }
         lastStableState = null
+        pendingDealBoundaryStreak = 0
         pendingFrame.getAndSet(null)?.bitmap?.recycle()
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
@@ -230,10 +235,44 @@ class AnalysisPipeline(
      * earlier deal and never expired — the overlay often starts mid-game, so
      * the old "opening 1..7 layout" check never ran. Clear on capture start,
      * capture stop, and whenever [DealBoundary] says the board is a new game.
+     *
+     * Only calling this from the fully-confirmed branch (v1.4.98) fixed most
+     * of the mid-game folder fragmentation, but a real device pull still
+     * showed 3 small folders in the opening ~3 seconds of a session before
+     * the real game's folder took over: even a *confirmed* read can land on
+     * a still-mid-deal frame (cards still sliding in column by column), and
+     * two separate confirmed reads a moment apart can each look like a big
+     * enough jump to be "a new game" on their own - the culprits are
+     * `hidden-jump`/`known-set-turnover`, since a still-dealing board keeps
+     * revealing more cards and swapping which ones are legible call after
+     * call. `fresh-layout` and `foundation-drop` do NOT need this: fresh-
+     * layout is already self-limiting ([DealBoundary.newGameReason] only
+     * returns it on the transition *into* a valid opening layout - the very
+     * next call sees a `previous` that already matches and goes quiet on its
+     * own, so requiring it twice in a row would mean it can never fire at
+     * all), and foundation-drop needs an existing foundation with 2+ cards,
+     * which can't happen during the opening deal since foundations start and
+     * stay empty until the player's first real move.
      */
     private fun maybeResetRejectionsForNewDeal(state: GameState) {
         val previous = lastStableState ?: recentStates.lastOrNull()
-        val reason = DealBoundary.newGameReason(previous, state) ?: return
+        val reason = DealBoundary.newGameReason(previous, state)
+        if (reason == null) {
+            pendingDealBoundaryStreak = 0
+            return
+        }
+        val needsConfirmation = reason.startsWith("hidden-jump") || reason == "known-set-turnover"
+        if (needsConfirmation) {
+            pendingDealBoundaryStreak++
+            if (pendingDealBoundaryStreak < 2) {
+                fileLogger.append(
+                    "=== possible new deal ($reason), waiting for confirmation " +
+                        "(streak=$pendingDealBoundaryStreak/2) ==="
+                )
+                return
+            }
+        }
+        pendingDealBoundaryStreak = 0
         sessionRejected.clear()
         rejectedMoveStore.clear()
         if (settingsRef.get().saveMoveHistory) {

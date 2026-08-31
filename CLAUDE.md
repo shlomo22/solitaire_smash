@@ -569,6 +569,38 @@ further blind.
 Not yet re-verified - needs the next played game to confirm one deal now
 produces exactly one folder with no near-duplicate saves.
 
+**v1.4.98 pulled and checked: fix worked for its main target, one residual
+edge found and fixed in v1.4.99.** User played a real game and pushed
+`files/move_history`. Findings from reading all 5 folders + text summaries:
+- The two real-game folders (110 moves, 40 moves) are clean - the 40-move
+  one has only 2 non-move transitions total (both a waste slot briefly
+  reading `?unread` between a draw and the OCR resolving it, not noise).
+  The 110-move one's "duplicate-looking" transitions are mostly genuine
+  consecutive waste draws (`waste: Jack_Spades -> waste: Queen_Clubs` is a
+  real new card, not a misread); the real noise left is a handful of
+  flip-flopping reads on one long, deep tableau cascade - a known,
+  separately-documented recognition-accuracy limitation (see "long-cascade
+  compounding" below), not something this hook's timing can fix.
+- Fragmentation is real but now confined to the opening ~3 seconds of a
+  session (3 tiny folders before the real 110-move folder takes over),
+  down from spanning an entire short game before v1.4.98. Root cause:
+  `maybeResetRejectionsForNewDeal` is only called from the confirmed branch
+  now, but *even a confirmed read* can land on a still-mid-deal frame, and
+  two separate confirmed reads a moment apart can each look like a big
+  enough jump to `DealBoundary` to count as "a new game" on their own.
+- **v1.4.99** requires `hidden-jump`/`known-set-turnover` (the reasons that
+  actually fired repeatedly mid-deal - hidden count and the known-card set
+  both swing wildly while cards are still being revealed) on 2 consecutive
+  confirmed calls before acting, same idea as `visualChangeStreak`
+  elsewhere in this file. Deliberately does NOT gate `fresh-layout` or
+  `foundation-drop` the same way: `fresh-layout` only ever fires once by
+  construction (`DealBoundary.newGameReason` returns null again the moment
+  `previous` also matches a fresh layout), so requiring it twice would mean
+  it could never fire at all; `foundation-drop` needs an existing
+  foundation with 2+ cards, which is structurally impossible during the
+  opening deal since foundations start and stay empty until the player's
+  first real move. Not yet re-verified - needs the next played game.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
