@@ -944,7 +944,7 @@ class GameStateDetector(
             legacyCard = legacyCard,
             tightCard = tightCard,
             baseCard = baseCard,
-            inkGuess = wasteInkGuess,
+            tallJackShape = tallJackShapeFromRegion(bitmap, tightWasteRegion),
             ocrRank = wasteOcrAttempt?.guess?.rank
         )
         val correctedRank = when {
@@ -1343,6 +1343,24 @@ class GameStateDetector(
         val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
         return try {
             RankInkHeuristics.guess(crop)
+        } finally {
+            crop.recycle()
+        }
+    }
+
+    /** Waste Four→Jack only — see [RankInkHeuristics.matchesTallJack]. */
+    private fun tallJackShapeFromRegion(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): Boolean {
+        val left = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = region.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return false
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            RankInkHeuristics.matchesTallJack(crop)
         } finally {
             crop.recycle()
         }

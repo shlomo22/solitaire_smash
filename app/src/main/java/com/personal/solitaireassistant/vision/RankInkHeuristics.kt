@@ -13,7 +13,103 @@ import kotlin.math.min
 object RankInkHeuristics {
     data class Guess(val rank: Rank, val confidence: Float)
 
+    private data class ShapeMetrics(
+        val density: Float,
+        val aspect: Float,
+        val topR: Float,
+        val midR: Float,
+        val botR: Float,
+        val leftR: Float,
+        val midCR: Float,
+        val rightR: Float,
+        val colValleys: Int
+    )
+
     fun guess(bitmap: Bitmap): Guess? {
+        val m = shapeMetrics(bitmap) ?: return null
+        // Very rough shape rules for Smash's bubbly ranks.
+        return when {
+            // A: pointed top, wider bottom, hollow-ish mid
+            m.aspect in 0.55f..1.15f && m.topR < 0.28f && m.botR > 0.32f && m.midCR < 0.42f &&
+                m.density in 0.08f..0.32f ->
+                Guess(Rank.Ace, 0.62f)
+
+            // 10: two glyphs with a gap, or a clearly wide pair. Must beat K,
+            // which also has left+right ink.
+            m.colValleys >= 1 && m.aspect > 0.95f && m.density in 0.10f..0.32f ->
+                Guess(Rank.Ten, 0.60f)
+            m.aspect > 1.18f && m.density in 0.10f..0.30f ->
+                Guess(Rank.Ten, 0.56f)
+
+            // K: single glyph, no column gap
+            m.aspect in 0.75f..1.15f && m.density > 0.16f && m.leftR > 0.22f && m.rightR > 0.22f &&
+                m.midCR < 0.45f && m.colValleys == 0 ->
+                Guess(Rank.King, 0.58f)
+
+            // Q: round / wide with bottom weight
+            m.aspect in 0.70f..1.20f && m.density in 0.12f..0.34f && m.botR > 0.30f &&
+                m.midCR > 0.20f ->
+                Guess(Rank.Queen, 0.55f)
+
+            // J: tall and relatively narrow. Keep dens ≤ 0.28 in the general
+            // guess path — raising it to 0.40 (v1.4.108) made Queens/Tens
+            // score as Jack and broke waste via correctFiveJack (Evaluate:
+            // QD→JD, 10H→5H). Waste Four→Jack recovery uses [matchesTallJack]
+            // with the wider dens ceiling instead.
+            m.aspect < 0.70f && m.density in 0.08f..0.28f && m.midCR > 0.30f ->
+                Guess(Rank.Jack, 0.55f)
+
+            // 8: stacked weight top+bot, lighter mid often
+            m.aspect in 0.55f..0.95f && abs(m.topR - m.botR) < 0.12f && m.midR < 0.40f &&
+                m.density in 0.12f..0.34f ->
+                Guess(Rank.Eight, 0.52f)
+
+            // 2: heavier bottom
+            m.aspect in 0.55f..1.05f && m.botR > m.topR + 0.08f && m.density in 0.10f..0.30f ->
+                Guess(Rank.Two, 0.50f)
+
+            // 3: similar to 2 but more mid/right
+            m.aspect in 0.55f..1.00f && m.rightR > m.leftR + 0.05f && m.density in 0.10f..0.30f ->
+                Guess(Rank.Three, 0.48f)
+
+            // 4: open top-left-ish, strong vertical
+            m.aspect in 0.55f..1.10f && m.topR < 0.38f && m.leftR < 0.40f && m.density in 0.10f..0.28f ->
+                Guess(Rank.Four, 0.48f)
+
+            // 9 / 6 rough
+            m.aspect in 0.55f..0.95f && m.topR > m.botR + 0.05f && m.density in 0.12f..0.32f ->
+                Guess(Rank.Nine, 0.47f)
+
+            m.aspect in 0.55f..0.95f && m.botR > m.topR + 0.05f && m.density in 0.12f..0.32f ->
+                Guess(Rank.Six, 0.46f)
+
+            // 7: top-heavy
+            m.aspect in 0.55f..1.10f && m.topR > 0.38f && m.botR < 0.30f ->
+                Guess(Rank.Seven, 0.47f)
+
+            // 5
+            m.aspect in 0.55f..1.00f && m.density in 0.10f..0.30f ->
+                Guess(Rank.Five, 0.42f)
+
+            else -> null
+        }
+    }
+
+    /**
+     * Waste Four→Jack recovery only. Full waste-card crops of real Jacks sit
+     * at dens ~0.34-0.35 (corner J + center J + pip); the general [guess]
+     * Jack dens ceiling stays 0.28 so Queens/Tens are not re-labeled Jack.
+     * Golden scan: aspect &lt; 0.70 + dens ≤ 0.40 + midCR &gt; 0.30 hits 14/14
+     * waste Jacks and 0/17 waste Fours (Fours have aspect ≥ 0.70).
+     */
+    fun matchesTallJack(bitmap: Bitmap): Boolean {
+        val m = shapeMetrics(bitmap) ?: return false
+        return m.aspect < 0.70f &&
+            m.density in 0.08f..0.40f &&
+            m.midCR > 0.30f
+    }
+
+    private fun shapeMetrics(bitmap: Bitmap): ShapeMetrics? {
         val w = bitmap.width
         val h = bitmap.height
         if (w < 24 || h < 24) return null
@@ -73,7 +169,7 @@ object RankInkHeuristics {
 
         val bw = (maxX - minX).coerceAtLeast(1).toFloat()
         val bh = (maxY - minY).coerceAtLeast(1).toFloat()
-        val aspect = bw / bh // width/height of ink bbox
+        val aspect = bw / bh
 
         val topBand = rows.take((rows.size * 0.33f).toInt().coerceAtLeast(1)).sum()
         val midBand = rows.drop((rows.size * 0.33f).toInt())
@@ -110,71 +206,16 @@ object RankInkHeuristics {
             }
         }
 
-        // Very rough shape rules for Smash's bubbly ranks.
-        return when {
-            // A: pointed top, wider bottom, hollow-ish mid
-            aspect in 0.55f..1.15f && topR < 0.28f && botR > 0.32f && midCR < 0.42f &&
-                density in 0.08f..0.32f ->
-                Guess(Rank.Ace, 0.62f)
-
-            // 10: two glyphs with a gap, or a clearly wide pair. Must beat K,
-            // which also has left+right ink.
-            colValleys >= 1 && aspect > 0.95f && density in 0.10f..0.32f ->
-                Guess(Rank.Ten, 0.60f)
-            aspect > 1.18f && density in 0.10f..0.30f ->
-                Guess(Rank.Ten, 0.56f)
-
-            // K: single glyph, no column gap
-            aspect in 0.75f..1.15f && density > 0.16f && leftR > 0.22f && rightR > 0.22f &&
-                midCR < 0.45f && colValleys == 0 ->
-                Guess(Rank.King, 0.58f)
-
-            // Q: round / wide with bottom weight
-            aspect in 0.70f..1.20f && density in 0.12f..0.34f && botR > 0.30f &&
-                midCR > 0.20f ->
-                Guess(Rank.Queen, 0.55f)
-
-            // J: tall and relatively narrow. Dens ceiling 0.40 (was 0.28):
-            // full waste-card crops of real Jacks sit at ~0.34-0.35 because
-            // corner J + center J + suit pip all land in the center ROI
-            // (golden scan: 14/14 waste Jacks, 0/17 waste Fours — Fours have
-            // aspect ≥ 0.70 so they never take this branch).
-            aspect < 0.70f && density in 0.08f..0.40f && midCR > 0.30f ->
-                Guess(Rank.Jack, 0.55f)
-
-            // 8: stacked weight top+bot, lighter mid often
-            aspect in 0.55f..0.95f && abs(topR - botR) < 0.12f && midR < 0.40f &&
-                density in 0.12f..0.34f ->
-                Guess(Rank.Eight, 0.52f)
-
-            // 2: heavier bottom
-            aspect in 0.55f..1.05f && botR > topR + 0.08f && density in 0.10f..0.30f ->
-                Guess(Rank.Two, 0.50f)
-
-            // 3: similar to 2 but more mid/right
-            aspect in 0.55f..1.00f && rightR > leftR + 0.05f && density in 0.10f..0.30f ->
-                Guess(Rank.Three, 0.48f)
-
-            // 4: open top-left-ish, strong vertical
-            aspect in 0.55f..1.10f && topR < 0.38f && leftR < 0.40f && density in 0.10f..0.28f ->
-                Guess(Rank.Four, 0.48f)
-
-            // 9 / 6 rough
-            aspect in 0.55f..0.95f && topR > botR + 0.05f && density in 0.12f..0.32f ->
-                Guess(Rank.Nine, 0.47f)
-
-            aspect in 0.55f..0.95f && botR > topR + 0.05f && density in 0.12f..0.32f ->
-                Guess(Rank.Six, 0.46f)
-
-            // 7: top-heavy
-            aspect in 0.55f..1.10f && topR > 0.38f && botR < 0.30f ->
-                Guess(Rank.Seven, 0.47f)
-
-            // 5
-            aspect in 0.55f..1.00f && density in 0.10f..0.30f ->
-                Guess(Rank.Five, 0.42f)
-
-            else -> null
-        }
+        return ShapeMetrics(
+            density = density,
+            aspect = aspect,
+            topR = topR,
+            midR = midR,
+            botR = botR,
+            leftR = leftR,
+            midCR = midCR,
+            rightR = rightR,
+            colValleys = colValleys
+        )
     }
 }

@@ -217,15 +217,18 @@ internal object WasteRankCorrections {
      * Waste-only: tight/legacy Four with OCR empty, but center-glyph ink is a
      * tall narrow Jack. Covers the no-OCR Jack→Four magnet (220815/221831/
      * 230055) where every whole/face/corner probe returns `ocr=miss:empty`
-     * and templates lock Four at ~0.57. Directed Four→Jack only; gated on
-     * [RankInkHeuristics] Jack (aspect &lt; 0.70, dens ≤ 0.40, midCR &gt; 0.30)
-     * which separates waste Jacks from waste Fours on the current golden set.
+     * and templates lock Four at ~0.57. Directed Four→Jack only.
+     *
+     * [tallJackShape] must come from [RankInkHeuristics.matchesTallJack]
+     * (dens ≤ 0.40) — not from [RankInkHeuristics.guess], whose Jack dens
+     * ceiling stays 0.28 so Queens/Tens are not globally re-labeled Jack
+     * (v1.4.108 Evaluate: QD→JD, 10H→5H via correctFiveJack).
      */
     fun correctJackOverFourOnWaste(
         legacyCard: Card?,
         tightCard: Card?,
         baseCard: Card?,
-        inkGuess: RankInkHeuristics.Guess?,
+        tallJackShape: Boolean,
         ocrRank: Rank?
     ): Rank? {
         val fourCandidate = legacyCard?.rank == Rank.Four ||
@@ -237,9 +240,7 @@ internal object WasteRankCorrections {
         }
         // A non-Four OCR hit belongs to ocrRankOverride (Five/Six/Eight/…).
         if (ocrRank != null && ocrRank != Rank.Four) return null
-        if (inkGuess?.rank == Rank.Jack && inkGuess.confidence >= 0.55f) {
-            return Rank.Jack
-        }
+        if (tallJackShape) return Rank.Jack
         return null
     }
 
