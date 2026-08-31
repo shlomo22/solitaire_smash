@@ -1,0 +1,13 @@
+stock: 0 cards
+waste: 
+foundation0: -
+foundation1: -
+foundation2: -
+foundation3: -
+tableau0: ?unread ?unread ?unread ?unread ?unread Ten_Clubs~ Ten_Clubs~ Ten_Clubs~ Ten_Clubs~ Ten_Clubs~ Ten_Clubs~ Ten_Clubs~ ?unread
+tableau1: 
+tableau2: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread
+tableau3: 
+tableau4: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread
+tableau5: 
+tableau6: ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread ?unread
