@@ -820,6 +820,18 @@ which touch recognition timing), but worth checking on the next pull
 whether it's back near the reference range once the freeze itself stops
 dominating the user's sense of "slow."
 
+**v1.4.106 device-verified: fixed, cleanly.** Next real-game pull, user
+reported "now it feels much faster." Log confirms it's not just a calmer
+board: only 4 `runConsistency=broken` occurrences this session (vs 121
+last time), the longest consecutive run-consistency hold streak was **1
+frame** (vs 46), and the `streak=4/4` cap was never even hit - the bound
+is there but this session never needed it. `detect=` timing was also back
+to a healthy range (median 374ms, max 930ms vs the previous session's
+558ms/3952ms), consistent with the elevated timing having been a
+board-complexity artifact of that specific session rather than a rounds
+6-8 regression, as suspected. Flicker/latency work on this specific
+failure mode is done unless a future pull shows it recurring.
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game
