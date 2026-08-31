@@ -63,6 +63,20 @@ class CardRecognizer(
     private var loaded = false
     private var openCvReady = false
     private var rankCornerOcr: RankCornerOcr? = null
+    // Dedicated OCR instances + pool for attemptWasteRankOcr's parallel-probe
+    // fallback, kept separate from rankCornerOcr above (which stays the sole
+    // instance for the rare tableau/foundation OCR tiebreak, untouched by
+    // this). RankCornerOcr.attempt() synchronizes per-instance, so N separate
+    // instances is what actually buys concurrency here - N threads calling
+    // the SAME instance would just serialize on its lock with added
+    // scheduling overhead, not run any faster. ML Kit's restriction is on
+    // concurrent calls to one client, not on having multiple independent
+    // clients active at once.
+    private var wasteOcrProbePool: List<RankCornerOcr> = emptyList()
+    private val wasteOcrProbeExecutor = PriorityThreadFactory.newFixedThreadPool(
+        WASTE_OCR_PROBE_PARALLELISM,
+        "waste-ocr-probe"
+    )
 
     /** True when ML Kit text recognizer is initialized for rank OCR tiebreaks. */
     var ocrReady: Boolean = false
@@ -157,6 +171,14 @@ class CardRecognizer(
                 ocrReady = false
             }
         }
+        if (wasteOcrProbePool.isEmpty() && ocrReady) {
+            wasteOcrProbePool = try {
+                List(WASTE_OCR_PROBE_PARALLELISM) { RankCornerOcr() }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Waste OCR probe pool unavailable — falling back to sequential", t)
+                emptyList()
+            }
+        }
         openCvReady = try {
             OpenCVLoader.initLocal()
         } catch (_: Throwable) {
@@ -213,11 +235,27 @@ class CardRecognizer(
         profile: RankCornerOcr.CornerRoiProfile = RankCornerOcr.CornerRoiProfile.DEFAULT
     ): RankCornerOcr.AttemptResult {
         ensureLoaded()
+        return rankCornerOcr?.let { attemptCornerRankOcrWith(it, bitmap, region, profile) }
+            ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
+    }
+
+    /**
+     * Same crop-then-OCR as [attemptCornerRankOcr], but against a caller-
+     * supplied [RankCornerOcr] instance rather than the shared [rankCornerOcr]
+     * field - lets [attemptWasteRankOcr]'s parallel-probe path use a
+     * different pooled instance per concurrent call instead of serializing
+     * on one instance's lock.
+     */
+    private fun attemptCornerRankOcrWith(
+        ocr: RankCornerOcr,
+        bitmap: Bitmap,
+        region: BoardRegion,
+        profile: RankCornerOcr.CornerRoiProfile
+    ): RankCornerOcr.AttemptResult {
         val cardCrop = crop(bitmap, region)
             ?: return RankCornerOcr.AttemptResult(null, "ocr=miss:no-crop")
         return try {
-            rankCornerOcr?.attempt(cardCrop, profile)
-                ?: RankCornerOcr.AttemptResult(null, "ocr=miss:unavailable")
+            ocr.attempt(cardCrop, profile)
         } finally {
             cardCrop.recycle()
         }
@@ -247,6 +285,42 @@ class CardRecognizer(
             ?: RankCornerOcr.AttemptResult(null, trace)
     }
 
+    private data class WasteProbe(
+        val region: BoardRegion,
+        val profile: RankCornerOcr.CornerRoiProfile,
+        val tag: String
+    )
+
+    /**
+     * Each OCR attempt is a blocking ML Kit call; trying every region x
+     * whole/corner combination unconditionally (up to ~10 calls) is what
+     * made waste recognition the dominant per-frame cost once a rank
+     * needing OCR showed up. Two independent mitigations, in order:
+     *
+     * 1. The fast path below (region 0's "whole" attempt only) stays fully
+     *    sequential and unbatched, unchanged from before this round - the
+     *    common case (a clean, short parse: "K", "10", "A", a digit) exits
+     *    here at exactly the same cost as always, zero regression.
+     * 2. Only once that alone hasn't resolved things does this fall through
+     *    to the harder search - every remaining whole/corner probe, in the
+     *    same priority order the old sequential loop used, but dispatched
+     *    in parallel waves (size [WASTE_OCR_PROBE_PARALLELISM]) via
+     *    [wasteOcrProbePool]'s separate OCR instances instead of one ML Kit
+     *    call at a time. This is a deliberate trade: a wave that turns out
+     *    to already be resolved by its first probe still pays for the rest
+     *    of that wave (unlike the old strictly-sequential early exit, which
+     *    could skip a region's corner attempt entirely), and the circuit
+     *    breaker can only stop between waves, not mid-wave - so the worst
+     *    case can run up to [WASTE_OCR_PROBE_PARALLELISM]-1 more ML Kit
+     *    calls than before. In exchange, wall-clock cost for that worst
+     *    case (several weak/empty regions in a row - the scenario the
+     *    circuit breaker itself was built for) drops by roughly a factor of
+     *    [WASTE_OCR_PROBE_PARALLELISM], since those calls now overlap
+     *    instead of queuing. Selection is unaffected either way:
+     *    considerWasteOcrAttempt only ever raises bestHit on a strictly
+     *    higher-confidence guess, so extra probes can't change the answer,
+     *    only find it faster.
+     */
     fun attemptWasteRankOcr(
         bitmap: Bitmap,
         cardRegions: List<BoardRegion>
@@ -256,78 +330,84 @@ class CardRecognizer(
         }
         var bestHit: RankCornerOcr.AttemptResult? = null
         val traces = mutableListOf<String>()
-        val seen = mutableSetOf<String>()
         var consecutiveEmptyMisses = 0
-        // Each OCR attempt is a blocking ML Kit call; trying every region x
-        // whole/corner combination unconditionally (up to ~10 sequential
-        // calls) is what made waste recognition the dominant per-frame cost
-        // once a rank needing OCR showed up. Stop as soon as a clean, short
-        // parse comes back — that's the common case (a real rank corner:
-        // "K", "10", "A", a single digit) — and only keep searching the
-        // remaining regions when what's found so far is still weak/ambiguous.
-        // Circuit breaker: a real device log (Evaluate 132126/132140) showed
-        // all 10 attempts coming back "ocr=miss:empty" - ML Kit finding
-        // literally no text at all, not just an ambiguous one - on a card
-        // where every remaining candidate region is a different static-
-        // percentage crop of roughly the same card area. Once several
-        // regions in a row come back genuinely empty (not merely low-
-        // confidence or unparsed), further regions are very unlikely to
-        // suddenly find text, so stop paying for them. This only shortens
-        // the search on frames that were already going to end with no OCR
-        // result; it cannot change which answer wins when OCR does find
-        // something.
-        run regions@{
-            for (region in cardRegions) {
-                val key = ocrRegionKey(region)
-                if (!seen.add(key)) continue
-                val whole = attemptCornerRankOcr(
-                    bitmap,
-                    region,
-                    RankCornerOcr.CornerRoiProfile.WASTE
+
+        fun consider(attempt: RankCornerOcr.AttemptResult, tag: String) {
+            considerWasteOcrAttempt(
+                attempt = attempt,
+                regionTag = tag,
+                traces = traces,
+                bestHit = { bestHit },
+                updateBest = { bestHit = it }
+            )
+            consecutiveEmptyMisses = consecutiveEmptyMisses.updatedFor(attempt)
+        }
+
+        fun resolved(): Boolean =
+            (bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE ||
+                consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER
+
+        fun finish(): RankCornerOcr.AttemptResult {
+            val trace = traces.joinToString(";")
+            return bestHit?.copy(trace = trace) ?: RankCornerOcr.AttemptResult(null, trace)
+        }
+
+        val seen = mutableSetOf<String>()
+        val firstRegion = cardRegions.first()
+        seen += ocrRegionKey(firstRegion)
+        consider(
+            attemptCornerRankOcr(bitmap, firstRegion, RankCornerOcr.CornerRoiProfile.WASTE),
+            "whole@${ocrRegionKey(firstRegion)}"
+        )
+        if (resolved()) return finish()
+
+        val probes = mutableListOf<WasteProbe>()
+        fun addCornerProbe(region: BoardRegion) {
+            val corner = BoardLocator.wasteRankCornerRegion(region)
+            if (corner.width >= 8f && corner.height >= 8f) {
+                probes += WasteProbe(
+                    corner,
+                    RankCornerOcr.CornerRoiProfile.DIRECT,
+                    "corner@${ocrRegionKey(corner)}"
                 )
-                considerWasteOcrAttempt(
-                    attempt = whole,
-                    regionTag = "whole@$key",
-                    traces = traces,
-                    bestHit = { bestHit },
-                    updateBest = { bestHit = it }
-                )
-                consecutiveEmptyMisses = consecutiveEmptyMisses.updatedFor(whole)
-                if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
-                    return@regions
-                }
-                if (consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER) {
-                    traces += "ocr-circuit-breaker:$consecutiveEmptyMisses-empty"
-                    return@regions
-                }
-                val corner = BoardLocator.wasteRankCornerRegion(region)
-                if (corner.width >= 8f && corner.height >= 8f) {
-                    val cornerAttempt = attemptCornerRankOcr(
-                        bitmap,
-                        corner,
-                        RankCornerOcr.CornerRoiProfile.DIRECT
-                    )
-                    considerWasteOcrAttempt(
-                        attempt = cornerAttempt,
-                        regionTag = "corner@${ocrRegionKey(corner)}",
-                        traces = traces,
-                        bestHit = { bestHit },
-                        updateBest = { bestHit = it }
-                    )
-                    consecutiveEmptyMisses = consecutiveEmptyMisses.updatedFor(cornerAttempt)
-                    if ((bestHit?.guess?.confidence ?: 0f) >= WASTE_OCR_EARLY_EXIT_CONFIDENCE) {
-                        return@regions
-                    }
-                    if (consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER) {
-                        traces += "ocr-circuit-breaker:$consecutiveEmptyMisses-empty"
-                        return@regions
-                    }
-                }
             }
         }
-        val trace = traces.joinToString(";")
-        return bestHit?.copy(trace = trace)
-            ?: RankCornerOcr.AttemptResult(null, trace)
+        addCornerProbe(firstRegion)
+        for (region in cardRegions.drop(1)) {
+            val key = ocrRegionKey(region)
+            if (!seen.add(key)) continue
+            probes += WasteProbe(region, RankCornerOcr.CornerRoiProfile.WASTE, "whole@$key")
+            addCornerProbe(region)
+        }
+
+        val pool = wasteOcrProbePool
+        if (pool.isEmpty()) {
+            // OCR init failed - no pooled instances to parallelize with.
+            // Fall back to the original one-at-a-time search over the same
+            // probe list so waste OCR still works, just without the
+            // latency win.
+            for (probe in probes) {
+                consider(attemptCornerRankOcr(bitmap, probe.region, probe.profile), probe.tag)
+                if (resolved()) return finish()
+            }
+            return finish()
+        }
+
+        var index = 0
+        while (index < probes.size && !resolved()) {
+            val wave = probes.subList(index, min(index + pool.size, probes.size))
+            val futures = wave.mapIndexed { i, probe ->
+                wasteOcrProbeExecutor.submit<RankCornerOcr.AttemptResult> {
+                    attemptCornerRankOcrWith(pool[i], bitmap, probe.region, probe.profile)
+                }
+            }
+            futures.forEachIndexed { i, future -> consider(future.get(), wave[i].tag) }
+            index += wave.size
+        }
+        if (consecutiveEmptyMisses >= WASTE_OCR_EMPTY_CIRCUIT_BREAKER) {
+            traces += "ocr-circuit-breaker:$consecutiveEmptyMisses-empty"
+        }
+        return finish()
     }
 
     private fun Int.updatedFor(attempt: RankCornerOcr.AttemptResult): Int =
@@ -862,6 +942,9 @@ class CardRecognizer(
         faceDownTemplate = null
         rankCornerOcr?.close()
         rankCornerOcr = null
+        wasteOcrProbePool.forEach { it.close() }
+        wasteOcrProbePool = emptyList()
+        wasteOcrProbeExecutor.shutdown()
         ocrReady = false
         loaded = false
     }
@@ -2373,5 +2456,16 @@ class CardRecognizer(
          * static-percentage candidates.
          */
         const val WASTE_OCR_EMPTY_CIRCUIT_BREAKER = 4
+        /**
+         * Concurrent ML Kit OCR instances dedicated to attemptWasteRankOcr's
+         * parallel-probe fallback (see wasteOcrProbePool). Kept modest and
+         * bounded rather than firing every remaining probe at once: this
+         * competes for CPU with GameStateDetector's columnExecutor pool
+         * (already sized to availableProcessors()) on the same frame, and
+         * there's no device data yet on how much headroom actually exists -
+         * 2 doubles worst-case throughput without a large resource spike.
+         * Raise this only with real timing evidence that 2 isn't enough.
+         */
+        const val WASTE_OCR_PROBE_PARALLELISM = 2
     }
 }

@@ -546,6 +546,93 @@ parallelized in an earlier round - a genuinely higher-ceiling lever than
 thread priority, but a concurrency change (same risk category as rounds 2-3
 above), not attempted here without a specific plan for it yet.
 
+**v1.4.102 partial device evidence: directionally positive, not isolated.**
+User pulled a real `analysis.log` on v1.4.102 (82 confirmed frames) and a
+second log from a pre-v1.4.100 build (67 frames, confirmed older by zero
+`statusBarVisible` occurrences - that signal didn't exist yet) for
+comparison. `detect=` timing: median 338→308ms (-9%), mean 486→356ms
+(-27%), p90 1085→611ms (-44%), max 2984→1119ms (-62%), frames ≥1000ms
+13%→2%. The tail improved far more than the median, which is the right
+shape for a scheduling-priority fix (it should matter most exactly when
+something else is contending for CPU). Two honest caveats: different play
+sessions with different board activity, not a same-board A/B test; and the
+older log predates v1.4.100/101 too, so this reflects several rounds
+stacked together, not thread-priority in isolation. Keep the v1.4.102 log
+as the new reference point for the next comparison rather than the older
+one, to better isolate what the *next* change does.
+
+**Round 5 (v1.4.103, same later session): parallelize `attemptWasteRankOcr`
+itself - the higher-ceiling lever round 4 identified but didn't attempt.**
+User asked to push on this directly. Read `RankCornerOcr.attempt()` first
+because it matters more here than for any other lever in this file: it's
+`@Synchronized` **per-instance**, and `CardRecognizer` held exactly one
+shared `rankCornerOcr` instance for every OCR call (tableau/foundation
+tiebreak *and* waste). Naively submitting waste-OCR region attempts to a
+multi-thread pool while they all still call that one instance would not
+have parallelized anything - they'd serialize on its lock with pure thread-
+scheduling overhead added on top, a real trap for this specific lever that
+isn't obvious from the outside. The fix is instances, not threads: ML Kit's
+restriction is on concurrent calls to *one* client, not on running multiple
+independent clients at once, so `CardRecognizer` now also lazily builds a
+small dedicated pool of separate `RankCornerOcr` instances
+(`wasteOcrProbePool`, size `WASTE_OCR_PROBE_PARALLELISM = 2`) purely for
+this path - `rankCornerOcr` itself is untouched, so the rare tableau/
+foundation OCR tiebreak carries zero risk from this change.
+
+`attemptWasteRankOcr` is now two phases:
+1. **Unchanged fast path**: region 0's "whole" attempt runs exactly as
+   before, fully sequential, zero added cost. This is the documented common
+   case (a clean short parse: "K", "10", "A", a digit) and it exits here at
+   the same cost as every prior version.
+2. **New parallel-wave fallback**, only reached when phase 1 didn't
+   resolve: every remaining whole/corner probe (same priority order the old
+   loop used) is dispatched in waves of `WASTE_OCR_PROBE_PARALLELISM` via a
+   new `wasteOcrProbeExecutor` (also `PriorityThreadFactory`-elevated,
+   separate from `GameStateDetector`'s `wasteOcrExecutor` so the two pools
+   can't self-contend - the outer call already occupies `wasteOcrExecutor`'s
+   one thread while it blocks on the probe pool's futures, so reusing the
+   same pool for both would have deadlocked/starved instead of adding real
+   parallelism, a second easy-to-miss trap for this lever). Selection logic
+   (`considerWasteOcrAttempt`'s strictly-higher-confidence-wins rule) is
+   untouched, so extra probes can only find the same answer faster, never a
+   different one.
+
+Two deliberate, documented semantic trade-offs from batching (both compared
+in code comments against the old strictly-sequential version): a wave can
+pay for its second probe even when the first already resolved things
+(the old code could skip a region's corner attempt entirely on early exit;
+batching can't), and the circuit breaker can only stop *between* waves, not
+mid-wave, so the true worst case can run up to
+`WASTE_OCR_PROBE_PARALLELISM - 1` more ML Kit calls than before. In
+exchange, wall-clock cost for exactly the case the circuit breaker itself
+was built for (several weak/empty regions in a row) drops by roughly a
+factor of `WASTE_OCR_PROBE_PARALLELISM`, since those calls now overlap
+instead of queuing.
+
+Parallelism degree deliberately kept at 2, not higher: this pool competes
+for CPU with `GameStateDetector`'s `columnExecutor` (already sized to
+`availableProcessors()`) on the same frame, and there's no device data yet
+on how much headroom actually exists - same
+don't-reach-for-the-extreme-setting-without-evidence discipline as
+`THREAD_PRIORITY_FOREGROUND` vs `URGENT_DISPLAY` in round 4. Falls back to
+the original fully-sequential search (same probe list, one at a time) if
+the pool failed to initialize, so a same-device OCR-unavailable case still
+works, just without the latency win.
+
+**Not yet device-verified** - concurrency changes can't be validated via
+the Python-replica technique at all (nothing to numerically compare), so
+this is reasoned from the code with the same care the fingerprint-caching
+regression should have gotten, not confirmed by a real pull. What to check
+on the next pull: `timing: ... detect=` distribution (expect the tail -
+p90/max - to move again, similar to round 4's shape, on frames that
+actually needed OCR); no `overlapped=` regression in the trace lines; and
+critically, that recognized waste ranks on frames needing multiple OCR
+probes still make sense (the golden-truth Evaluate flow doesn't exercise
+`attemptWasteRankOcr`'s multi-region fallback the same way live play with a
+hard-to-read waste card does, so Evaluate coming back clean would not by
+itself confirm this path is correct - watch a real game's `moves.log`/
+`analysis.log` for waste-rank sanity specifically).
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game
