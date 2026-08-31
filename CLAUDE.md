@@ -601,6 +601,43 @@ edge found and fixed in v1.4.99.** User played a real game and pushed
   opening deal since foundations start and stay empty until the player's
   first real move. Not yet re-verified - needs the next played game.
 
+**v1.4.100: non-board screens (in-game dialog, post-game results screen)
+were being captured as if they were live board states - root cause found
+and fixed via `SmashPlayScreenGate.statusBarVisible`.** Analyzing the full
+134-move `20260831_150825` folder (see below) to answer the user's actual
+question - "could a different move have avoided getting stuck" - surfaced
+this: `0131.png` turned out to be the app's own "Finish Game?" confirm
+dialog (triggered by the player tapping End) dimming the real board
+underneath, and `0133.png` (the recorded final move) turned out to be a
+completely different screen, the post-game tournament results/leaderboard
+("Results pending", unrelated card-shaped UI). Neither is caught by the
+existing `SmashPlayScreenGate` lobby/footer checks: the dialog still shows
+an undimmed End/Undo/Rules footer (only the mid-screen is covered), and the
+results screen isn't the lobby either - so both got recognized as bogus
+"confirmed" board states, corrupting the tail of the move-history record
+with 4 garbage moves (`0000`, `0131`, `0132`, `0133` - `0000` was also
+garbage, a leftover menu-transition frame from before the real deal even
+started). Root cause: live play runs the app in immersive/fullscreen mode,
+but both the dialog and the results screen release it and expose the real
+Android status bar. Pixel-checked across the entire 134-frame folder plus
+every existing `SmashPlayScreenGateTest` fixture (5 golden samples +
+`device_5.png` + `lobby_home.jpg`): the top 2% strip's avgLuma is a flat,
+constant 0.390 on every one of 130 real live-play frames (5 different
+golden captures too) and 0.417 on the lobby screen, but only 0.124-0.189 on
+the 4 garbage frames - a clean, wide (0.10+ either side), zero-exception
+split on every fixture available. Added `SmashPlayScreenGate.statusBarVisible`
+(threshold 0.29, sampled in raw bitmap coordinates rather than board-relative
+since board detection itself is unreliable on these off-board screens) and
+required `!statusBarVisible` in `GameStateDetector.isLivePlayScreen` - this
+gate feeds both the move-history save path and the live overlay-arrow
+visibility, so this was also a latent live-play bug (a bogus arrow could
+theoretically render over a "Finish Game?" dialog), not just a move-history
+cosmetic one. Two new fixtures (`dialog_finish_game.png`,
+`results_pending.png`, both pulled from the real `20260831_150825` folder)
+plus two new `SmashPlayScreenGateTest` cases lock this in. Only validated
+against this one device/theme's pixel values - not yet checked against a
+broader device sample, unlike most other thresholds in this file.
+
 **v1.4.99 device-verified: fully fixed.** Next real-game pull (commit
 `2c34db6`) produced a single clean folder `20260831_150825/` with 134 moves,
 zero fragmentation, zero exact-duplicate saves (checked programmatically).
@@ -624,6 +661,44 @@ peeking neighbor instead of the true front card). No new code lever
 identified beyond what's already tracked there (the v1.4.92 ROI
 enlargement, not yet Evaluate-verified, is still the live candidate fix).
 Logged here as corroborating real-play evidence, not a new bug.
+
+**Post-mortem of the `20260831_150825` stuck game: corrects a wrong claim
+from an earlier compaction summary, and finds one concrete missed move.**
+An earlier session summary described the game's final state as a "13-card
+K♣-to-2♥ stuck cascade in tableau1" - that was wrong, sourced from
+misreading the garbage frames fixed above (`0132`/`0133`, the results
+screen), not the real board. The real final board (moves 123-130, fully
+static except stock/waste cycling - the actual stuck position) has
+tableau1 at only 3 cards (`King_Clubs Queen_Diamonds Jack_Clubs`).
+Foundations: Spades=2, Hearts=3, Clubs=2, Diamonds=0 (empty). Pixel-checked
+`0126.png`: tableau2's exposed top card is unambiguously **Four of
+Hearts** (real heart pip, confirmed by crop), but the recognizer tagged it
+`Four_Hearts~` (suit-ambiguous). Hearts foundation sat at Three the entire
+static stretch, so this was a real, legal, safe foundation move sitting
+exposed and unplayed - very likely never suggested because, per this
+file's own documented tradeoff, a suit-ambiguous flag suppresses the
+foundation arrow. This is the first known instance of that tradeoff
+actually costing a move during real play, not just a golden-set accuracy
+point - previous evidence for suit ambiguity was all Evaluate-only. Not
+a fix (per "Don't spend another round on C↔S/suit-ambiguity scoring" -
+this is a red H/D pair, not the parked black C/S one, but the same
+general tradeoff applies and touching it risks the same net-regression
+history), just documented corroborating evidence. Chaining one legal move
+forward from there (Five_Clubs -> Six_Hearts becomes available once
+Four_Hearts leaves) does not obviously cascade into a full win - the board
+still looks jammed. Whether an earlier, different move could have won is
+not something this log can answer rigorously: `MoveHistoryStore.record`
+only saves the single current waste-top card (`GameState.waste` is a
+1-element window, not the full pile), so the original stock draw order
+can't be reconstructed from this log format at all, and the fully-built
+alternating tableau2 run's own suit reads flip-flopped between the two
+adjacent garbage frames `0132`/`0133` (same ranks, opposite suits both
+internally consistent) - real evidence the suit reads on a long cascade
+run are not reliable enough to trust for a retroactive full-deck replay,
+independent of the screen-gating bug. A genuine "replay and try alternate
+lines" feature would need the recorder to capture the full waste/stock
+order and the discrete move list, not periodic confirmed snapshots - not
+attempted here for lack of a concrete request to build it.
 
 ## Solver heuristics
 

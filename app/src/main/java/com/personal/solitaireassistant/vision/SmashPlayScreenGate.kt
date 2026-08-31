@@ -15,6 +15,7 @@ object SmashPlayScreenGate {
     data class Signals(
         val gameControlFooter: Boolean,
         val lobbyHomeScreen: Boolean,
+        val statusBarVisible: Boolean,
         val debug: DebugMetrics = DebugMetrics()
     )
 
@@ -26,7 +27,8 @@ object SmashPlayScreenGate {
         val playButtonRatio: Float = 0f,
         val leftWhite: Float = 0f,
         val centerWhite: Float = 0f,
-        val rightWhite: Float = 0f
+        val rightWhite: Float = 0f,
+        val statusBarLuma: Float = 0f
     )
 
     private val gameControlFooter = RectF(0f, 0.795f, 1f, 0.965f)
@@ -37,6 +39,22 @@ object SmashPlayScreenGate {
     private val lobbyNavCenter = RectF(0.36f, 0.885f, 0.64f, 1f)
     private val tournamentListBand = RectF(0f, 0.30f, 1f, 0.72f)
 
+    // Live play runs the app in immersive/fullscreen mode, so this strip is
+    // pure app background (avgLuma 0.390, constant across all 130 real frames
+    // in a pixel-checked real game). An in-game modal dialog ("Finish Game?")
+    // or a different screen entirely (post-game results/leaderboard) releases
+    // immersive mode and exposes the real Android status bar here, which is
+    // dark (avgLuma 0.124-0.189 on the same 4 non-live frames from that game) -
+    // neither of those screens is caught by the footer/lobby checks above (the
+    // dialog case still shows an undimmed End/Undo/Rules footer since only the
+    // mid-screen is covered; the results screen isn't the lobby either).
+    // Sampled in raw bitmap coordinates, not board-relative, since board
+    // detection itself is unreliable on these off-board screens. Threshold
+    // sits at the midpoint of that one-device sample (0.390 vs 0.189) with
+    // ~0.10 margin either side; not yet validated against other devices/themes.
+    private val statusBarStrip = RectF(0f, 0f, 1f, 0.02f)
+    private const val STATUS_BAR_LUMA_THRESHOLD = 0.29f
+
     fun analyze(bitmap: Bitmap, board: LocatedBoard, locator: BoardLocator): Signals {
         val footer = SmashColorAnalyzer.analyze(bitmap, locator.map(board, gameControlFooter))
         val left = SmashColorAnalyzer.analyze(bitmap, locator.map(board, gameControlLeft))
@@ -46,6 +64,13 @@ object SmashPlayScreenGate {
         val navCenterRegion = locator.map(board, lobbyNavCenter)
         val navCenterPink = analyzeNavCenterPink(bitmap, navCenterRegion)
         val tournamentBand = analyzeTournamentBand(bitmap, locator.map(board, tournamentListBand))
+        val statusBarRegion = BoardRegion(
+            left = statusBarStrip.left * bitmap.width,
+            top = statusBarStrip.top * bitmap.height,
+            right = statusBarStrip.right * bitmap.width,
+            bottom = (statusBarStrip.bottom * bitmap.height).coerceAtLeast(statusBarStrip.top * bitmap.height + 1f)
+        )
+        val statusBarLuma = SmashColorAnalyzer.analyze(bitmap, statusBarRegion).avgLuma
 
         val labeledButtons = listOf(left, center, right).count { looksLikeGameControlButton(it) }
         val lobbyHomeScreen = looksLikeLobbyNavBar(navBar, navCenterPink, tournamentBand)
@@ -55,10 +80,12 @@ object SmashPlayScreenGate {
         val gameControlFooter = footer.avgLuma <= 0.48f &&
             !lobbyHomeScreen &&
             tournamentBand.playButtonRatio < 0.02f
+        val statusBarVisible = statusBarLuma < STATUS_BAR_LUMA_THRESHOLD
 
         return Signals(
             gameControlFooter = gameControlFooter,
             lobbyHomeScreen = lobbyHomeScreen,
+            statusBarVisible = statusBarVisible,
             debug = DebugMetrics(
                 labeledButtons = labeledButtons,
                 footerLuma = footer.avgLuma,
@@ -67,7 +94,8 @@ object SmashPlayScreenGate {
                 playButtonRatio = tournamentBand.playButtonRatio,
                 leftWhite = left.whiteRatio,
                 centerWhite = center.whiteRatio,
-                rightWhite = right.whiteRatio
+                rightWhite = right.whiteRatio,
+                statusBarLuma = statusBarLuma
             )
         )
     }

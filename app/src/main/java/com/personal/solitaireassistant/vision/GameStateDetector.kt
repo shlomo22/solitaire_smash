@@ -1187,6 +1187,7 @@ class GameStateDetector(
         diagnostics += "livePlayScreen=$livePlayScreen"
         diagnostics += "gameFooter=${screenSignals.gameControlFooter}"
         diagnostics += "lobbyScreen=${screenSignals.lobbyHomeScreen}"
+        diagnostics += "statusBarVisible=${screenSignals.statusBarVisible}"
         if (totalCards == 0) {
             slotHitCache = newSlotCache
             return DetectionResult(
@@ -1299,7 +1300,8 @@ class GameStateDetector(
         return enoughCards &&
             smashColor &&
             screenSignals.gameControlFooter &&
-            !screenSignals.lobbyHomeScreen
+            !screenSignals.lobbyHomeScreen &&
+            !screenSignals.statusBarVisible
     }
 
     /**

@@ -70,6 +70,49 @@ class SmashPlayScreenGateTest {
         bitmap.recycle()
     }
 
+    @Test
+    fun goldenGameBoardHasHiddenStatusBar() {
+        val bitmap = loadGolden("20260819_211539")
+        val board = BoardLocator().locate(bitmap)
+        val signals = SmashPlayScreenGate.analyze(bitmap, board, BoardLocator())
+        println("game debug=${signals.debug}")
+
+        assertFalse("real deal runs immersive - no status bar", signals.statusBarVisible)
+
+        bitmap.recycle()
+    }
+
+    @Test
+    fun finishGameDialogIsNotLivePlay() {
+        // Real move-history capture: an in-game "Finish Game?" confirmation
+        // dialog dims the board but leaves the End/Undo/Rules footer visible
+        // undimmed, so gameControlFooter alone doesn't catch it - the status
+        // bar becoming visible (immersive mode released) is what does.
+        val bitmap = load("screenshots/dialog_finish_game.png")
+        val board = BoardLocator().locate(bitmap)
+        val signals = SmashPlayScreenGate.analyze(bitmap, board, BoardLocator())
+        println("dialog debug=${signals.debug}")
+
+        assertTrue("dialog should expose the status bar", signals.statusBarVisible)
+
+        bitmap.recycle()
+    }
+
+    @Test
+    fun resultsPendingScreenIsNotLivePlay() {
+        // Real move-history capture: the post-game tournament results/
+        // leaderboard screen, a completely different UI from the board that
+        // was still getting misread as tableau content before this fix.
+        val bitmap = load("screenshots/results_pending.png")
+        val board = BoardLocator().locate(bitmap)
+        val signals = SmashPlayScreenGate.analyze(bitmap, board, BoardLocator())
+        println("results debug=${signals.debug}")
+
+        assertTrue("results screen should expose the status bar", signals.statusBarVisible)
+
+        bitmap.recycle()
+    }
+
     private fun load(path: String) =
         javaClass.classLoader!!.getResourceAsStream(path).use { stream ->
             assertNotNull("missing $path", stream)
