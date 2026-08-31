@@ -22,7 +22,16 @@ data class DetectionResult(
     val recognizedSlots: List<RecognizedSlot> = emptyList(),
     val livePlayScreen: Boolean = false,
     /** State after suit scrub, before [DeckConstraintPass]. */
-    val preConstraintState: GameState? = null
+    val preConstraintState: GameState? = null,
+    /**
+     * True when [tableauRunConsistencyDiagnostics] found a resolved tableau
+     * run whose adjacent cards don't form a legal descending/alternating-
+     * color sequence this frame - a self-flagged-broken read, not just a
+     * low-confidence one. See [SuggestionStickiness] for how this is used
+     * to avoid switching the displayed arrow off the back of a frame that's
+     * already known to be internally inconsistent.
+     */
+    val hasRunConsistencyViolation: Boolean = false
 )
 
 class GameStateDetector(
@@ -1156,7 +1165,8 @@ class GameStateDetector(
             missBoundsShifted += result.stats.missBounds
             tableauColumnNanos[result.col] = result.elapsedNanos
         }
-        diagnostics += tableauRunConsistencyDiagnostics(tableau)
+        val runConsistencyViolations = tableauRunConsistencyDiagnostics(tableau)
+        diagnostics += runConsistencyViolations
         val wasteOcrAttempt = when {
             !wasteOcrRelevant -> null
             reusableWasteOcr != null -> reusableWasteOcr.result
@@ -1257,7 +1267,8 @@ class GameStateDetector(
             board = board,
             recognizedSlots = recognizedSlots,
             livePlayScreen = livePlayScreen,
-            preConstraintState = scrubbed
+            preConstraintState = scrubbed,
+            hasRunConsistencyViolation = runConsistencyViolations.isNotEmpty()
         )
     }
 

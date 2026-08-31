@@ -811,7 +811,8 @@ class AnalysisPipeline(
         val best = applySuggestionStickiness(
             ranked = ranked,
             best = rawBest,
-            boardVisuallyChanged = boardVisuallyChanged
+            boardVisuallyChanged = boardVisuallyChanged,
+            hasRunConsistencyViolation = detection.hasRunConsistencyViolation
         ) ?: return
 
         // Always draw the best legal move once the board is stable.
@@ -1013,7 +1014,8 @@ class AnalysisPipeline(
     private fun applySuggestionStickiness(
         ranked: List<ScoredMove>,
         best: ScoredMove,
-        boardVisuallyChanged: Boolean
+        boardVisuallyChanged: Boolean,
+        hasRunConsistencyViolation: Boolean = false
     ): ScoredMove? {
         val result = SuggestionStickiness.apply(
             previous = lastSuggestion?.scored,
@@ -1024,7 +1026,8 @@ class AnalysisPipeline(
                 pendingCandidate = pendingSuggestionCandidate,
                 pendingStreak = pendingSuggestionStreak
             ),
-            visualChangeStreak = visualChangeStreak
+            visualChangeStreak = visualChangeStreak,
+            hasRunConsistencyViolation = hasRunConsistencyViolation
         )
         pendingSuggestionCandidate = result.state.pendingCandidate
         pendingSuggestionStreak = result.state.pendingStreak

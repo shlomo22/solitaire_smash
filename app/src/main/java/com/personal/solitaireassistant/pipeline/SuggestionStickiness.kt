@@ -44,10 +44,45 @@ internal object SuggestionStickiness {
          * that don't track a streak keep the original always-immediate
          * behavior.
          */
-        visualChangeStreak: Int = 1
+        visualChangeStreak: Int = 1,
+        /**
+         * True when this frame's own board read is self-inconsistent -
+         * GameStateDetector.tableauRunConsistencyDiagnostics found a
+         * resolved tableau run whose adjacent cards don't form a legal
+         * descending/alternating-color sequence. Real device log evidence:
+         * a King-Queen-Jack tableau run toggled between a valid reading and
+         * a self-flagged-broken one roughly every 800ms on an otherwise
+         * completely static board (no player action), and the arrow
+         * flickered between two different moves in lockstep with it -
+         * because the *board's own scoring* genuinely changed which moves
+         * were legal each time, this wasn't something the existing
+         * pending-streak confirmation (below) could catch: several
+         * consecutive frames would agree with each other on a bad reading,
+         * satisfying the confirmation, before flipping to several frames
+         * agreeing on a good one. Defaults to false so callers that don't
+         * pass it keep prior behavior exactly.
+         */
+        hasRunConsistencyViolation: Boolean = false
     ): Result {
         if (previous == null || best.move == previous.move) {
             return Result(best, idle)
+        }
+        if (hasRunConsistencyViolation && ranked.any { it.move == previous.move }) {
+            // Don't let a frame we already know is internally broken decide
+            // whether to switch away from a move we can still legally show.
+            // State is left untouched (not advanced or reset) so the next
+            // clean frame's pending-streak tracking picks up exactly where
+            // this one found it, as if this frame had never run. If even
+            // the previous move has vanished under this broken reading,
+            // fall through to the normal handling below instead - there's
+            // nothing safe left to keep showing, so the existing streak-
+            // based confirmation is the best available signal.
+            return Result(
+                display = null,
+                state = state,
+                holdReason = "HOLD prev=${previous.move.label} kept (raw=${best.move.label} " +
+                    "ignored: tableau run-consistency violation this frame)"
+            )
         }
         // Pixel-level "the board changed" is for adopting a *new card play*
         // after the user already moved. Draw/recycle is the always-legal

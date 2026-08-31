@@ -176,6 +176,63 @@ class SuggestionStickinessTest {
     }
 
     @Test
+    fun runConsistencyViolationHoldsPreviousMoveWhenStillRanked() {
+        // Real device log evidence: a tableau run toggled between a valid
+        // reading and a self-flagged-broken one (GameStateDetector's own
+        // adjacency check) roughly every 800ms on a static board, flickering
+        // the arrow between two moves in lockstep. A violated frame must not
+        // be allowed to switch the display even though boardVisuallyChanged
+        // could be true and the streak logic alone wouldn't catch it (both
+        // readings are internally consistent frame-to-frame, they just
+        // alternate).
+        val result = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = wasteToCol0,
+            ranked = listOf(wasteToCol0, tableauMove),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            hasRunConsistencyViolation = true
+        )
+        assertNull(result.display)
+        assertTrue(result.holdReason!!.contains("run-consistency"))
+        // State is left completely untouched, not advanced - the next clean
+        // frame should behave as if this one never happened.
+        assertEquals(SuggestionStickiness.State(), result.state)
+    }
+
+    @Test
+    fun runConsistencyViolationFallsThroughWhenPreviousAlsoVanished() {
+        // Nothing safe left to keep showing - defer to the normal
+        // vanished-move handling rather than freezing forever.
+        val result = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = drawStock,
+            ranked = listOf(drawStock),
+            boardVisuallyChanged = false,
+            state = SuggestionStickiness.State(),
+            hasRunConsistencyViolation = true
+        )
+        assertNull(result.display)
+        assertEquals(Move.DrawStock, result.state.pendingCandidate)
+        assertEquals(1, result.state.pendingStreak)
+        assertTrue(result.holdReason!!.contains("vanished from ranked"))
+    }
+
+    @Test
+    fun runConsistencyViolationIsIgnoredWhenMoveUnchanged() {
+        // best == previous is a same-move no-op regardless of the flag.
+        val result = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = tableauMove,
+            ranked = listOf(tableauMove, drawStock),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            hasRunConsistencyViolation = true
+        )
+        assertEquals(tableauMove.move, result.display?.move)
+    }
+
+    @Test
     fun stillAnimatingFrameThatAgreesWithCurrentDisplayIsImmediate() {
         // Regardless of streak, a read that matches what's already on
         // screen needs no extra confirmation - only a *differing* read

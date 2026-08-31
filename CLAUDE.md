@@ -633,6 +633,80 @@ hard-to-read waste card does, so Evaluate coming back clean would not by
 itself confirm this path is correct - watch a real game's `moves.log`/
 `analysis.log` for waste-rank sanity specifically).
 
+**Round 6 (v1.4.104, same later session): root-caused and fixed a real
+oscillating-arrow flicker from a real device pull - the first flicker fix
+in this file driven by an actual reproduced episode, not a hypothesis.**
+User pulled `analysis.log` right after stopping a game specifically because
+the arrow "became slower and was flickering." Extracting every
+`OUTCOME=`/`HOLD` line's timestamp found a clean, repeating episode: from
+20:17:22.969 to 20:17:27.842 (4.9s), the arrow alternated 4 times between
+`Tableau 6 -> Tableau 2` (score 253.5) and `Waste -> Tableau 1` (score
+228.0), each held 750-870ms - not random noise, a sustained back-and-forth
+right up until the user stopped.
+
+Root cause, traced through the full `recognition:` block on both sides of
+one alternation: tableau column 5 has a King-Queen-Jack run. In frames
+where `Tableau 6 -> Tableau 2` is legal, the run resolves correctly
+(`King_Hearts, Queen_Clubs, Jack_Hearts~`). In frames where it vanishes,
+the *same three physical cards* resolve to `Three_Hearts, King_Hearts,
+Queen_Clubs` instead - and the app's own `tableauRunConsistencyDiagnostics`
+(added v1.4.89, previously log-only) correctly flags this second reading
+as broken (`Three_Hearts->King_Hearts` isn't a legal adjacent pair). Traced
+into `TableauCascadeSupport.prefersGeometricOverDirectRead` and
+`repairIllegalBottom`: the column's true bottom (exposed) card, Jack,
+scored 0.84 confidence in the good frames and 0.78 in the bad ones - a
+plausible amount of ordinary per-frame template-score jitter on physically
+unchanging pixels (matching the "MediaProjection has inherent per-frame
+noise" finding from the round-2 fingerprint investigation above) - and
+0.78 falls just under `TableauCascadeSupport.BOTTOM_ANCHOR_FLOOR = 0.80f`,
+which gates whether the geometric-correction cascade is allowed to fire at
+all for the rest of the column. Below the floor, `repairIllegalBottom`
+instead “repairs” the bottom card itself against whatever the card above
+it happened to resolve to, consuming the geometric anchor and leaving the
+column self-inconsistent one card up.
+
+**Deliberately did not touch `BOTTOM_ANCHOR_FLOOR` or any other cascade
+threshold** - this file has two prior regressions (`faceDownOverlap`,
+`firstFaceTop`) from single-sample-justified threshold tuning in exactly
+this area, and one flicker episode is not the broad evidence the "Don't"
+section demands before doing that again. Instead, fixed it one layer up,
+at the point the arrow actually reacts to the board: `SuggestionStickiness`
+already exists precisely to decide when a differing frame should switch
+the display, and `GameStateDetector.tableauRunConsistencyDiagnostics`
+already exists precisely to detect this failure mode - neither had been
+wired to the other. `DetectionResult` gained
+`hasRunConsistencyViolation: Boolean`, computed from that diagnostic's
+output; `SuggestionStickiness.apply` gained a
+`hasRunConsistencyViolation` parameter (default `false`, so every existing
+call site and test is unaffected) that, when true and the *previously-shown*
+move is still legally rankable this frame, holds the current display and
+leaves the pending-streak state completely untouched - as if the frame had
+never run - rather than let a self-admittedly-broken read decide anything.
+If even the previous move has vanished under the broken reading, it falls
+through to the existing vanished-move handling unchanged; there's nothing
+safe left to keep showing in that case.
+
+This targets the exact failure this file's existing streak-based
+confirmation (`visualChangeStreak`, round 1) *couldn't* catch: that
+mechanism assumes noise looks like a single disagreeing frame among
+otherwise-agreeing ones, but here several consecutive frames agreed with
+each other on the *bad* reading (satisfying any same-magnitude
+confirmation threshold) before flipping to several frames agreeing on the
+*good* one - a sustained state flip, not single-frame jitter. Reasoned
+from the code and traced through real logged confidence numbers, not
+device-verified yet - concurrency/inline-heuristic interactions like this
+one are exactly the kind of thing that needs a real pull to confirm. Four
+new `SuggestionStickinessTest` cases cover: hold-when-still-ranked,
+fall-through-when-also-vanished, no-op-when-move-unchanged, and (implicitly
+via the existing suite) zero behavior change when the flag is left at its
+default. What to check on the next pull: whether this exact
+`Tableau X -> Y` / `Waste -> Z` alternation pattern (or any repeating
+sub-second arrow alternation) stops appearing in `analysis.log`, and that
+`HOLD prev=... kept (raw=... ignored: tableau run-consistency violation`
+lines show up exactly during the windows a `tableauN.runConsistency=broken`
+diagnostic is also present, confirming the two are actually linked in
+practice and not just in theory.
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game
