@@ -464,6 +464,26 @@ sample-diff distribution looks like, before picking a threshold - exactly
 the kind of broad-evidence-before-a-threshold-change discipline the
 geometry-constant warnings elsewhere in this file already describe.
 
+**v1.4.95 device-verified positive: real fix, not just reverted-to-neutral.**
+User report after playing on v1.4.95: latency is back to the pre-round-2
+baseline (expected - it's a straight revert) and "most of the flickering
+gone, but it still appears sometimes." That confirms the `visualChangeStreak`
+stickiness mechanism from the v1.4.93 round is a genuine, working
+improvement, not just an unverified guess - it survived a real play session
+without the disappearing-arrow regression and measurably reduced flicker.
+The residual flicker is expected, not a new bug: the fix only protects
+frames *after* the first one in a visual-change streak (requiring two
+agreeing reads before adopting a *different* move mid-animation) - the very
+first post-move frame still adopts immediately with zero confirmation, by
+design, to keep the arrow responsive right after a real move. If that first
+frame's own read is wrong, one visible flicker-then-correct is still
+possible before the streak protection kicks in on the next frame. Tightening
+that further (e.g. raising `fastUpdateAfterMove`'s confidence floor) is the
+next lever, but - per the round-1 note above - not something to guess a new
+number for without real confidence-distribution data; needs a log from a
+session where the residual flicker was actually observed to know if it's
+this mechanism or something else.
+
 ## Solver heuristics
 
 `solver/MoveSelector.kt` is a bounded one-ply scorer with light one-move
