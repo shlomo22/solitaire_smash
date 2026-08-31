@@ -85,6 +85,22 @@ class BoardLocator(
                 right = cardRegion.left + cardRegion.width * 0.48f,
                 bottom = cardRegion.top + cardRegion.height * 0.42f
             )
+
+        /**
+         * Large center-face rank glyph on a waste card. Smash draws a chunky
+         * center rank that ML Kit often reads when the small corner patch
+         * returns empty (Evaluate 220815/221831/230055: Jack→Four with every
+         * corner/whole probe `ocr=miss:empty`; same empty path on 8D→Four).
+         * Matches [RankInkHeuristics]' center ROI fractions so face OCR and
+         * ink shape look at the same glyph.
+         */
+        fun wasteFaceRankRegion(cardRegion: BoardRegion): BoardRegion =
+            BoardRegion(
+                left = cardRegion.left + cardRegion.width * 0.18f,
+                top = cardRegion.top + cardRegion.height * 0.28f,
+                right = cardRegion.left + cardRegion.width * 0.82f,
+                bottom = cardRegion.top + cardRegion.height * 0.78f
+            )
     }
 
     /**

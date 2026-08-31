@@ -45,6 +45,18 @@ class WasteOcrRegionsTest {
         assertTrue(corner.height >= 50f)
     }
 
+    @Test
+    fun wasteFaceRankRegionMatchesInkHeuristicCenter() {
+        val card = BoardRegion(707f, 503f, 846f, 714f)
+        val face = BoardLocator.wasteFaceRankRegion(card)
+        assertEquals(707f + card.width * 0.18f, face.left, 0.01f)
+        assertEquals(503f + card.height * 0.28f, face.top, 0.01f)
+        assertEquals(707f + card.width * 0.82f, face.right, 0.01f)
+        assertEquals(503f + card.height * 0.78f, face.bottom, 0.01f)
+        assertTrue(face.width > card.width * 0.5f)
+        assertTrue(face.height > card.height * 0.4f)
+    }
+
     private fun board1080x2340(): LocatedBoard {
         val bitmap = Bitmap.createBitmap(1080, 2340, Bitmap.Config.ARGB_8888)
         return try {

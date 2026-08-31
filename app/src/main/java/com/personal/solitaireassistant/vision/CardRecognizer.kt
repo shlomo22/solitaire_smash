@@ -372,6 +372,21 @@ class CardRecognizer(
                 )
             }
         }
+        fun addFaceProbe(region: BoardRegion) {
+            val face = BoardLocator.wasteFaceRankRegion(region)
+            if (face.width >= 8f && face.height >= 8f) {
+                probes += WasteProbe(
+                    face,
+                    RankCornerOcr.CornerRoiProfile.DIRECT,
+                    "face@${ocrRegionKey(face)}"
+                )
+            }
+        }
+        // Face glyph before corner: corner OCR returns empty on several
+        // Jack→Four / Eight→Four boards while the chunky center rank is
+        // readable. Only probe face on the playable (first) region — left
+        // fan regions can center on the covered neighbor.
+        addFaceProbe(firstRegion)
         addCornerProbe(firstRegion)
         for (region in cardRegions.drop(1)) {
             val key = ocrRegionKey(region)
