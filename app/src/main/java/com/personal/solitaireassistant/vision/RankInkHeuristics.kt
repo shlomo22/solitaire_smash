@@ -134,8 +134,12 @@ object RankInkHeuristics {
                 midCR > 0.20f ->
                 Guess(Rank.Queen, 0.55f)
 
-            // J: tall and relatively narrow
-            aspect < 0.70f && density in 0.08f..0.28f && midCR > 0.30f ->
+            // J: tall and relatively narrow. Dens ceiling 0.40 (was 0.28):
+            // full waste-card crops of real Jacks sit at ~0.34-0.35 because
+            // corner J + center J + suit pip all land in the center ROI
+            // (golden scan: 14/14 waste Jacks, 0/17 waste Fours — Fours have
+            // aspect ≥ 0.70 so they never take this branch).
+            aspect < 0.70f && density in 0.08f..0.40f && midCR > 0.30f ->
                 Guess(Rank.Jack, 0.55f)
 
             // 8: stacked weight top+bot, lighter mid often

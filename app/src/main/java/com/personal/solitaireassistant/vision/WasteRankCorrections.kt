@@ -214,6 +214,36 @@ internal object WasteRankCorrections {
     }
 
     /**
+     * Waste-only: tight/legacy Four with OCR empty, but center-glyph ink is a
+     * tall narrow Jack. Covers the no-OCR Jack→Four magnet (220815/221831/
+     * 230055) where every whole/face/corner probe returns `ocr=miss:empty`
+     * and templates lock Four at ~0.57. Directed Four→Jack only; gated on
+     * [RankInkHeuristics] Jack (aspect &lt; 0.70, dens ≤ 0.40, midCR &gt; 0.30)
+     * which separates waste Jacks from waste Fours on the current golden set.
+     */
+    fun correctJackOverFourOnWaste(
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?,
+        inkGuess: RankInkHeuristics.Guess?,
+        ocrRank: Rank?
+    ): Rank? {
+        val fourCandidate = legacyCard?.rank == Rank.Four ||
+            tightCard?.rank == Rank.Four ||
+            baseCard?.rank == Rank.Four
+        if (!fourCandidate) return null
+        if (legacyCard?.rank == Rank.Jack || tightCard?.rank == Rank.Jack) {
+            return Rank.Jack
+        }
+        // A non-Four OCR hit belongs to ocrRankOverride (Five/Six/Eight/…).
+        if (ocrRank != null && ocrRank != Rank.Four) return null
+        if (inkGuess?.rank == Rank.Jack && inkGuess.confidence >= 0.55f) {
+            return Rank.Jack
+        }
+        return null
+    }
+
+    /**
      * Waste-only: fused Six/Seven on a real Eight. Directed — never the reverse —
      * so it cannot re-break genuine Sixes the way a new 6/8 confusion pair would.
      */

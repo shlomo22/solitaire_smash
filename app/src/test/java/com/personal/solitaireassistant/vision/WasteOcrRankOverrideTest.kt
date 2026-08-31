@@ -451,4 +451,43 @@ class WasteOcrRankOverrideTest {
         )
         assertNull(rank)
     }
+
+    @Test
+    fun inkJackOverridesTightFourWhenOcrMisses() {
+        val fourClubs = Card(Rank.Four, Suit.Clubs, faceUp = true)
+        val rank = WasteRankCorrections.correctJackOverFourOnWaste(
+            legacyCard = null,
+            tightCard = fourClubs,
+            baseCard = fourClubs,
+            inkGuess = RankInkHeuristics.Guess(Rank.Jack, 0.55f),
+            ocrRank = null
+        )
+        assertEquals(Rank.Jack, rank)
+    }
+
+    @Test
+    fun inkJackDoesNotOverrideWhenOcrAlreadyNamedFive() {
+        val fourClubs = Card(Rank.Four, Suit.Clubs, faceUp = true)
+        val rank = WasteRankCorrections.correctJackOverFourOnWaste(
+            legacyCard = null,
+            tightCard = fourClubs,
+            baseCard = fourClubs,
+            inkGuess = RankInkHeuristics.Guess(Rank.Jack, 0.55f),
+            ocrRank = Rank.Five
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun inkJackDoesNotFireWithoutFourCandidate() {
+        val sixClubs = Card(Rank.Six, Suit.Clubs, faceUp = true)
+        val rank = WasteRankCorrections.correctJackOverFourOnWaste(
+            legacyCard = null,
+            tightCard = sixClubs,
+            baseCard = sixClubs,
+            inkGuess = RankInkHeuristics.Guess(Rank.Jack, 0.55f),
+            ocrRank = null
+        )
+        assertNull(rank)
+    }
 }

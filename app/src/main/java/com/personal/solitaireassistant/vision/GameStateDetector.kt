@@ -940,9 +940,17 @@ class GameStateDetector(
             inkGuess = wasteInkGuess,
             ocrRank = wasteOcrAttempt?.guess?.rank
         )
+        val wasteJackOverFourOverride = WasteRankCorrections.correctJackOverFourOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            inkGuess = wasteInkGuess,
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
         val correctedRank = when {
             wasteEightOverride != null -> wasteEightOverride
             wasteOcrOverride != null -> wasteOcrOverride
+            wasteJackOverFourOverride != null -> wasteJackOverFourOverride
             // Prefer fuller-crop Nine over tight/OCR Six magnet before
             // correctSixOnWaste / base fusion can re-pick Six (v1.4.87 left
             // 114135×3 as fused-Six after OCR override went null).
