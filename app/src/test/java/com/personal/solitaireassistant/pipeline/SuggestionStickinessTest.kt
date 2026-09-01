@@ -279,6 +279,58 @@ class SuggestionStickinessTest {
     }
 
     @Test
+    fun runConsistencyViolationHoldStreakSurvivesCoincidentalAgreementFrame() {
+        // Real device log evidence (909c6d69-analysis.log, v1.4.106): mid a
+        // persistently-violated episode, a raw candidate coincidentally
+        // matched what was already displayed (best == previous) on some
+        // frames even though the board was still self-flagged broken that
+        // frame. The old code routed best==previous through the shared
+        // `idle` state unconditionally, silently zeroing violationHoldStreak
+        // - invisible in the log because this branch produces no new
+        // HOLD/ARROW line. The counter must instead survive this frame
+        // untouched so the bound (MAX_VIOLATION_HOLD_FRAMES) actually caps
+        // the real total freeze duration.
+        val held = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = wasteToCol0,
+            ranked = listOf(wasteToCol0, tableauMove),
+            boardVisuallyChanged = true,
+            state = SuggestionStickiness.State(),
+            hasRunConsistencyViolation = true
+        )
+        assertNull(held.display)
+        assertEquals(1, held.state.violationHoldStreak)
+
+        // Next frame: raw candidate coincidentally agrees with what's shown,
+        // but the board is still violated. Must display it (nothing to
+        // hold - it already matches) while preserving the streak.
+        val agree = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = tableauMove,
+            ranked = listOf(tableauMove, wasteToCol0),
+            boardVisuallyChanged = true,
+            state = held.state,
+            hasRunConsistencyViolation = true
+        )
+        assertEquals(tableauMove.move, agree.display?.move)
+        assertEquals(1, agree.state.violationHoldStreak)
+        assertEquals(0, agree.state.pendingStreak)
+
+        // A further violated, differing frame must resume counting from 2,
+        // not restart at 1.
+        val resumed = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = wasteToCol0,
+            ranked = listOf(wasteToCol0, tableauMove),
+            boardVisuallyChanged = true,
+            state = agree.state,
+            hasRunConsistencyViolation = true
+        )
+        assertNull(resumed.display)
+        assertEquals(2, resumed.state.violationHoldStreak)
+    }
+
+    @Test
     fun stillAnimatingFrameThatAgreesWithCurrentDisplayIsImmediate() {
         // Regardless of streak, a read that matches what's already on
         // screen needs no extra confirmation - only a *differing* read

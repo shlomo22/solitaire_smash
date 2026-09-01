@@ -832,6 +832,62 @@ board-complexity artifact of that specific session rather than a rounds
 6-8 regression, as suspected. Flicker/latency work on this specific
 failure mode is done unless a future pull shows it recurring.
 
+**Round 9 (v1.4.110, later session): "done unless it recurs" recurred -
+found the bound itself was silently defeatable, not just needing a bigger
+number.** User pulled `909c6d69-analysis.log` reporting "now it was really
+slow." Raw `detect()` timing was healthy this session (median 330ms, p90
+560ms, max 843ms - ruling out a recognition-latency regression), but the
+freeze mechanism itself was misbehaving: 22 `runConsistency=broken`
+occurrences, 84 `HOLD ... run-consistency violation` lines, the
+`streak=4/4` cap hit 19 times, and - the impossible part given
+`MAX_VIOLATION_HOLD_FRAMES = 4` - a longest *consecutive* hold streak of
+**6**. Extracting the raw lines from one ~3-second episode showed
+`violationHoldStreak` resetting to "1/4" three separate times before ever
+reaching 2, with no interrupting ARROW line or different hold reason
+between two of those resets - the streak wasn't capping at 4, it kept
+restarting.
+
+Root cause, in `SuggestionStickiness.apply`'s very first branch: `if
+(previous == null || best.move == previous.move) { return Result(best,
+idle) }`. The `best.move == previous.move` half of that condition - a raw
+candidate coincidentally matching what's already on screen - routed through
+the shared `idle = State()` singleton unconditionally, zeroing
+`violationHoldStreak` even when `hasRunConsistencyViolation` was still true
+that exact frame. On a board oscillating between a valid and a
+self-flagged-broken tableau reading, the raw "best" move naturally lines up
+with the displayed move on some frames purely by chance while the
+violation flag is still set - and because `best == previous` produces no
+new HOLD line (nothing to hold, it already matches) and typically no new
+ARROW line either (`logOutcome`'s key-based dedup), the reset was
+completely invisible in the log. Each reset-then-recount cycle let the
+*real* total freeze duration silently exceed the intended 4-frame cap by
+however many times this coincidence fired - exactly matching both the
+observed 6-frame streak and the mysterious repeated "streak=1/4" pattern.
+
+Fixed by splitting the fast path: `previous == null` still returns `idle`
+unconditionally (nothing to preserve - there's no prior violation state
+without a previous move), but `best.move == previous.move` now returns
+`state.copy(pendingCandidate = null, pendingStreak = 0)` instead of `idle`
+whenever `hasRunConsistencyViolation` is true this frame - `pendingStreak`
+still resets (this frame agrees with the display, nothing pending to
+confirm), but `violationHoldStreak` survives untouched so a later violated,
+differing frame resumes counting from where it left off instead of
+restarting at 1. Three new assertions in
+`runConsistencyViolationHoldStreakSurvivesCoincidentalAgreementFrame`
+(`SuggestionStickinessTest.kt`) drive exactly this sequence - hold once
+(streak=1), agree-by-coincidence while still violated (streak preserved at
+1, move displayed), then hold again (streak resumes at 2, not 1) - plus
+confirm the four pre-existing violation tests are unaffected (none of them
+exercise a mid-streak agreement frame).
+
+**Not yet device-verified** - this is a state-management bug fix inside an
+already-committed mechanism, not a new heuristic, so the fix itself is
+low-risk, but whether it actually shortens real observed freeze durations
+on a persistently-violated board needs the next pull: check for any
+consecutive-hold-streak run longer than 4 (should no longer be possible),
+and whether `streak=N/4` sequences in the log now monotonically increase to
+4 within one unbroken episode instead of restarting partway through.
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game

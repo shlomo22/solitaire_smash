@@ -102,8 +102,32 @@ internal object SuggestionStickiness {
          */
         hasRunConsistencyViolation: Boolean = false
     ): Result {
-        if (previous == null || best.move == previous.move) {
+        if (previous == null) {
             return Result(best, idle)
+        }
+        if (best.move == previous.move) {
+            // A coincidental one-frame agreement between the raw candidate
+            // and what's already shown must not silently wipe an
+            // in-progress violationHoldStreak. Real device log evidence
+            // (909c6d69-analysis.log, v1.4.106): on a persistently-violated
+            // board, this exact branch fired 2-3 times mid-episode - each
+            // time using the shared `idle` state below zeroed
+            // violationHoldStreak even though hasRunConsistencyViolation was
+            // still true that frame, so the counter kept restarting at 1
+            // instead of accumulating toward MAX_VIOLATION_HOLD_FRAMES. The
+            // reset was invisible in the log because best==previous produces
+            // no new HOLD/ARROW line here. pendingCandidate/pendingStreak
+            // still reset (this frame agrees with the display, so there's no
+            // pending switch to track), but violationHoldStreak is preserved
+            // whenever the board is still self-flagged broken this frame.
+            return Result(
+                best,
+                if (hasRunConsistencyViolation) {
+                    state.copy(pendingCandidate = null, pendingStreak = 0)
+                } else {
+                    idle
+                }
+            )
         }
         if (hasRunConsistencyViolation) {
             val heldStreak = state.violationHoldStreak + 1
