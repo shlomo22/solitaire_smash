@@ -235,53 +235,55 @@ class GameStateDetector(
             diagnostics += "tableau$col.faceScan=$faceScanTrace"
 
             if (faceRegion != null) {
-                // Face-down backs are located by reading teal rows, not by
-                // stepping downStep from the column top: faceDownOverlap is
-                // ~9% short of the real 48.68px repeat spacing, and stepping
-                // it accumulated enough error over 5-6 hidden cards to invent
-                // a face-up card that isn't there. See
-                // SmashColorAnalyzer.scanFaceDownBacks for the measurements.
-                val backScan = SmashColorAnalyzer.scanFaceDownBacks(
-                    bitmap,
-                    columnRegion,
-                    faceRegion.top
-                )
-                // Klondike deals column i exactly i face-down cards and a
-                // column never gains one, so bands beyond that are the row
-                // scan splitting a single back, not a real card. Replaying
-                // the golden set found 8 of 341 columns over-splitting this
-                // way; the boundary itself is unaffected (it reads the last
-                // teal row, not the band list), so capping the count is
-                // enough.
-                val maxFaceDown = col.coerceAtMost(MAX_FACE_DOWN_PER_COLUMN)
+                // Count only genuinely teal headers above the playable face. This
+                // avoids treating exposed face-up cascades as hidden cards.
+                var y = columnRegion.top
                 var faceDownCount = 0
-                backScan?.bandTops?.take(maxFaceDown)?.forEach { bandTop ->
-                    val bounds = BoardRegion(
+                while (y + 4f < faceRegion.top && faceDownCount < 6) {
+                    val stripBottom = (y + downStep).coerceAtMost(faceRegion.top)
+                    val strip = BoardRegion(
                         columnRegion.left,
-                        bandTop,
+                        y,
                         columnRegion.right,
-                        (bandTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                        stripBottom
                     )
-                    cards += Card(Rank.Ace, Suit.Clubs, faceUp = false, known = false)
-                    locs += locator.toCardLocation(
-                        PileRef.Tableau(col),
-                        faceDownCount,
-                        bounds
-                    )
-                    recognizedSlots += RecognizedSlot(
-                        pile = PileRef.Tableau(col),
-                        index = faceDownCount,
-                        bounds = bounds,
-                        engine = SlotGuess(SlotKind.FaceDown),
-                        confidence = 0.85f,
-                        diagnostic = "face-down",
-                        inferred = false
-                    )
-                    faceDownCount++
+                    val stats = SmashColorAnalyzer.analyze(bitmap, strip)
+                    // The faceRegion.top cap can truncate the final strip well
+                    // below a full downStep when the true facedown/faceup
+                    // boundary falls mid-band. A real golden sample showed that
+                    // truncated sliver (21.6px of a 44.3px step) still averaging
+                    // teal=0.32 - past looksFaceDown's 0.20 floor - purely
+                    // because it straddles the boundary (part teal card back,
+                    // part the exposed card's white top edge), not because a
+                    // whole card sits there. Only trust a facedown read from a
+                    // strip that got most of its intended height.
+                    val stripHeight = stripBottom - y
+                    if (stripHeight >= downStep * 0.85f && SmashColorAnalyzer.looksFaceDown(stats)) {
+                        val bounds = BoardRegion(
+                            columnRegion.left,
+                            y,
+                            columnRegion.right,
+                            (y + cardHeight).coerceAtMost(columnRegion.bottom)
+                        )
+                        cards += Card(Rank.Ace, Suit.Clubs, faceUp = false, known = false)
+                        locs += locator.toCardLocation(
+                            PileRef.Tableau(col),
+                            faceDownCount,
+                            bounds
+                        )
+                        recognizedSlots += RecognizedSlot(
+                            pile = PileRef.Tableau(col),
+                            index = faceDownCount,
+                            bounds = bounds,
+                            engine = SlotGuess(SlotKind.FaceDown),
+                            confidence = 0.85f,
+                            diagnostic = "face-down",
+                            inferred = false
+                        )
+                        faceDownCount++
+                    }
+                    y += downStep
                 }
-                diagnostics += "tableau$col.faceDownScan=" +
-                    "backs=${backScan?.bandTops?.size ?: 0},counted=$faceDownCount," +
-                    "boundary=${"%.1f".format(backScan?.boundaryTop ?: columnRegion.top)}"
 
                 val hit = recognizeCached(
                     bitmap = bitmap,
@@ -313,10 +315,7 @@ class GameStateDetector(
                 // card spacing is fixed and every legal tableau run descends
                 // while alternating color.
                 val faceUpStep = cardHeight * board.profile.faceUpOverlap
-                // Measured boundary, not faceDownCount * downStep — the run
-                // starts on the first row below the last teal back, so it
-                // cannot drift with the hidden-card count.
-                var firstFaceTop = backScan?.boundaryTop ?: columnRegion.top
+                var firstFaceTop = columnRegion.top + faceDownCount * downStep
                 var leadingHit: RecognitionHit? = null
                 var leadingCard: Card? = null
                 // Diagnostic-only: which condition stopped the face-down scan,
@@ -2362,10 +2361,6 @@ class GameStateDetector(
 
     companion object {
         private const val pileFingerprintSeed = -0x6c62272e07bb0142L
-        // A Klondike column is dealt at most 6 hidden cards (column 7: 6 down
-        // + 1 up) and never gains another, so more teal bands than this means
-        // the scan split one back, not that a seventh card exists.
-        private const val MAX_FACE_DOWN_PER_COLUMN = 6
         // See resolveCardSuitWithTrace: below this, the first pass's own black-
         // suit scores are too weak to trust its "ambiguous" verdict over a second
         // opinion; at or above it, both candidates already scored high enough

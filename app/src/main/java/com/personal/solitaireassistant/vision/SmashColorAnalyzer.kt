@@ -8,13 +8,6 @@ import com.personal.solitaireassistant.game.BoardRegion
  * white faces, bright red / near-black ink, teal diamond backs, purple playfield.
  */
 object SmashColorAnalyzer {
-    /** Row sampling stride for [scanFaceDownBacks]; borders run 5-6px tall. */
-    private const val FACE_DOWN_ROW_STEP = 2
-    /** Sampled rows of non-teal needed before a new back is counted. */
-    private const val MIN_BACK_GAP_ROWS = 2
-    /** Teal fraction of a sampled row that counts as "inside a card back". */
-    private const val TEAL_ROW_RATIO = 0.60f
-
     data class RegionStats(
         val whiteRatio: Float,
         val tealRatio: Float,
@@ -71,96 +64,6 @@ object SmashColorAnalyzer {
             redInkRatio = red / t,
             blackInkRatio = black / t,
             avgLuma = lumaSum / (t * 3f) / 255f
-        )
-    }
-
-    /** Result of [scanFaceDownBacks]. */
-    data class FaceDownBacks(
-        /** Top y of each distinct face-down back, nearest the column top first. */
-        val bandTops: List<Float>,
-        /** First row below the last face-down back — where the exposed run starts. */
-        val boundaryTop: Float
-    )
-
-    /**
-     * Locates the face-down block of a tableau column by reading teal rows
-     * directly, rather than stepping a fixed per-card overlap from the column
-     * top.
-     *
-     * Why this exists: `BoardGeometryProfile.faceDownOverlap` (0.23, i.e.
-     * 44.33px on a 192.76px card) is measurably too small — the real repeat
-     * spacing between stacked backs is 48.68px, measured over 341 tableau
-     * columns across the golden set with 310 of them within 1px of each other.
-     * Because the face-up run used to start at
-     * `columnRegion.top + faceDownCount * downStep`, that ~4.4px-per-card
-     * shortfall accumulated: by the fifth or sixth hidden card the computed
-     * boundary still sat inside the last teal back, so the column grew a
-     * face-up card that does not exist. That phantom then shifted every
-     * `distanceFromBottom` in [TableauCascadeSupport.geometricCascadeCard] by
-     * one, flipping the inferred colour of the whole run — golden columns
-     * carrying a phantom had 15.1% wrong-colour face-up slots against 1.9%
-     * elsewhere.
-     *
-     * Simply raising the constant was tried before and net-regressed on device
-     * (see the comment on `faceDownOverlap`): the count and the step are
-     * coupled, so a larger step can drop the count by one and move the
-     * boundary *up* into the teal instead of past it. Measuring the boundary
-     * removes both the accumulation and the coupling — it cannot drift, and it
-     * needs no per-card constant at all.
-     *
-     * Returns null when the column has no face-down cards, which the caller
-     * treats the same way the old arithmetic did (`faceDownCount` 0, run
-     * starting at the column top).
-     */
-    fun scanFaceDownBacks(
-        bitmap: Bitmap,
-        column: BoardRegion,
-        limitBottom: Float
-    ): FaceDownBacks? {
-        val left = column.left.toInt().coerceIn(0, bitmap.width - 1)
-        val right = column.right.toInt().coerceIn(left + 1, bitmap.width)
-        val top = column.top.toInt().coerceIn(0, bitmap.height - 1)
-        val bottom = limitBottom.toInt().coerceIn(top + 1, bitmap.height)
-        // Sample the middle half only: every card carries a rounded white
-        // border down both outer edges, face-down or not.
-        val sampleLeft = left + (right - left) / 4
-        val sampleRight = right - (right - left) / 4
-        if (sampleRight - sampleLeft < 4) return null
-        val xStep = ((sampleRight - sampleLeft) / 12).coerceAtLeast(1)
-
-        val bandTops = mutableListOf<Float>()
-        var lastTealRow = -1
-        var gapRows = 0
-        var y = top
-        while (y < bottom) {
-            var teal = 0
-            var samples = 0
-            var x = sampleLeft
-            while (x < sampleRight) {
-                val c = bitmap.getPixel(x, y)
-                if (isTealBack((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)) {
-                    teal++
-                }
-                samples++
-                x += xStep
-            }
-            if (samples > 0 && teal.toFloat() / samples > TEAL_ROW_RATIO) {
-                // A new back only starts after a real border gap; a single
-                // noisy row inside one back must not split it in two.
-                if (bandTops.isEmpty() || gapRows >= MIN_BACK_GAP_ROWS) {
-                    bandTops += y.toFloat()
-                }
-                gapRows = 0
-                lastTealRow = y
-            } else {
-                gapRows++
-            }
-            y += FACE_DOWN_ROW_STEP
-        }
-        if (bandTops.isEmpty() || lastTealRow < 0) return null
-        return FaceDownBacks(
-            bandTops = bandTops,
-            boundaryTop = (lastTealRow + FACE_DOWN_ROW_STEP).toFloat()
         )
     }
 
