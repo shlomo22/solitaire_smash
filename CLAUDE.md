@@ -157,6 +157,75 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   that's either strong (≥0.75) or already agrees with the consensus is untouched. Pushed
   as v1.4.20/91, not yet device-verified — this is the likely fix for the `Seven→Jack`
   bucket and probably other silent mid-run misreads sharing the same mechanism.
+- **`SmashColorAnalyzer.scanFaceDownBacks`** (added v1.4.112) — locates a tableau
+  column's face-down block by reading teal rows directly, and returns both the
+  per-back tops and the boundary row where the exposed run starts.
+  `GameStateDetector.computeColumn` uses it instead of the old
+  `columnRegion.top + faceDownCount * downStep` arithmetic. **This is the
+  sanctioned way around the parked `faceDownOverlap` problem — read the "Don't
+  retune BoardGeometryProfile" entry first, then this.** The constant really is
+  wrong (0.23 → 44.33px assumed vs **48.68px measured**, over 341 golden tableau
+  columns with 310 agreeing within 1px), but raising it net-regressed on device
+  twice before, because the count and the step are coupled: a bigger step can
+  drop the hidden-card count by one and move the boundary *up* into the teal
+  instead of past it. Measuring the boundary removes both the accumulation and
+  the coupling, and needs no per-card constant at all — so it fixes the symptom
+  without touching the constant, which is still used by
+  `BoardLocator.estimateCardSlots` and was left alone.
+  - Symptom it fixes: on a deep column the drifted boundary still sat inside
+    the last teal back, so the column reported a face-up card **that isn't on
+    the board** — the user's "the top card in tableau is actually face down,
+    which causes a false arrow or no arrow on a legal move."
+  - It also explains the *second* half of that report ("many suits are wrong in
+    the tableau under it"), which looked like an unrelated suit-scoring
+    problem: a phantom shifts every `distanceFromBottom` in
+    `TableauCascadeSupport.geometricCascadeCard` by one, and that function
+    infers colour from `distanceFromBottom % 2`, so one phantom flips the
+    inferred colour of the entire run below it. Measured: columns carrying a
+    phantom had **15.1%** wrong-colour face-up slots vs **1.9%** elsewhere.
+    Worth remembering as a pattern — a geometry defect can present as a
+    colour/suit defect.
+  - Validated offline over 1083 golden tableau columns before writing Kotlin
+    (the discipline described above): correct face-up counts 95.7% → 99.3%, and
+    every remaining disagreement, checked by hand against the pixels, turned
+    out to be **the golden truth being wrong, not the scan** (see the
+    truth-correction note below).
+  - Hidden-card count is capped at the column index (Klondike deals column i
+    exactly i face-down cards and a column never gains one). Replaying the scan
+    at the exact Kotlin sampling parameters found 8 of 341 columns where the row
+    scan split a single back in two; the cap absorbs that, and the boundary is
+    unaffected either way since it reads the last teal row, not the band list.
+  - Locked in by `PhantomFaceUpCascadeTest` (exact face-up counts on seven
+    pixel-verified columns, plus the hidden-count invariant).
+  - **Not yet Evaluate-verified.**
+- **Golden truth had absorbed the phantoms (v1.4.112).** Seven files were
+  labelled with a face-up card that does not exist in their own PNG
+  (`20260814_233209` t6 ×2, `20260819_212027` t3 — which labelled one 6♠ twice,
+  `20260825_131858` t5 and t6, `20260825_143717`/`143732`/`143759`/`143855` t6),
+  plus one plain slip (`20260825_131858` t5, Three of **Diamonds** labelled
+  Hearts). All ten corrected after cropping the real pixels. This is a third
+  distinct failure mode beyond the two already documented below (a single
+  mislabelled card, and the batch truth/PNG pairing break): here the labeller
+  was shown the engine's own phantom slot and confirmed it, so **truth and
+  engine agreed and the mismatch count looked clean** — invisible to any
+  engine-vs-truth diff. Only comparing truth against an *independent* measurement
+  surfaced it. Note most phantom slots carry `inferred: true`, which
+  `GoldenTruthEvaluator.compareSample` filters out of scoring entirely, so
+  correcting them mostly improves the record rather than the number.
+  - **Correcting truth means correcting it in two places.** The repo copies
+    under `app/src/test/resources/golden/` only feed the Robolectric unit tests;
+    the Evaluate button reads the device's own `filesDir/golden/`
+    (`GoldenTruthStore`), and there is no sync script. Editing only the repo
+    copies leaves the next Evaluate run scoring against the old labels. Device
+    procedure that works on the debug build: `adb exec-out run-as <pkg> cat
+    files/golden/<id>.json` to pull, edit, `adb push` to `/data/local/tmp/`,
+    then `adb shell run-as <pkg> sh -c 'cat /data/local/tmp/<id>.json >
+    /data/data/<pkg>/files/golden/<id>.json'` — the redirect target **must be
+    absolute**, a relative `files/golden/...` fails with "No such file or
+    directory" because that `sh` does not start in the app's data dir. Worth
+    editing the device's *own* pulled copy rather than pushing the repo file
+    over it, and asserting the current on-device value before each replacement,
+    so any hand-relabelling done on the device is reported instead of clobbered.
 - **`GoldenTruthEvaluator`** — the Evaluate-button harness. `findMatchingSlot` matches
   truth to detected slots by pile + nearest centroid (80px), excluding inferred slots.
   **Known artifact, not a bug to chase**: when the rightful card's own read gets
@@ -1341,6 +1410,13 @@ Remaining buckets, descending live-play value:
   Both looked well-justified from a single pixel-verified example beforehand. If
   attempting this again, validate across many golden samples *before* writing Kotlin,
   not just the one sample that motivated the idea.
+  **Still true as of v1.4.112, and that round is the model for what to do
+  instead**: the constant was confirmed wrong by broad measurement (44.33px
+  assumed vs 48.68px real, 341 columns) and was *still* not changed — the fix
+  replaced the arithmetic that consumed it with a direct pixel measurement
+  (`SmashColorAnalyzer.scanFaceDownBacks`), which sidesteps the count/step
+  coupling that made both earlier retunes regress. Reach for "measure it" before
+  "retune it."
 - Don't assume a two-pass tiebreak's *second* pass is where a wrong answer comes from
   just because it's the one that logs a decisive-looking branch name. Check which pass's
   diagnostic actually set the stored value first (see the black-suit-ambiguous note
