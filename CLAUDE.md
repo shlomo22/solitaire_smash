@@ -157,47 +157,74 @@ diagnostics/cache/counters, merged in order after `awaitAll()`).
   that's either strong (≥0.75) or already agrees with the consensus is untouched. Pushed
   as v1.4.20/91, not yet device-verified — this is the likely fix for the `Seven→Jack`
   bucket and probably other silent mid-run misreads sharing the same mechanism.
-- **`SmashColorAnalyzer.scanFaceDownBacks`** (added v1.4.112) — locates a tableau
-  column's face-down block by reading teal rows directly, and returns both the
-  per-back tops and the boundary row where the exposed run starts.
-  `GameStateDetector.computeColumn` uses it instead of the old
-  `columnRegion.top + faceDownCount * downStep` arithmetic. **This is the
-  sanctioned way around the parked `faceDownOverlap` problem — read the "Don't
-  retune BoardGeometryProfile" entry first, then this.** The constant really is
-  wrong (0.23 → 44.33px assumed vs **48.68px measured**, over 341 golden tableau
-  columns with 310 agreeing within 1px), but raising it net-regressed on device
-  twice before, because the count and the step are coupled: a bigger step can
-  drop the hidden-card count by one and move the boundary *up* into the teal
-  instead of past it. Measuring the boundary removes both the accumulation and
-  the coupling, and needs no per-card constant at all — so it fixes the symptom
-  without touching the constant, which is still used by
-  `BoardLocator.estimateCardSlots` and was left alone.
-  - Symptom it fixes: on a deep column the drifted boundary still sat inside
-    the last teal back, so the column reported a face-up card **that isn't on
-    the board** — the user's "the top card in tableau is actually face down,
-    which causes a false arrow or no arrow on a legal move."
-  - It also explains the *second* half of that report ("many suits are wrong in
-    the tableau under it"), which looked like an unrelated suit-scoring
-    problem: a phantom shifts every `distanceFromBottom` in
+- **The phantom face-up card at the bottom of a face-down block is real,
+  pixel-confirmed, and STILL UNFIXED. `scanFaceDownBacks` (v1.4.112) was the
+  third attempt in this area to net-regress on device and was reverted in
+  v1.4.113. Read this whole entry before trying a fourth.**
+  - The defect: `faceDownOverlap` (0.23 → 44.33px) is short of the real
+    **48.68px** repeat spacing (measured over 341 golden tableau columns, 310
+    agreeing within 1px). Because the exposed run started at
+    `columnRegion.top + faceDownCount * downStep`, the shortfall accumulated
+    until, on a deep column, the boundary still sat inside the last teal back
+    and the column reported a face-up card **that isn't on the board** — the
+    user's "the top card in tableau is actually face down, which causes a false
+    arrow or no arrow on a legal move."
+  - **The colour-parity consequence is the most reusable finding here, and it
+    survives the revert.** A phantom shifts every `distanceFromBottom` in
     `TableauCascadeSupport.geometricCascadeCard` by one, and that function
     infers colour from `distanceFromBottom % 2`, so one phantom flips the
     inferred colour of the entire run below it. Measured: columns carrying a
     phantom had **15.1%** wrong-colour face-up slots vs **1.9%** elsewhere.
-    Worth remembering as a pattern — a geometry defect can present as a
-    colour/suit defect.
-  - Validated offline over 1083 golden tableau columns before writing Kotlin
-    (the discipline described above): correct face-up counts 95.7% → 99.3%, and
-    every remaining disagreement, checked by hand against the pixels, turned
-    out to be **the golden truth being wrong, not the scan** (see the
-    truth-correction note below).
-  - Hidden-card count is capped at the column index (Klondike deals column i
-    exactly i face-down cards and a column never gains one). Replaying the scan
-    at the exact Kotlin sampling parameters found 8 of 341 columns where the row
-    scan split a single back in two; the cap absorbs that, and the boundary is
-    unaffected either way since it reads the last teal row, not the band list.
-  - Locked in by `PhantomFaceUpCascadeTest` (exact face-up counts on seven
-    pixel-verified columns, plus the hidden-count invariant).
-  - **Not yet Evaluate-verified.**
+    That is why the user's two reports ("top card is really face down" and
+    "many suits are wrong under it") are one bug, not two. Remember the
+    pattern: a geometry defect can present as a colour/suit defect.
+  - **What v1.4.112 did and what it cost.** It replaced the arithmetic with
+    `SmashColorAnalyzer.scanFaceDownBacks`, which read teal rows directly and
+    returned the boundary row, deliberately *not* touching `faceDownOverlap`
+    itself. Clean A/B on the same 169-sample / 6010-slot set:
+
+    | | accuracy | rank | suit | occupancy | FaceDown→FaceUp |
+    |---|---|---|---|---|---|
+    | v1.4.111 | 98% (5867/6010) | 52 | 98 | 27 | 21 |
+    | v1.4.112 | 94% (5669/6010) | 102 | 196 | 120 | 118 |
+
+    **−198 slots.** Reverted in v1.4.113.
+  - **Why the offline validation missed it, which is the real lesson.** The
+    pre-Kotlin replay covered 1083 columns and showed face-up counts going
+    95.7% → 99.3%, with every remaining disagreement hand-checked as truth
+    being wrong rather than the scan. That was not a lie — the boundary
+    measurement itself is accurate. But the replica validated *the boundary
+    against the pixels*, not *the code path that consumes the boundary*: it
+    modelled the exposed run as `(bottomTop - boundary) / faceUpStep` instead
+    of replaying `computeColumn`'s actual loop. Suit errors doubling and rank
+    errors doubling were therefore completely invisible to it, and that is
+    where most of the 198 went. **A replica has to replicate the consumer, not
+    just the measurement.** This is a stricter reading of the "Validation
+    discipline" section above than previous rounds used, and it is the
+    condition any fourth attempt has to meet before shipping.
+  - **Measurement-validity problem discovered during the revert, and it blocks
+    any future attempt.** The golden truth is structurally coupled to the old
+    geometry: **91 of 1155** labelled tableau columns claim more face-down
+    cards than Klondike can physically deal (column 5 labelled with 7, column 6
+    with 7, and so on). The old arithmetic over-produced face-down slots and
+    the labeller confirmed every one of them as FaceDown, so Evaluate actively
+    *rewards* the over-production and penalises any scan that emits the correct
+    number. That inflation cannot account for the whole −198 (truth inflation
+    would not double the suit errors), but it does mean **Evaluate cannot
+    currently score a corrected face-down geometry fairly**. Fixing the truth
+    for those 91 columns — or scoring occupancy against an independent
+    measurement — is arguably a prerequisite for attempting this again at all.
+    A related mechanism to expect: fewer emitted slots shift which engine slot
+    each truth slot matches in `findMatchingSlot`, so a correct read can be
+    scored against the wrong neighbour, inflating rank/suit counts on top of
+    any genuine change (the neighbour-steals-the-match artifact already
+    documented under `GoldenTruthEvaluator`).
+  - Two details worth keeping if there is a fourth attempt: replaying the scan
+    at the exact Kotlin sampling parameters found 8 of 341 columns where the
+    row scan split a single back in two (a cap at the column index absorbs
+    that, and the boundary is unaffected either way since it reads the last
+    teal row, not the band list); and the boundary measurement is robust to
+    coarse sampling — row step 2 agreed with row step 1 on 333 of 341 columns.
 - **Golden truth had absorbed the phantoms (v1.4.112).** Seven files were
   labelled with a face-up card that does not exist in their own PNG
   (`20260814_233209` t6 ×2, `20260819_212027` t3 — which labelled one 6♠ twice,
@@ -1410,13 +1437,16 @@ Remaining buckets, descending live-play value:
   Both looked well-justified from a single pixel-verified example beforehand. If
   attempting this again, validate across many golden samples *before* writing Kotlin,
   not just the one sample that motivated the idea.
-  **Still true as of v1.4.112, and that round is the model for what to do
-  instead**: the constant was confirmed wrong by broad measurement (44.33px
-  assumed vs 48.68px real, 341 columns) and was *still* not changed — the fix
-  replaced the arithmetic that consumed it with a direct pixel measurement
-  (`SmashColorAnalyzer.scanFaceDownBacks`), which sidesteps the count/step
-  coupling that made both earlier retunes regress. Reach for "measure it" before
-  "retune it."
+  **Now three attempts, not two.** v1.4.112 avoided touching the constant
+  entirely — it replaced the arithmetic that consumes it with a direct pixel
+  measurement of the boundary — and still cost **−198 slots** on device
+  (5867→5669 on an identical 6010-slot set), reverted in v1.4.113. So
+  "measure it instead of retuning it" is *not* a safe way around this entry.
+  The offline replay that justified it validated the measurement but not the
+  code that consumes the measurement, which is how a doubling of suit and rank
+  errors got through. See the `scanFaceDownBacks` entry above for the full
+  post-mortem and for the golden-truth inflation that makes this area hard to
+  score at all.
 - Don't assume a two-pass tiebreak's *second* pass is where a wrong answer comes from
   just because it's the one that logs a decisive-looking branch name. Check which pass's
   diagnostic actually set the stored value first (see the black-suit-ambiguous note
