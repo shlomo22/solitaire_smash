@@ -4,30 +4,76 @@ Personal Android overlay helper for **Solitaire Smash** (draw-3 Klondike): captu
 screen, recognizes the board via template/color matching, computes a legal best move,
 and draws a touch-through arrow overlay. See `README.md` for setup/build basics.
 
-## Environment constraint — READ THIS FIRST
+## Environment — READ THIS FIRST
 
-**This remote session cannot build, compile, or run the app.** `dl.google.com` (Android
-SDK / Google Maven) returns HTTP 403 through the environment proxy, there's no
-`/dev/kvm` or emulator, and no Android SDK is installed — only `java` and `gradle`.
-`./gradlew :app:compileDebugKotlin` fails at plugin resolution even offline (AGP isn't
-cached). This has been re-verified more than once; don't re-litigate it, just work
-within it.
+**Check which environment you are in before believing anything below.** Earlier
+rounds of this file asserted flatly that "this session cannot build, compile, or
+run the app." That is true of the *remote sandbox* (`dl.google.com` returns HTTP
+403 through the proxy, no Android SDK, no `/dev/kvm`, AGP not cached, so even
+`:app:compileDebugKotlin` fails at plugin resolution). It is **not** true of the
+user's own Windows machine, which has the SDK, a JDK, gradle, and a connected
+device. Confirm cheaply — run `.\gradlew.bat :app:testDebugUnitTest --tests
+"*SuggestionStickinessTest*"` — instead of assuming.
 
-**Workflow that actually works, every round:**
-1. Make a Kotlin change, reason carefully about correctness (see "Validation
+**On the user's machine, Evaluate can be run locally, and it must be run before
+anything ships to the device:**
+
+```
+.\gradlew.bat :app:testDebugUnitTest --tests "*SmashGoldenTruthTest.desktopEvaluatePrintsSameReportAsDevice"
+```
+
+`SmashGoldenTruthTest.desktopEvaluatePrintsSameReportAsDevice` runs the real
+`GameStateDetector` over every golden fixture in `app/src/test/resources/golden/`
+and prints the same summary block the Evaluate button produces. It takes about
+**2.5 minutes**. Unit tests here take ~10 minutes on a cold configuration cache
+and ~2 minutes warm.
+
+This was unusable until v1.4.113 for one reason: `tasks.withType<Test>` set no
+`maxHeapSize`, so the test JVM got Gradle's 512MB default while
+`loadGoldenFixtures` decodes all ~165 golden PNGs up front (Robolectric backs
+each with a full ARGB `BufferedImage`, ~10MB per 1080x2340 sample, so well over
+a gigabyte). It died with `OutOfMemoryError` before printing anything. Now set
+to `4g`. **That single missing line is why every prior round shipped
+device-unverified**, including the three geometry attempts that regressed.
+
+**Local numbers are for A/B, not for quoting.** OpenCV's native lib is not on
+`java.library.path` under Robolectric (`no opencv_java4`), so template matching
+degrades and ML Kit OCR does not run at all. Measured on identical code
+(v1.4.113): device reports 98%, local reports 96% (5602/5853 over 165 samples,
+vs the device's 169 — the repo is missing four the device has). Compare a change
+against a local baseline from the *same* harness; never against a device number.
+
+**Proven to catch real regressions.** The v1.4.112 face-down change measured
+−198 slots on device (5867→5669). Re-running the local harness on the same two
+files reproduced it at −174 (5602→5428), with the same shape: occupancy
+45→132 local vs 27→120 device, suit 143→227 vs 98→196, rank 92→134 vs 52→102.
+It would have caught that regression before it ever reached a device.
+
+**What local Evaluate can and cannot judge:**
+- **Trustworthy**: geometry, occupancy, face-down/face-up counts, cascade slot
+  positioning, solver/stickiness logic — none of these touch OpenCV or ML Kit.
+- **Not trustworthy**: waste OCR (ML Kit absent entirely), and fine-grained
+  rank/suit template scoring (OpenCV absent). These still need a device run.
+  Dropping a Windows `opencv_java4` native build into `app/src/test/jniLibs`
+  (already on the test `java.library.path`) would likely close most of that
+  gap — not attempted yet, and worth doing.
+
+**Workflow, every round:**
+1. Make the change, reasoning carefully about correctness (see "Validation
    discipline" below).
-2. Bump `versionCode`/`versionName` in `app/build.gradle.kts` (always — every push
-   needs a distinguishable version so a screenshot proves which build ran).
-3. **Always commit and push in the same turn** once the version is bumped — do not
-   leave a version bump sitting uncommitted or wait for a separate "commit and push"
-   request. That push is part of finishing the round, not an optional follow-up.
-4. The user pulls, runs `./gradlew assembleDebug`, installs via `adb install -r`,
-   and taps **Golden truth → Evaluate**. Then they run
+2. **Run local Evaluate before and after**, and keep both numbers. A net loss
+   means fix or abandon it — do not ship it to the device to "see."
+3. Bump `versionCode`/`versionName` in `app/build.gradle.kts` (always — every
+   push needs a distinguishable version so a screenshot proves which build ran).
+4. **Commit and push in the same turn** once the version is bumped.
+5. The user runs `./gradlew assembleDebug`, installs via `adb install -r`, and
+   taps **Golden truth → Evaluate**, then
    `powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1`, which
-   writes `analysis.log` + `screenshot.png` to `pulled/<timestamp>/` and copies
-   the same pair to **`pulled/latest/`**.
-5. Only real device evidence (the log, the golden-truth accuracy numbers, real pixel
-   crops) counts as validation. Never claim a fix works without it.
+   writes `analysis.log` + `screenshot.png` to `pulled/<timestamp>/` and
+   **`pulled/latest/`**.
+6. Device evidence is still the final word (it has OpenCV, ML Kit, and the full
+   169-sample set). Local Evaluate is the filter that stops bad changes from
+   consuming a device round-trip, not a replacement for one.
 
 ### "Read latest pull" / "pull artifacts"
 

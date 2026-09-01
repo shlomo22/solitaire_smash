@@ -91,6 +91,15 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
+    // SmashGoldenTruthTest.loadGoldenFixtures decodes every golden PNG up
+    // front, and Robolectric's ShadowBitmapFactory backs each one with a full
+    // ARGB BufferedImage: ~10MB per 1080x2340 sample, so the set as a whole
+    // needs well over a gigabyte. Gradle's 512MB default made the desktop
+    // Evaluate path die with OutOfMemoryError long before it printed a report,
+    // which is why on-device Evaluate was the only way to A/B a recognizer
+    // change - and why the v1.4.112 face-down regression reached a device
+    // instead of being caught locally first.
+    maxHeapSize = "4g"
     systemProperty(
         "refreshSuitTemplates",
         findProperty("refreshSuitTemplates")?.toString() ?: "false"
