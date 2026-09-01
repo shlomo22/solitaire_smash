@@ -36,12 +36,43 @@ a gigabyte). It died with `OutOfMemoryError` before printing anything. Now set
 to `4g`. **That single missing line is why every prior round shipped
 device-unverified**, including the three geometry attempts that regressed.
 
-**Local numbers are for A/B, not for quoting.** OpenCV's native lib is not on
-`java.library.path` under Robolectric (`no opencv_java4`), so template matching
-degrades and ML Kit OCR does not run at all. Measured on identical code
-(v1.4.113): device reports 98%, local reports 96% (5602/5853 over 165 samples,
-vs the device's 169 — the repo is missing four the device has). Compare a change
-against a local baseline from the *same* harness; never against a device number.
+**OpenCV now runs locally; ML Kit still does not.** Two things were needed, both
+in place as of v1.4.113:
+
+- `scripts\fetch-test-opencv.ps1` drops a Windows x86_64 `opencv_java4.dll` into
+  `app/src/test/jniLibs` (already on the unit-test `java.library.path`). The file
+  is ~50MB and gitignored, so **a fresh clone must run that script once** or
+  every local number silently reverts to the degraded column below.
+- `app/src/test/java/org/opencv/android/Utils.java` replaces OpenCV's own
+  `Utils` on the test classpath. This is the part that makes it work at all: the
+  app's only bridge into OpenCV is `Utils.bitmapToMat`, a wrapper over the native
+  `nBitmapToMat2`, which exists **only** in the Android build of the library
+  (it calls the NDK's `AndroidBitmap_lockPixels`). No desktop binary exports it
+  at any version, so a DLL alone gets past `System.loadLibrary` and then dies at
+  the first conversion. The shim does the RGBA conversion in pure Java. Because
+  it removes the one Android-specific entry point, the desktop binary's version
+  stops mattering for the rest — which is why 4.9.0 natives are fine against the
+  app's 4.10.0 AAR (`cvtColor`, `resize`, `matchTemplate`, `minMaxLoc`, `Mat` are
+  stable core/imgproc API).
+
+Measured on identical code, all three at 169 samples / 6010 slots:
+
+| | local, no OpenCV | local, OpenCV | device |
+|---|---|---|---|
+| accuracy | 96% (5755) | 97% (5802) | 98% (5866) |
+| rank | 92 | 111 | 52 |
+| suit | 145 | 116 | 98 |
+| occupancy | 47 | 30 | 28 |
+| missing | 21 | 6 | 4 |
+
+Occupancy and missing now track the device closely — those buckets are locally
+trustworthy. Rank moves the *wrong* way with OpenCV on, and that is expected
+rather than a defect: `bestBitmapRank` declines on a close margin and defers to
+OCR, so working template matching pushes more ranks into a tiebreak that ML Kit
+isn't present to answer. Essentially the whole remaining 64-slot gap is OCR.
+
+**Local numbers are still for A/B, not for quoting.** Compare a change against a
+local baseline from the *same* harness; never against a device number.
 
 **Proven to catch real regressions.** The v1.4.112 face-down change measured
 −198 slots on device (5867→5669). Re-running the local harness on the same two
@@ -51,12 +82,21 @@ It would have caught that regression before it ever reached a device.
 
 **What local Evaluate can and cannot judge:**
 - **Trustworthy**: geometry, occupancy, face-down/face-up counts, cascade slot
-  positioning, solver/stickiness logic — none of these touch OpenCV or ML Kit.
-- **Not trustworthy**: waste OCR (ML Kit absent entirely), and fine-grained
-  rank/suit template scoring (OpenCV absent). These still need a device run.
-  Dropping a Windows `opencv_java4` native build into `app/src/test/jniLibs`
-  (already on the test `java.library.path`) would likely close most of that
-  gap — not attempted yet, and worth doing.
+  positioning, solver/stickiness logic, and — since the OpenCV shim above —
+  rank/suit template scoring.
+- **Not trustworthy**: anything decided by waste OCR, because ML Kit is absent
+  entirely. A rank that only comes out right on device because OCR broke a tie
+  will look like a local miss no matter what. Judge that bucket on a device.
+
+**The unit test suite is not a gate right now: 28 of 297 tests fail on a clean
+checkout**, with or without the OpenCV native (verified by running the suite
+both ways — the failure sets differ by exactly one test each direction, and 27
+overlap). They include pure-logic tests with no OpenCV involvement
+(`DealBoundaryTest.disjointKnownCardsMarkANewGame`,
+`ErrorCaptureCompactTest`, `SmashPlayScreenGateTest.resultsPendingScreenIsNotLivePlay`)
+and `GoldenTruthJsonTest.fixtureTruthLabelsUseEachCardAtMostOnce`, which reports
+duplicate face-up truth cards across five older samples. Use the Evaluate number
+for A/B; if you rely on a specific test, check it was green *before* your change.
 
 **Workflow, every round:**
 1. Make the change, reasoning carefully about correctness (see "Validation

@@ -21,3 +21,7 @@
 
 # GitHub Actions self-hosted runner (install on the machine, never commit)
 /actions-runner/
+
+# Desktop OpenCV native for local (Robolectric) Evaluate - see CLAUDE.md.
+# 50MB binary, fetched with scripts/fetch-test-opencv.ps1, not committed.
+app/src/test/jniLibs/
