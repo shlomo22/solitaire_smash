@@ -14,7 +14,9 @@ internal object SuggestionStickiness {
         val pendingCandidate: Move? = null,
         val pendingStreak: Int = 0,
         /** Consecutive frames held via [MAX_VIOLATION_HOLD_FRAMES] below. */
-        val violationHoldStreak: Int = 0
+        val violationHoldStreak: Int = 0,
+        /** Frames remaining before a new violation-hold episode may start. See [VIOLATION_COOLDOWN_FRAMES]. */
+        val violationCooldownRemaining: Int = 0
     )
 
     /**
@@ -35,6 +37,26 @@ internal object SuggestionStickiness {
      * noticeably) is this constant, not the on/off freeze mechanism itself.
      */
     private const val MAX_VIOLATION_HOLD_FRAMES = 4
+
+    /**
+     * Frames a violation-hold episode must stay clear of the freeze path
+     * after being capped by [MAX_VIOLATION_HOLD_FRAMES], before a new
+     * episode is allowed to start. Real device log evidence
+     * (a862ed06-analysis.log): a genuine tableau3 misread
+     * (Ten_Clubs -> Eight_Hearts, a rank-skip a legal alternating-descending
+     * run can never produce) kept re-triggering the violation check, and two
+     * *consecutive* capped episodes (streak 1/4..4/4, fall through, then
+     * immediately streak 1/4..4/4 again) chained into a ~3.9s stall at the
+     * very end of a game - each individual episode was correctly bounded,
+     * but nothing stopped a second one from starting the instant the first
+     * one gave up. 2 reuses the same confirmation magnitude already
+     * validated elsewhere in this file (the two-agreeing-reads streak below)
+     * rather than guessing a new number - it forces at least 2 frames of
+     * ordinary (non-violation) handling, giving the display a real chance to
+     * progress, before the freeze can re-engage on a still-broken read. Not
+     * device-verified at this specific value.
+     */
+    private const val VIOLATION_COOLDOWN_FRAMES = 2
 
     data class Result(
         val display: ScoredMove?,
@@ -98,7 +120,9 @@ internal object SuggestionStickiness {
          * frames, 6.3 real seconds, on one board. See
          * [MAX_VIOLATION_HOLD_FRAMES] - the freeze is now bounded, giving up
          * and falling through to normal handling once it's held too long
-         * rather than freezing indefinitely.
+         * rather than freezing indefinitely. See [VIOLATION_COOLDOWN_FRAMES]
+         * for the fix to a *second* failure mode found after that: two
+         * capped episodes chaining back-to-back with no gap between them.
          */
         hasRunConsistencyViolation: Boolean = false
     ): Result {
@@ -130,6 +154,18 @@ internal object SuggestionStickiness {
             )
         }
         if (hasRunConsistencyViolation) {
+            if (state.violationCooldownRemaining > 0) {
+                // Still cooling down from a just-capped episode - let normal
+                // handling process this frame instead of immediately
+                // re-freezing. The countdown keeps ticking regardless of
+                // what normal handling decides, so a persistent violation
+                // can still eventually re-enter the freeze if it never
+                // resolves.
+                return resolveNormally(
+                    previous, best, ranked, boardVisuallyChanged, visualChangeStreak,
+                    state.copy(violationCooldownRemaining = state.violationCooldownRemaining - 1)
+                )
+            }
             val heldStreak = state.violationHoldStreak + 1
             if (heldStreak <= MAX_VIOLATION_HOLD_FRAMES) {
                 // Don't let a frame we already know is internally broken
@@ -146,10 +182,26 @@ internal object SuggestionStickiness {
                 )
             }
             // Held long enough - this isn't resolving on its own, so stop
-            // freezing and fall through to normal handling below even
-            // though the board is still self-admittedly broken. Better to
-            // risk showing a wrong move than to freeze forever.
+            // freezing and start a cooldown before another episode can
+            // begin, falling through to normal handling below for this
+            // frame even though the board is still self-admittedly broken.
+            // Better to risk showing a wrong move than to freeze forever.
+            return resolveNormally(
+                previous, best, ranked, boardVisuallyChanged, visualChangeStreak,
+                state.copy(violationHoldStreak = 0, violationCooldownRemaining = VIOLATION_COOLDOWN_FRAMES)
+            )
         }
+        return resolveNormally(previous, best, ranked, boardVisuallyChanged, visualChangeStreak, state)
+    }
+
+    private fun resolveNormally(
+        previous: ScoredMove,
+        best: ScoredMove,
+        ranked: List<ScoredMove>,
+        boardVisuallyChanged: Boolean,
+        visualChangeStreak: Int,
+        state: State
+    ): Result {
         // Pixel-level "the board changed" is for adopting a *new card play*
         // after the user already moved. Draw/recycle is the always-legal
         // fallback — a one-frame waste or target misread makes the real
@@ -159,15 +211,15 @@ internal object SuggestionStickiness {
             visualChangeStreak <= 1 &&
             (!best.move.isStockFallbackHint() || previous.move.isStockFallbackHint())
         ) {
-            return Result(best, idle)
+            return Result(best, state.copy(pendingCandidate = null, pendingStreak = 0, violationHoldStreak = 0))
         }
         val nextState = if (state.pendingCandidate == best.move) {
-            State(best.move, state.pendingStreak + 1)
+            state.copy(pendingCandidate = best.move, pendingStreak = state.pendingStreak + 1, violationHoldStreak = 0)
         } else {
-            State(best.move, 1)
+            state.copy(pendingCandidate = best.move, pendingStreak = 1, violationHoldStreak = 0)
         }
         if (nextState.pendingStreak >= 2) {
-            return Result(best, idle)
+            return Result(best, nextState.copy(pendingCandidate = null, pendingStreak = 0))
         }
         val stillRanked = ranked.firstOrNull { it.move == previous.move }
         if (stillRanked == null) {
@@ -175,7 +227,7 @@ internal object SuggestionStickiness {
             val newWastePlay = best.move.isWasteSourcedCardHint()
             if (previousFromWaste && newWastePlay) {
                 // Player drew; the new waste card has its own play.
-                return Result(best, idle)
+                return Result(best, state.copy(pendingCandidate = null, pendingStreak = 0, violationHoldStreak = 0))
             }
             return Result(
                 display = null,

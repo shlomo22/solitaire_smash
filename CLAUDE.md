@@ -888,6 +888,75 @@ consecutive-hold-streak run longer than 4 (should no longer be possible),
 and whether `streak=N/4` sequences in the log now monotonically increase to
 4 within one unbroken episode instead of restarting partway through.
 
+**Round 10 (v1.4.111, later session): each capped episode was correctly
+bounded, but nothing stopped a second one from starting the instant the
+first gave up - fixed with a cooldown, not another threshold retune.** User
+pulled `a862ed06-analysis.log` reporting "last move was very slow." Raw
+`detect()` timing was healthy (median 317ms, p90 603ms, only the very first
+post-session-start frame hit 4.3s, not representative of steady state) -
+again ruling out a recognition-latency cause. The actual stall: the very
+last display transition of the game (`Tableau 5 -> Tableau 1` to
+`Draw from stock`) took **3.9 real seconds**, despite each individual
+`detect()` call in that window costing only 492ms/326ms.
+
+Root cause, read directly from the log's `HOLD` lines: `tableau3` was
+reading `Jack_Hearts, Ten_Clubs, Eight_Hearts` - `diag:
+tableau3.runConsistency=broken:rank@Ten_Clubs->Eight_Hearts`, a rank-skip
+(10 -> 8, no 9 between them) that a legal Klondike tableau run can never
+produce (every card above a column's originally-exposed/revealed card was
+placed there by a legal alternating-descending stacking move, so the whole
+face-up run is provably required to be legal - this is a real misread, not
+a rules edge case). That misread kept recurring, and round 8's per-episode
+cap worked exactly as designed *twice*: `streak=1/4` through `4/4`, fall
+through, then immediately `streak=1/4` through `4/4` again, back-to-back
+with no gap. Each 4-frame episode is individually bounded, but chaining two
+of them reads to the player as one continuous ~4-second freeze - a distinct
+failure mode from both round 7's unconditional-freeze bug and round 9's
+silent-reset bug, and not something either of those fixes touches.
+
+Added `SuggestionStickiness.State.violationCooldownRemaining` and
+`VIOLATION_COOLDOWN_FRAMES = 2` (reusing the two-frame confirmation
+magnitude already validated elsewhere in this file, rather than guessing a
+new number): when a violation-hold episode's cap is exceeded, instead of
+just resetting `violationHoldStreak` and falling through for one frame, it
+now also sets a 2-frame cooldown. While the cooldown is active, even a
+still-violated, still-differing frame is routed through ordinary
+(non-violation) handling instead of re-entering the freeze - the countdown
+ticks down regardless of what that ordinary handling decides, so a
+violation that genuinely never resolves can still eventually re-enter the
+freeze once the cooldown lapses, but it can no longer chain immediately.
+This required refactoring the old single-function `apply()` into `apply()`
+(the violation gate) plus a new private `resolveNormally()` (the pre-
+existing pending-streak/vanished-from-ranked logic, now called from three
+places: no violation, cooldown-active, and cap-exceeded-fallthrough) so the
+cooldown-decrementing state threads through consistently everywhere instead
+of risking the same kind of wiring gap that round 8's own writeup already
+flagged as a trap in this exact mechanism. Every return path inside
+`resolveNormally` now carries the caller's `state` forward via `.copy(...)`
+instead of the old shared `idle` singleton, specifically so
+`violationCooldownRemaining` (and, per round 9's fix, `violationHoldStreak`)
+survive frames that don't touch them.
+
+Traced by hand (not device-verified) against
+`runConsistencyViolationCooldownPreventsImmediateSecondEpisode`
+(`SuggestionStickinessTest.kt`): drives one full capped 4-frame episode,
+confirms the fall-through frame starts a 2-frame cooldown, confirms the
+next two still-violated frames produce no new `run-consistency` hold line
+while the cooldown counts down to 0, then confirms a still-violated frame
+after that successfully starts a fresh capped episode (`streak=1/4`) -
+exactly the sequence the log showed missing a gap for. All prior
+violation-related tests (rounds 8 and 9) pass unchanged against the
+refactor - traced by hand line-by-line since gradle can't run here.
+
+**Not yet device-verified.** What to check on the next pull: whether this
+exact back-to-back double-episode pattern (two `streak=1/4..4/4` runs with
+no non-violation frame between them) still appears in `analysis.log`, and
+whether the tail-end stall shrinks from the ~3.9s observed here toward
+something closer to a single ~4-frame hold. The underlying `Ten_Clubs ->
+Eight_Hearts` misread itself is untouched - per the user's own choice this
+round, this fix targets how the stickiness layer *reacts* to a recurring
+violation, not the recognition bug that triggers it.
+
 ## Move history capture (v1.4.97)
 
 User request: a way to review a whole finished (including abandoned) game

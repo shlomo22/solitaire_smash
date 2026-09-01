@@ -265,6 +265,77 @@ class SuggestionStickinessTest {
     }
 
     @Test
+    fun runConsistencyViolationCooldownPreventsImmediateSecondEpisode() {
+        // Real device log evidence (a862ed06-analysis.log): a genuine
+        // tableau3 misread (Ten_Clubs -> Eight_Hearts, a rank-skip a legal
+        // alternating-descending run can never produce) kept re-triggering
+        // the violation check. The per-episode cap
+        // (runConsistencyViolationFreezeIsBoundedThenFallsThrough) worked
+        // correctly in isolation, but two capped episodes fired back-to-back
+        // with zero gap between them, chaining into a ~3.9s stall at the
+        // very end of a game. Drive one full 4-frame capped episode (as in
+        // that test), then keep the violation flag true on every following
+        // frame: the next VIOLATION_COOLDOWN_FRAMES frames must not produce
+        // a new "run-consistency" hold, and only once the cooldown has fully
+        // elapsed may a fresh capped episode begin.
+        var state = SuggestionStickiness.State()
+        repeat(4) {
+            val result = SuggestionStickiness.apply(
+                previous = tableauMove,
+                best = drawStock,
+                ranked = listOf(drawStock, tableauMove),
+                boardVisuallyChanged = false,
+                state = state,
+                hasRunConsistencyViolation = true
+            )
+            state = result.state
+        }
+        val fallThrough = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = drawStock,
+            ranked = listOf(drawStock, tableauMove),
+            boardVisuallyChanged = false,
+            state = state,
+            hasRunConsistencyViolation = true
+        )
+        assertEquals(0, fallThrough.state.violationHoldStreak)
+        assertEquals(2, fallThrough.state.violationCooldownRemaining)
+        state = fallThrough.state
+
+        repeat(2) { i ->
+            val cooldownFrame = SuggestionStickiness.apply(
+                previous = tableauMove,
+                best = drawStock,
+                ranked = listOf(drawStock, tableauMove),
+                boardVisuallyChanged = false,
+                state = state,
+                hasRunConsistencyViolation = true
+            )
+            assertTrue(
+                "cooldown frame ${i + 1} must not re-enter the freeze",
+                cooldownFrame.holdReason == null || !cooldownFrame.holdReason!!.contains("run-consistency")
+            )
+            assertEquals(0, cooldownFrame.state.violationHoldStreak)
+            assertEquals(1 - i, cooldownFrame.state.violationCooldownRemaining)
+            state = cooldownFrame.state
+        }
+
+        // Cooldown fully elapsed - a still-violated, still-differing frame
+        // may now start a fresh capped episode.
+        val newEpisodeStart = SuggestionStickiness.apply(
+            previous = tableauMove,
+            best = drawStock,
+            ranked = listOf(drawStock, tableauMove),
+            boardVisuallyChanged = false,
+            state = state,
+            hasRunConsistencyViolation = true
+        )
+        assertNull(newEpisodeStart.display)
+        assertEquals(1, newEpisodeStart.state.violationHoldStreak)
+        assertTrue(newEpisodeStart.holdReason!!.contains("run-consistency"))
+    }
+
+    @Test
     fun runConsistencyViolationIsIgnoredWhenMoveUnchanged() {
         // best == previous is a same-move no-op regardless of the flag.
         val result = SuggestionStickiness.apply(
