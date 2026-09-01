@@ -759,9 +759,7 @@
         "suit": "Spades"
       },
       "truth": {
-        "kind": "FaceUp",
-        "rank": "Four",
-        "suit": "Spades"
+        "kind": "FaceDown"
       }
     },
     {

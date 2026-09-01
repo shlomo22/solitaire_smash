@@ -532,9 +532,7 @@
         "suit": "Spades"
       },
       "truth": {
-        "kind": "FaceUp",
-        "rank": "Four",
-        "suit": "Spades"
+        "kind": "FaceDown"
       }
     },
     {
@@ -555,7 +553,7 @@
       "truth": {
         "kind": "FaceUp",
         "rank": "Three",
-        "suit": "Hearts"
+        "suit": "Diamonds"
       }
     },
     {
@@ -714,9 +712,7 @@
         "suit": "Spades"
       },
       "truth": {
-        "kind": "FaceUp",
-        "rank": "Queen",
-        "suit": "Spades"
+        "kind": "FaceDown"
       }
     },
     {
