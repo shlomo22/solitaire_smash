@@ -34,7 +34,7 @@
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Ten",
+        "rank": "Queen",
         "suit": "Diamonds"
       },
       "truth": {

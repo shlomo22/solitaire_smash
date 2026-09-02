@@ -657,13 +657,15 @@
       "index": 0,
       "inferred": false,
       "bounds": {
-        "l": 749.7899780273438,
+        "l": 660.0,
         "t": 503.1000061035156,
-        "r": 907.199951171875,
+        "r": 798.0,
         "b": 713.7000122070312
       },
       "engine": {
-        "kind": "Unknown"
+        "kind": "FaceUp",
+        "rank": "Ten",
+        "suit": "Spades"
       },
       "truth": {
         "kind": "FaceUp",

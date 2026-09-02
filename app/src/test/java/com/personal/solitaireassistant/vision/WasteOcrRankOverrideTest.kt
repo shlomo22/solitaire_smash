@@ -187,6 +187,21 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun correctSixOnWasteDoesNotStealDualCropNineWithoutOcr() {
+        // Local Evaluate 144419: both crops Nine, OCR unavailable, weak exact
+        // scores previously let sixScore+0.05≥nineScore invent Six.
+        val nineClubs = Card(Rank.Nine, Suit.Clubs, faceUp = true, known = true)
+        val rank = WasteRankCorrections.correctSixOnWaste(
+            legacyCard = nineClubs,
+            tightCard = nineClubs,
+            baseCard = nineClubs,
+            exactRankScores = mapOf(Rank.Nine to 0.42f, Rank.Six to 0.40f),
+            ocrRank = null
+        )
+        assertNull(rank)
+    }
+
+    @Test
     fun correctSixOnWasteDoesNotStealLeadingNine() {
         val nineDiamonds = Card(Rank.Nine, Suit.Diamonds, faceUp = true, known = true)
         val rank = WasteRankCorrections.correctSixOnWaste(

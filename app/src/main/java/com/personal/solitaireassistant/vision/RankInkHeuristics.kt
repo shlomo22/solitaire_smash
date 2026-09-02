@@ -125,10 +125,47 @@ object RankInkHeuristics {
             abs(m.topR - m.botR) < 0.14f
     }
 
+    /**
+     * Waste null-rank Queen recovery only. Smash Queen center glyphs put almost
+     * no ink in the left third of the center ROI (body+tail sit mid/right):
+     * golden waste scan leftR ≤ 0.05 + midCR ≥ 0.40 + rightR ≥ 0.35 + dens
+     * 0.35–0.50 hits the unread QD (`125606`) and 0/117 other waste face-ups.
+     * General [guess] Queen dens ceiling is 0.34, so these crops never match.
+     */
+    fun matchesOpenQueen(bitmap: Bitmap): Boolean {
+        val m = shapeMetrics(bitmap) ?: return false
+        return m.leftR <= 0.05f &&
+            m.midCR >= 0.40f &&
+            m.rightR >= 0.35f &&
+            m.density in 0.35f..0.50f
+    }
+
+    /**
+     * Waste null-rank Ten recovery only. Full waste "10" glyphs are dense
+     * (~0.63–0.67) with a column valley between the 1 and 0 — above the
+     * general [shapeMetrics] dens ceiling (0.55), so [guess] never fires.
+     * Golden waste scan with dens ≤ 0.72: colValleys ≥ 1 + aspect 0.85–1.05 +
+     * dens 0.55–0.72 + balanced L/M/R columns hits 13/13 waste Tens and 0
+     * non-Tens (including the unread 10S at `172118` on the ink-anchored crop).
+     */
+    fun matchesDenseTen(bitmap: Bitmap): Boolean {
+        val m = shapeMetrics(bitmap, maxDensity = DENSE_TEN_DENSITY_CEILING) ?: return false
+        return m.colValleys >= 1 &&
+            m.aspect in 0.85f..1.05f &&
+            m.density in DENSE_TEN_DENSITY_FLOOR..DENSE_TEN_DENSITY_CEILING &&
+            abs(m.leftR - m.rightR) < 0.05f &&
+            abs(m.leftR - m.midCR) < 0.05f
+    }
+
     /** Exposed for tests / callers that already hold a crop. */
     internal const val DENSE_EIGHT_DENSITY_FLOOR = 0.50f
+    internal const val DENSE_TEN_DENSITY_FLOOR = 0.55f
+    internal const val DENSE_TEN_DENSITY_CEILING = 0.72f
 
-    private fun shapeMetrics(bitmap: Bitmap): ShapeMetrics? {
+    private fun shapeMetrics(
+        bitmap: Bitmap,
+        maxDensity: Float = 0.55f
+    ): ShapeMetrics? {
         val w = bitmap.width
         val h = bitmap.height
         if (w < 24 || h < 24) return null
@@ -184,7 +221,7 @@ object RankInkHeuristics {
         if (ink < 8 || total == 0) return null
 
         val density = ink.toFloat() / total
-        if (density < 0.04f || density > 0.55f) return null
+        if (density < 0.04f || density > maxDensity) return null
 
         val bw = (maxX - minX).coerceAtLeast(1).toFloat()
         val bh = (maxY - minY).coerceAtLeast(1).toFloat()

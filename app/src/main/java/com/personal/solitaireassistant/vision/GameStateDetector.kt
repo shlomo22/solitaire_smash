@@ -1463,13 +1463,23 @@ class GameStateDetector(
         if (!hasFace) return null
 
         val ranked = rankScores.entries.sortedByDescending { it.value }
-        val rank = ranked.firstOrNull()
+        val templateRank = ranked.firstOrNull()
             ?.takeIf { it.value >= 0.58f }
             ?.takeIf { first ->
                 val second = ranked.getOrNull(1)?.value ?: 0f
                 first.value - second >= 0.04f || first.value >= 0.68f
             }
-            ?.key ?: return null
+            ?.key
+        // Template scores alone leave some full waste faces unread (Queen body
+        // with no left-band ink; dense "10" above the general ink dens ceiling).
+        // Dedicated shape gates — validated 0-FP on the golden waste set — recover
+        // those before we give up and emit a color-only `?`.
+        val inkRank = if (templateRank == null) {
+            inkRankFromWasteCrop(bitmap, tightRegion)
+        } else {
+            null
+        }
+        val rank = templateRank ?: inkRank ?: return null
 
         val red = when {
             tightStats.redInkRatio > tightStats.blackInkRatio + 0.008f -> true
@@ -1494,8 +1504,37 @@ class GameStateDetector(
                         score >= 0.62f)
             }
             ?.first ?: return null
+        val suitMargin = suited.first().second - (suited.getOrNull(1)?.second ?: 0f)
+        // Ink-only rank recovery often has a weak black-suit template margin
+        // (Clubs≈Spades on a dense Ten); keep color for tableau but suppress
+        // foundation when that margin is thin.
+        val suitAmbiguous = inkRank != null && !suitPick.isRed && suitMargin < 0.08f
 
-        return Card(rank, suitPick, faceUp = true, known = true)
+        return Card(
+            rank,
+            suitPick,
+            faceUp = true,
+            known = true,
+            suitAmbiguous = suitAmbiguous
+        )
+    }
+
+    private fun inkRankFromWasteCrop(bitmap: Bitmap, region: BoardRegion): Rank? {
+        val left = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = region.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.toInt().coerceAtMost(bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return null
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            when {
+                RankInkHeuristics.matchesOpenQueen(crop) -> Rank.Queen
+                RankInkHeuristics.matchesDenseTen(crop) -> Rank.Ten
+                else -> null
+            }
+        } finally {
+            crop.recycle()
+        }
     }
 
     /**

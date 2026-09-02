@@ -206,10 +206,10 @@ internal object WasteRankCorrections {
         // every OCR region misses (132126/132140/155538 8D, 205220 Jack).
         // Real Six-as-Four recoveries already arrive via ocrRank==Six above
         // (and via OCR on 040931-class boards).
-        if (nineCandidate) {
-            val nineScore = rankScore(exactRankScores, Rank.Nine)
-            if (sixScore + 0.05f >= nineScore && sixScore >= 0.38f) return Rank.Six
-        }
+        // Same for Nine: a silent sixScore+0.05≥nineScore steal turns real
+        // dual-crop Nines into Six when exact templates are weak/noisy
+        // (144419: legacy=Nine, tight=Nine → fused Six with OCR unavailable).
+        // Six-as-Nine recoveries stay on the ocrRank==Six branch above.
         return null
     }
 

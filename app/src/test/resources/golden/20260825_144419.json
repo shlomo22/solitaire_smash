@@ -709,12 +709,12 @@
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Six",
+        "rank": "Nine",
         "suit": "Clubs"
       },
       "truth": {
         "kind": "FaceUp",
-        "rank": "Six",
+        "rank": "Nine",
         "suit": "Clubs"
       }
     }
