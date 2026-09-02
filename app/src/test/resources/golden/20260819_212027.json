@@ -321,7 +321,7 @@
         "l": 471.1577453613281,
         "t": 882.054443359375,
         "r": 608.8423461914062,
-        "b": 1074.8128662109375
+        "b": 1074.8129272460938
       },
       "engine": {
         "kind": "FaceDown"
@@ -338,15 +338,17 @@
         "l": 471.1577453613281,
         "t": 926.388916015625,
         "r": 608.8423461914062,
-        "b": 1119.1473388671875
+        "b": 1119.1473999023438
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Ten",
+        "rank": "Eight",
         "suit": "Clubs"
       },
       "truth": {
-        "kind": "FaceDown"
+        "kind": "FaceUp",
+        "rank": "Eight",
+        "suit": "Clubs"
       }
     },
     {
@@ -355,35 +357,14 @@
       "inferred": false,
       "bounds": {
         "l": 471.1577453613281,
-        "t": 980.3612670898438,
+        "t": 975.291748046875,
         "r": 608.8423461914062,
-        "b": 1173.1197509765625
+        "b": 1168.0502319335938
       },
       "engine": {
         "kind": "FaceUp",
-        "rank": "Ace",
-        "suit": "Spades"
-      },
-      "truth": {
-        "kind": "FaceUp",
-        "rank": "Eight",
-        "suit": "Clubs"
-      }
-    },
-    {
-      "pile": "tableau:3",
-      "index": 4,
-      "inferred": true,
-      "bounds": {
-        "l": 471.1577453613281,
-        "t": 1034.3336181640625,
-        "r": 608.8423461914062,
-        "b": 1227.092041015625
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Eight",
-        "suit": "Spades"
+        "rank": "Seven",
+        "suit": "Hearts"
       },
       "truth": {
         "kind": "FaceUp",
@@ -393,33 +374,13 @@
     },
     {
       "pile": "tableau:3",
-      "index": 5,
-      "inferred": false,
-      "bounds": {
-        "l": 471.1577453613281,
-        "t": 1088.3060302734375,
-        "r": 608.8423461914062,
-        "b": 1281.064453125
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Spades",
-        "suitAmbiguous": true
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:3",
-      "index": 6,
+      "index": 4,
       "inferred": false,
       "bounds": {
         "l": 471.1577453613281,
         "t": 1035.067138671875,
         "r": 608.8423461914062,
-        "b": 1227.8255615234375
+        "b": 1227.8256225585938
       },
       "engine": {
         "kind": "FaceUp",

@@ -1,0 +1,34 @@
+---
+description: After fixing golden truth JSON, always push those files to the device
+alwaysApply: true
+---
+
+# Push fixed goldens to device
+
+Whenever golden truth is **fixed or relabeled** under
+`app/src/test/resources/golden/*.json` (or the matching on-device labels are
+edited in the repo for sync):
+
+1. **Push each changed JSON to the device in the same turn** — do not wait for
+   the user to ask. Evaluate reads `filesDir/golden/` via `GoldenTruthStore`,
+   not the repo copies.
+2. Use platform-tools `adb` (often not on PATH):
+
+```
+$adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
+$pkg = "com.personal.solitaireassistant"
+# for each changed file:
+& $adb push "app\src\test\resources\golden\<id>.json" "/data/local/tmp/<id>.json"
+& $adb shell run-as $pkg cp "/data/local/tmp/<id>.json" "files/golden/<id>.json"
+```
+
+If `cp` fails, use the absolute redirect:
+
+```
+& $adb shell "run-as $pkg sh -c 'cat /data/local/tmp/<id>.json > /data/data/$pkg/files/golden/<id>.json'"
+```
+
+3. Confirm with `run-as … ls -l files/golden/<id>.json` (size should match the
+   repo file). Say which ids were pushed.
+4. Repo-only edits without a device push leave the next Evaluate scoring stale
+   labels — treat that as incomplete work.

@@ -488,14 +488,18 @@ class GameStateDetector(
                     ) {
                         val rankCount = resolvedLeading.rank.value - card.rank.value + 1
                         val countDifference = rankCount - faceUpCount
+                        // Do NOT expand faceUpCount when ranks imply +2 over
+                        // geometry. That path invented FaceUp phantoms on short
+                        // columns (Evaluate 143855/171952/220815: King-on-Jack,
+                        // Queen-on-Ten, Queen-on-Nine) because a wrong leading
+                        // read always "fits" arithmetic while the measured
+                        // firstFaceTop→bottomTop span cannot hold the extra
+                        // cards. rankCountConsistent still tracks agreement for
+                        // mid-run geom overrides — only when ranks already match
+                        // the pixel span, not after forcing the span to match.
                         cascadeRankCountNote =
                             "leadingRank=${resolvedLeading.rank.name},rankCount=$rankCount," +
-                                "diff=$countDifference,applied=${countDifference == 2}"
-                        if (rankCount in 1..Rank.entries.size &&
-                            countDifference == 2
-                        ) {
-                            faceUpCount = rankCount
-                        }
+                                "diff=$countDifference,applied=false"
                         rankCountConsistent = rankCount == faceUpCount
                     } else {
                         cascadeRankCountNote = "leadingUnknown"
