@@ -66,6 +66,37 @@ class BoardRegionFingerprintsTest {
     }
 
     @Test
+    fun lastPullWasteNoiseOfSevenIsAbsorbed() {
+        val (prev, _) = identicalBoard()
+        val nextSamples = prev.samples.mapIndexed { i, arr ->
+            if (i == 0) cloneWithFlips(arr, 7) else arr.copyOf()
+        }.toTypedArray()
+        val cmp = BoardRegionFingerprints.compare(prev, BoardRegionFingerprints.Snapshot(nextSamples))
+        assertTrue("waste=7 was unchanged-Draw noise on v1.4.120", cmp.unchanged)
+    }
+
+    @Test
+    fun lastPullTableauNoiseOfNineIsAbsorbed() {
+        val (prev, _) = identicalBoard()
+        val t5 = BoardRegionFingerprints.SPECS.indexOfFirst { it.name == "t5" }
+        val nextSamples = prev.samples.mapIndexed { i, arr ->
+            if (i == t5) cloneWithFlips(arr, 9) else arr.copyOf()
+        }.toTypedArray()
+        val cmp = BoardRegionFingerprints.compare(prev, BoardRegionFingerprints.Snapshot(nextSamples))
+        assertTrue("t5=9 was unchanged-Draw noise on v1.4.120", cmp.unchanged)
+    }
+
+    @Test
+    fun typicalWasteDrawStillForcesDetect() {
+        val (prev, _) = identicalBoard()
+        val nextSamples = prev.samples.mapIndexed { i, arr ->
+            if (i == 0) cloneWithFlips(arr, 84) else arr.copyOf()
+        }.toTypedArray()
+        val cmp = BoardRegionFingerprints.compare(prev, BoardRegionFingerprints.Snapshot(nextSamples))
+        assertEquals(listOf("waste"), cmp.changed)
+    }
+
+    @Test
     fun tableauToleranceIsIndependentOfWaste() {
         val (prev, _) = identicalBoard()
         val t0 = BoardRegionFingerprints.SPECS.indexOfFirst { it.name == "t0" }

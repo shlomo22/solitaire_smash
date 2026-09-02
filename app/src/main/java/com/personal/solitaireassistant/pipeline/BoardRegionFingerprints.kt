@@ -55,14 +55,16 @@ internal object BoardRegionFingerprints {
     }
 
     /**
-     * Tight on waste/stock/foundations: a playable-card swap is a localized
-     * ink change and must always trip. Tableau columns are larger and pick
-     * up more capture jitter, so they get one extra sample of slack.
+     * Per-pile slack for capture jitter. v1.4.120 live pull: waste=4 and
+     * waste=7 / t5=9 forced 1s+ delta detects for an unchanged Draw, while
+     * real waste draws in the same session were 84–191 and a real t5 move
+     * was 30. Raised waste/tableau to sit between that noise and those
+     * swaps. Stock/foundation stay at 1 — they were not the stall.
      */
-    const val WASTE_TOLERANCE = 1
+    const val WASTE_TOLERANCE = 8
     const val STOCK_TOLERANCE = 1
     const val FOUNDATION_TOLERANCE = 1
-    const val TABLEAU_TOLERANCE = 2
+    const val TABLEAU_TOLERANCE = 10
 
     val SPECS: List<RegionSpec> = buildList {
         val p = BoardGeometryProfile()
