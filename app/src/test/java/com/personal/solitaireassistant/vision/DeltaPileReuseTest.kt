@@ -86,6 +86,29 @@ class DeltaPileReuseTest {
     }
 
     @Test
+    fun leadingAndBottomAnchorPairRunsInParallel() {
+        val bmp = loadGolden("20260825_131538")
+        val detector = GameStateDetector(
+            ApplicationProvider.getApplicationContext(),
+            minConfidence = 0.5f
+        )
+        val first = detector.detect(bmp)
+        val second = detector.detect(bmp)
+        val pairNotes = first.diagnostics.filter { it.contains("anchorPair=") }
+        assertTrue(
+            "expected tableauN.anchorPair on 131538, got ${first.diagnostics.filter { it.startsWith("tableau") }}",
+            pairNotes.isNotEmpty()
+        )
+        assertTrue(
+            "at least one column should overlap leading+bottom, got $pairNotes",
+            pairNotes.any { it.endsWith("=parallel") }
+        )
+        assertEquals(first.state!!.tableau, second.state!!.tableau)
+        detector.release()
+        bmp.recycle()
+    }
+
+    @Test
     fun nullChangedRegionsIsFullRecompute() {
         val bmp = loadGolden("20260814_125606")
         val detector = GameStateDetector(

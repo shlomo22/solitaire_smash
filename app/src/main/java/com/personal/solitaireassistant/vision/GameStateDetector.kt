@@ -10,6 +10,7 @@ import com.personal.solitaireassistant.game.PileRef
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import java.util.concurrent.Callable
+import java.util.concurrent.RejectedExecutionException
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -70,6 +71,15 @@ class GameStateDetector(
     // Separate from columnExecutor so a long waste-OCR call cannot starve
     // the pile workers.
     private val wasteOcrExecutor = PriorityThreadFactory.newSingleThreadExecutor("waste-ocr")
+    // Intra-column leading+bottom overlap. computeColumn already occupies a
+    // columnExecutor thread, so submitting those two recognizes back onto
+    // that same pool and waiting would deadlock when the pool is full
+    // (every worker inside computeColumn, none left for the nested tasks).
+    // Size 2: enough that a live delta with one or two dirty columns gets
+    // real overlap, without adding another CPU-count-sized pool on top of
+    // the column workers. Evaluate's 7-column burst queues here; latency
+    // there does not gate the arrow.
+    private val slotPairExecutor = PriorityThreadFactory.newFixedThreadPool(2, "detect-slot-pair")
 
     // Diagnostic-only: per-detect() timing, reset at the top of detect().
     // Not thread-safe, but the pipeline only ever runs one detect() at a time.
@@ -100,6 +110,15 @@ class GameStateDetector(
         var missNoPrior = 0
         var missFingerprint = 0
         var missBounds = 0
+
+        fun addFrom(other: RecognizeStats) {
+            hits += other.hits
+            misses += other.misses
+            missNanos += other.missNanos
+            missNoPrior += other.missNoPrior
+            missFingerprint += other.missFingerprint
+            missBounds += other.missBounds
+        }
     }
 
     private class FoundationPileResult(
@@ -339,31 +358,6 @@ class GameStateDetector(
                     y += downStep
                 }
 
-                val hit = recognizeCached(
-                    bitmap = bitmap,
-                    pile = PileRef.Tableau(col),
-                    index = 0,
-                    region = faceRegion,
-                    cache = localCache,
-                    stats = stats
-                )
-                val inkRed = hit.inferredRed ?: hit.card?.suit?.isRed
-                var card = cardFromHit(hit) ?: Card(
-                    Rank.Ace,
-                    Suit.Clubs,
-                    faceUp = true,
-                    known = false
-                )
-                var slotTrace = hit.trace
-                val (resolvedCard, resolvedTrace) = resolveCardSuitWithTrace(
-                    bitmap,
-                    faceRegion,
-                    card,
-                    slotTrace
-                )
-                card = resolvedCard
-                slotTrace = resolvedTrace
-
                 // Reconstruct the overlapped face-up run geometrically. Sampling
                 // colored header strips missed leading cards in long cascades;
                 // card spacing is fixed and every legal tableau run descends
@@ -465,40 +459,105 @@ class GameStateDetector(
                 // that contradicts this consensus is more likely wrong than the
                 // consensus is.
                 var rankCountConsistent = false
+                val leadingRegion = BoardRegion(
+                    columnRegion.left,
+                    firstFaceTop,
+                    columnRegion.right,
+                    (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
+                )
+                // Only the top faceUpStep sliver of leadingRegion is actually
+                // this card — the rest is covered by the card(s) stacked on
+                // top of it. Feed the ink-color read only that visible strip
+                // so the covering card's color can't leak into inkRed.
+                //
+                // leadingRegion itself stays full cardHeight: a fifth
+                // attempt trimmed it down (matching leadingHeaderRegion)
+                // and a real device log showed FaceUp->FaceDown mismatches
+                // spike (Occupancy 9->29, Missing 1->18) - the coarse
+                // looksFaceDown/looksEmpty color gates in recognize() run
+                // on this same region's stats, and a few pixels of teal
+                // bleed from the covering card at the boundary is a much
+                // larger fraction of a ~44px strip than of a ~193px card,
+                // tipping genuinely face-up cards into the face-down gate.
+                // trimmedToVisibleStrip (passed below) tells recognize() to
+                // derive its own smaller sub-crop internally, from
+                // leadingRegion's already-correct crop, using inkRegion's
+                // proportions - narrower fix than trimming the region the
+                // color gates see.
+                val leadingHeaderRegion = BoardRegion(
+                    columnRegion.left,
+                    firstFaceTop,
+                    columnRegion.right,
+                    (firstFaceTop + faceUpStep * 0.9f)
+                        .coerceAtMost(columnRegion.bottom)
+                )
+                // Bottom used to be recognized before the face-down walk, so
+                // it could never overlap the leading read. Both regions are
+                // known once firstFaceTop is final; run them at the same
+                // time. Leading uses its own cache/stats maps because
+                // recognizeCached writes those and the column thread is
+                // concurrently writing the bottom entry.
+                val leadingCache = mutableMapOf<SlotKey, CachedSlotHit>()
+                val leadingStats = RecognizeStats()
+                val leadingFuture = try {
+                    slotPairExecutor.submit(
+                        Callable {
+                            recognizeCached(
+                                bitmap = bitmap,
+                                pile = PileRef.Tableau(col),
+                                index = 200,
+                                region = leadingRegion,
+                                cache = leadingCache,
+                                exactCardBounds = true,
+                                inkRegion = leadingHeaderRegion,
+                                trimmedToVisibleStrip = true,
+                                stats = leadingStats
+                            )
+                        }
+                    )
+                } catch (_: RejectedExecutionException) {
+                    null
+                }
+                val hit = recognizeCached(
+                    bitmap = bitmap,
+                    pile = PileRef.Tableau(col),
+                    index = 0,
+                    region = faceRegion,
+                    cache = localCache,
+                    stats = stats
+                )
+                var anchorPairMode = "serial"
+                val prefetchedLeading = if (leadingFuture != null) {
+                    try {
+                        val fetched = leadingFuture.get()
+                        localCache.putAll(leadingCache)
+                        stats.addFrom(leadingStats)
+                        anchorPairMode = "parallel"
+                        fetched
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+                diagnostics += "tableau$col.anchorPair=$anchorPairMode"
+                var card = cardFromHit(hit) ?: Card(
+                    Rank.Ace,
+                    Suit.Clubs,
+                    faceUp = true,
+                    known = false
+                )
+                var slotTrace = hit.trace
+                val (resolvedCard, resolvedTrace) = resolveCardSuitWithTrace(
+                    bitmap,
+                    faceRegion,
+                    card,
+                    slotTrace
+                )
+                card = resolvedCard
+                slotTrace = resolvedTrace
                 if (card.known) {
-                    val leadingRegion = BoardRegion(
-                        columnRegion.left,
-                        firstFaceTop,
-                        columnRegion.right,
-                        (firstFaceTop + cardHeight).coerceAtMost(columnRegion.bottom)
-                    )
-                    // Only the top faceUpStep sliver of leadingRegion is actually
-                    // this card — the rest is covered by the card(s) stacked on
-                    // top of it. Feed the ink-color read only that visible strip
-                    // so the covering card's color can't leak into inkRed.
-                    //
-                    // leadingRegion itself stays full cardHeight: a fifth
-                    // attempt trimmed it down (matching leadingHeaderRegion)
-                    // and a real device log showed FaceUp->FaceDown mismatches
-                    // spike (Occupancy 9->29, Missing 1->18) - the coarse
-                    // looksFaceDown/looksEmpty color gates in recognize() run
-                    // on this same region's stats, and a few pixels of teal
-                    // bleed from the covering card at the boundary is a much
-                    // larger fraction of a ~44px strip than of a ~193px card,
-                    // tipping genuinely face-up cards into the face-down gate.
-                    // trimmedToVisibleStrip (passed below) tells recognize() to
-                    // derive its own smaller sub-crop internally, from
-                    // leadingRegion's already-correct crop, using inkRegion's
-                    // proportions - narrower fix than trimming the region the
-                    // color gates see.
-                    val leadingHeaderRegion = BoardRegion(
-                        columnRegion.left,
-                        firstFaceTop,
-                        columnRegion.right,
-                        (firstFaceTop + faceUpStep * 0.9f)
-                            .coerceAtMost(columnRegion.bottom)
-                    )
-                    val leadingHitResult = recognizeCached(
+                    val leadingHitResult = prefetchedLeading ?: recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
                         index = 200,
@@ -1833,6 +1892,7 @@ class GameStateDetector(
         recognizer.release()
         columnExecutor.shutdown()
         wasteOcrExecutor.shutdown()
+        slotPairExecutor.shutdown()
     }
 
     /**
