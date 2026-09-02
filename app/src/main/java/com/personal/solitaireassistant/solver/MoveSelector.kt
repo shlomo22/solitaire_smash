@@ -16,6 +16,11 @@ import com.personal.solitaireassistant.game.ScoredMove
  * scorer prefers tableau peels and foundation-to-tableau pulls that unlock a
  * receiver over another empty recycle. Default false keeps unit tests and
  * early-game play on the original one-ply weights.
+ *
+ * Among several legal card moves, [exposedOpenUnlock] and a 2-ply card
+ * follow-up use the currently known face-up cards plus [KlondikeRules] to
+ * prefer the line that unlocks a foundation or stack next. Those bonuses
+ * stay small enough that a no-reveal rearrange still loses to draw.
  */
 object MoveSelector {
     /** Productive moves at or above this score bypass [avoidStates] draw fallback. */
@@ -30,6 +35,13 @@ object MoveSelector {
     /** Enough to beat recycle (~0 to −20) while stuck; same order as a real reveal. */
     private const val UNSTUCK_PEEL_BONUS = 120.0
     private const val UNSTUCK_FOUNDATION_PULL_BONUS = 120.0
+    /** Ranking-only: newly exposed known card can go to foundation. Cannot beat draw vs −180. */
+    private const val OPEN_UNLOCK_FOUNDATION = 25.0
+    /** Ranking-only: newly exposed known card can stack on another open top. */
+    private const val OPEN_UNLOCK_STACK = 15.0
+    private const val FOLLOW_REVEAL = 20.0
+    private const val FOLLOW_FOUNDATION = 10.0
+    private const val LOOKAHEAD2_SCALE = 0.5
 
     fun rankedMoves(
         state: GameState,
@@ -292,18 +304,28 @@ object MoveSelector {
 
         score += after.tableau.count { col -> col.lastOrNull()?.faceUp == true } * 0.5
 
-        val followUpBonus = MoveGenerator.generate(after).maxOfOrNull { follow ->
-            val followState = KlondikeRules.apply(after, follow) ?: return@maxOfOrNull 0.0
-            val moreReveal = after.hiddenTableauCount() - followState.hiddenTableauCount()
-            val moreFound = followState.foundationCount() - after.foundationCount()
-            moreReveal * 20.0 + moreFound * 10.0
-        } ?: 0.0
+        // Same unlock idea as the stuck peel, used for ranking whenever
+        // several legal card moves exist: what do the now-open cards allow
+        // under Klondike rules (this ply + two follow-ups). Modest weights
+        // so a no-reveal rearrange still loses to draw.
+        exposedOpenUnlock(before, after, move)?.let { (unlockScore, unlockWhy) ->
+            score += unlockScore
+            reasons += unlockWhy
+        }
+        val (followUpBonus, followState) = bestCardFollowUp(after)
         if (followUpBonus > 0) {
             score += followUpBonus
             reasons += "lookahead+$followUpBonus"
-            if (move is Move.WasteToTableau && followUpBonus >= 20.0) {
+            if (move is Move.WasteToTableau && followUpBonus >= FOLLOW_REVEAL) {
                 score += 40.0
                 reasons += "waste-unlocks"
+            }
+            followState?.let { mid ->
+                val second = bestCardFollowUp(mid).first * LOOKAHEAD2_SCALE
+                if (second > 0) {
+                    score += second
+                    reasons += "lookahead2+$second"
+                }
             }
         }
 
@@ -334,16 +356,76 @@ object MoveSelector {
         val from = before.tableau[move.fromColumn]
         if (before.hiddenInColumn(move.fromColumn) <= 0) return false
         if (move.startIndex != from.lastIndex) return false
-        val exposed = after.tableau[move.fromColumn].lastOrNull() ?: return false
-        if (!exposed.faceUp || !exposed.known) return false
-        for (foundation in after.foundations) {
-            if (exposed.canPlaceOnFoundation(foundation.lastOrNull())) return true
+        return newlyExposedCard(before, after, move.fromColumn)
+            ?.let { exposedUnlockKind(after, it, setOf(move.fromColumn, move.toColumn)) } != null
+    }
+
+    /**
+     * Best non-draw follow-up using only known open cards and [KlondikeRules].
+     * Reveal and foundation are the same units the old 1-ply lookahead used.
+     */
+    private fun bestCardFollowUp(state: GameState): Pair<Double, GameState?> {
+        var best = 0.0
+        var bestState: GameState? = null
+        for (follow in MoveGenerator.generate(state)) {
+            if (follow is Move.DrawStock || follow is Move.RecycleWaste) continue
+            val followState = KlondikeRules.apply(state, follow) ?: continue
+            val moreReveal = state.hiddenTableauCount() - followState.hiddenTableauCount()
+            val moreFound = followState.foundationCount() - state.foundationCount()
+            val value = moreReveal * FOLLOW_REVEAL + moreFound * FOLLOW_FOUNDATION
+            if (value > best) {
+                best = value
+                bestState = followState
+            }
         }
-        for (to in after.tableau.indices) {
-            if (to == move.fromColumn) continue
-            if (exposed.canStackOnTableau(after.tableauTop(to))) return true
+        return best to bestState
+    }
+
+    /**
+     * After this move, a newly visible known card can legally found or stack —
+     * the same check as the stuck peel, scored as a tie-break among card moves.
+     */
+    private fun exposedOpenUnlock(
+        before: GameState,
+        after: GameState,
+        move: Move
+    ): Pair<Double, String>? {
+        val (col, exclude) = when (move) {
+            is Move.TableauToTableau ->
+                move.fromColumn to setOf(move.fromColumn, move.toColumn)
+            is Move.TableauToFoundation ->
+                move.fromColumn to setOf(move.fromColumn)
+            else -> return null
         }
-        return false
+        val exposed = newlyExposedCard(before, after, col) ?: return null
+        return when (exposedUnlockKind(after, exposed, exclude)) {
+            "foundation" -> OPEN_UNLOCK_FOUNDATION to "open-unlock-foundation"
+            "stack" -> OPEN_UNLOCK_STACK to "open-unlock-stack"
+            else -> null
+        }
+    }
+
+    private fun newlyExposedCard(before: GameState, after: GameState, col: Int): Card? {
+        val exposed = after.tableauTop(col) ?: return null
+        if (!exposed.faceUp || !exposed.known) return null
+        val previousTop = before.tableauTop(col)
+        if (previousTop != null && previousTop.id == exposed.id && previousTop.faceUp) return null
+        return exposed
+    }
+
+    private fun exposedUnlockKind(
+        state: GameState,
+        exposed: Card,
+        excludeColumns: Set<Int>
+    ): String? {
+        if (state.foundations.any { exposed.canPlaceOnFoundation(it.lastOrNull()) }) {
+            return "foundation"
+        }
+        for (to in state.tableau.indices) {
+            if (to in excludeColumns) continue
+            if (exposed.canStackOnTableau(state.tableauTop(to))) return "stack"
+        }
+        return null
     }
 
     /**

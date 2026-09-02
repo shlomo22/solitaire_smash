@@ -624,4 +624,74 @@ class MoveSelectorTest {
         )
         assertEquals(Move.RecycleWaste, notStuckBest.move)
     }
+
+    @Test
+    fun prefersRevealThatUnlocksFoundationOverPlainReveal() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Nine, Suit.Clubs, false), c(Rank.Eight, Suit.Hearts)),
+                listOf(c(Rank.Four, Suit.Spades, false), c(Rank.Three, Suit.Diamonds)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                listOf(c(Rank.Four, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                emptyList(),
+                listOf(
+                    c(Rank.Ace, Suit.Spades),
+                    c(Rank.Two, Suit.Spades),
+                    c(Rank.Three, Suit.Spades)
+                ),
+                emptyList(),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 1, startIndex = 1, toColumn = 3),
+            best.move
+        )
+        assertTrue(
+            "expected open-unlock or lookahead on the 4S line, got ${best.rationale}",
+            best.rationale.contains("open-unlock") || best.rationale.contains("lookahead")
+        )
+    }
+
+    @Test
+    fun amongNoRevealStacksPrefersTheOneThatUnlocksAKnownCard() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Nine, Suit.Clubs), c(Rank.Eight, Suit.Hearts)),
+                listOf(c(Rank.Four, Suit.Spades), c(Rank.Three, Suit.Diamonds)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                listOf(c(Rank.Four, Suit.Clubs)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                emptyList(),
+                listOf(
+                    c(Rank.Ace, Suit.Spades),
+                    c(Rank.Two, Suit.Spades),
+                    c(Rank.Three, Suit.Spades)
+                ),
+                emptyList(),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = emptyList()
+        )
+
+        val best = requireNotNull(MoveSelector.bestMove(state))
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 1, startIndex = 1, toColumn = 3),
+            best.move
+        )
+        assertTrue(
+            "expected open-unlock-foundation, got ${best.rationale}",
+            best.rationale.contains("open-unlock-foundation")
+        )
+    }
 }
