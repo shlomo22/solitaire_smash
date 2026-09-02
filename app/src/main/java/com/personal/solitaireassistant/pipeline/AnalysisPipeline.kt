@@ -74,7 +74,7 @@ class AnalysisPipeline(
     private var lastLoggedOutcome: String? = null
     private var sessionStarted = false
     private val recentStates = ArrayDeque<GameState>()
-    private var lastFrameFingerprint: Long? = null
+    private var lastBoardPrint: BoardRegionFingerprints.Snapshot? = null
     private var lastDetection: DetectionResult? = null
     private var lastFrameBitmap: Bitmap? = null
     private val snapshotLock = Any()
@@ -168,21 +168,28 @@ class AnalysisPipeline(
         // Keep prior arrow while analyzing to avoid constant flash.
 
         val started = System.currentTimeMillis()
-        val fingerprint = boardFingerprint(bitmap)
-        val cached = fingerprint == lastFrameFingerprint
+        val boardPrint = BoardRegionFingerprints.sample(bitmap)
+        val printCmp = BoardRegionFingerprints.compare(lastBoardPrint, boardPrint)
+        val cached = printCmp.unchanged && lastDetection != null
         val boardVisuallyChanged = !cached
-        val detection = if (cached) {
-            lastDetection ?: detector.detect(bitmap)
+        val detectionRaw = if (cached) {
+            lastDetection!!
         } else {
             detector.detect(bitmap)
         }
-        if (!cached || lastDetection == null) {
-            lastFrameFingerprint = fingerprint
-        }
+        lastBoardPrint = boardPrint
+        val detection = detectionRaw.copy(
+            diagnostics = detectionRaw.diagnostics + "fingerprint=${printCmp.note()}"
+        )
         synchronized(snapshotLock) {
-            lastDetection = detection
+            lastDetection = detectionRaw
         }
         val elapsed = System.currentTimeMillis() - started
+        // Always logged (not outcome-deduped) so a skip-heavy session still
+        // shows skip vs run rate. See BoardRegionFingerprints.
+        fileLogger.append(
+            "fp ${printCmp.note()} detect=${if (cached) "skip" else "run"} ${elapsed}ms"
+        )
         // How long this frame sat in the pending-frame handoff before
         // analysis actually started on it — the part of end-to-end latency
         // the detect()/cache optimizations don't touch at all.
@@ -219,7 +226,7 @@ class AnalysisPipeline(
         sessionStarted = false
         recentStates.clear()
         sessionRejected.clear()
-        lastFrameFingerprint = null
+        lastBoardPrint = null
         pendingSuggestionCandidate = null
         pendingSuggestionStreak = 0
         violationHoldStreak = 0
@@ -504,92 +511,6 @@ class AnalysisPipeline(
         state.tableau.sumOf { col -> col.count { it.faceUp && it.known } } +
             state.waste.count { it.known } +
             state.foundations.sumOf { pile -> pile.count { it.known } }
-
-    private fun boardFingerprint(bitmap: Bitmap): Long {
-        var hash = fingerprintRegion(
-            bitmap = bitmap,
-            left = 0,
-            right = bitmap.width,
-            top = (bitmap.height * 0.20f).toInt(),
-            bottom = (bitmap.height * 0.68f).toInt(),
-            cols = 54,
-            rows = 60,
-            seed = -0x340d631b7bdddcdbL
-        )
-        // Stock/waste churn a lot on each move; sample the top bar separately so
-        // draw/recycle moves are not missed by the main tableau fingerprint.
-        hash = fingerprintRegion(
-            bitmap = bitmap,
-            left = 0,
-            right = bitmap.width,
-            top = (bitmap.height * 0.06f).toInt(),
-            bottom = (bitmap.height * 0.22f).toInt(),
-            cols = 40,
-            rows = 10,
-            seed = hash
-        )
-        return hash
-    }
-
-    private fun fingerprintRegion(
-        bitmap: Bitmap,
-        left: Int,
-        right: Int,
-        top: Int,
-        bottom: Int,
-        cols: Int,
-        rows: Int,
-        seed: Long
-    ): Long {
-        if (bottom <= top || right <= left) return seed
-        val stepX = ((right - left) / cols).coerceAtLeast(1)
-        val stepY = ((bottom - top) / rows).coerceAtLeast(1)
-        var hash = seed
-        var y = top
-        while (y < bottom) {
-            var x = left
-            while (x < right) {
-                val color = bitmap.getPixel(x, y)
-                // 4 bits/channel (16-unit buckets), not 5 (8-unit buckets): a
-                // real device log showed this whole-board fingerprint flipping
-                // on almost every frame with the game visually static, which
-                // marks boardVisuallyChanged=true nonstop and defeats the
-                // stableHits<2 debounce in handleDetection() — a low-confidence
-                // slot (0.58, partially-occluded tableau card) then alternated
-                // between two different reads every other frame because
-                // fastUpdateAfterMove kept firing instead of the debounce path,
-                // flipping the suggested move back and forth with no real board
-                // change. regionFingerprint() below hit the identical failure
-                // mode for the per-slot cache and was already widened from 5 to
-                // 4 bits/channel for the same reason; this brings the
-                // whole-board fingerprint in line with that fix.
-                //
-                // v1.4.94 tried loosening this further (near-match on a sample
-                // array instead of an exact hash) to fix "every frame pays a
-                // full detect() even on a static board" - reverted in v1.4.95:
-                // a real device log showed an 80-second stretch reusing the
-                // exact same stale detection (confidence frozen at 0.60) while
-                // known-face-up quietly drifted 2->10, meaning a real board
-                // change went undetected and the arrow was working off stale
-                // state that whole time. A coarse 54x60/40x10 grid over a
-                // large region can have a real but small, same-color change
-                // (e.g. a waste card swap where the ink differs but the grid
-                // mostly samples white background) land on fewer samples than
-                // any tolerance loose enough to also absorb capture noise -
-                // missing a real change silently is worse than the original
-                // "always slow" problem, so this stays an exact match until a
-                // safer tolerance is device-validated.
-                val quantized =
-                    (((color shr 20) and 0xF) shl 8) or
-                        (((color shr 12) and 0xF) shl 4) or
-                        ((color shr 4) and 0xF)
-                hash = (hash xor quantized.toLong()) * 0x100000001b3L
-                x += stepX
-            }
-            y += stepY
-        }
-        return hash
-    }
 
     private fun handleDetection(
         detectionRaw: DetectionResult,
