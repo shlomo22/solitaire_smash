@@ -12,6 +12,38 @@ class TableauCascadeSupportTest {
     private val bottomTwoClubs = Card(Rank.Two, Suit.Clubs, faceUp = true, known = true)
 
     @Test
+    fun livePathSkipsMidsOnlyWhenBottomIsStrongAndRanksAgree() {
+        assertTrue(
+            TableauCascadeSupport.livePathCanSkipMidReads(
+                bottomKnown = true,
+                bottomConfidence = 0.84f,
+                rankCountConsistent = true
+            )
+        )
+        assertFalse(
+            TableauCascadeSupport.livePathCanSkipMidReads(
+                bottomKnown = true,
+                bottomConfidence = 0.79f,
+                rankCountConsistent = true
+            )
+        )
+        assertFalse(
+            TableauCascadeSupport.livePathCanSkipMidReads(
+                bottomKnown = true,
+                bottomConfidence = 0.90f,
+                rankCountConsistent = false
+            )
+        )
+        assertFalse(
+            TableauCascadeSupport.livePathCanSkipMidReads(
+                bottomKnown = false,
+                bottomConfidence = 0.90f,
+                rankCountConsistent = true
+            )
+        )
+    }
+
+    @Test
     fun prefersGeometricWhenDoublyAnchoredConsensusDisagrees() {
         val geometric = TableauCascadeSupport.geometricCascadeCard(bottomTwoClubs, 3)
         val direct = Card(Rank.Jack, Suit.Hearts, faceUp = true, known = true)

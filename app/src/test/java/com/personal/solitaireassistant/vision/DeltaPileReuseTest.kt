@@ -59,6 +59,33 @@ class DeltaPileReuseTest {
     }
 
     @Test
+    fun liveColumnRecomputeSkipsMidTemplatesWhenAnchorsAgree() {
+        val bmp = loadGolden("20260825_131538")
+        val detector = GameStateDetector(
+            ApplicationProvider.getApplicationContext(),
+            minConfidence = 0.5f
+        )
+        val full = detector.detect(bmp)
+        val live = detector.detect(
+            bmp,
+            changedRegions = setOf("t0", "t1", "t2", "t3", "t4", "t5", "t6")
+        )
+        val skips = live.diagnostics.filter { it.contains("liveMidSkip=") }
+        assertTrue("expected at least one live-mid skip on 131538, got ${live.diagnostics.filter { it.startsWith("tableau") }}", skips.isNotEmpty())
+        assertFalse(
+            "Evaluate/full detect must still template-match middles",
+            full.diagnostics.any { it.contains("liveMidSkip=") }
+        )
+        for (col in 0..6) {
+            val fullTop = full.state!!.tableau[col].lastOrNull { it.faceUp && it.known }
+            val liveTop = live.state!!.tableau[col].lastOrNull { it.faceUp && it.known }
+            assertEquals("exposed col $col", fullTop?.id, liveTop?.id)
+        }
+        detector.release()
+        bmp.recycle()
+    }
+
+    @Test
     fun nullChangedRegionsIsFullRecompute() {
         val bmp = loadGolden("20260814_125606")
         val detector = GameStateDetector(

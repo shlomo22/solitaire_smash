@@ -575,6 +575,13 @@ class GameStateDetector(
                         "bottomRank=${card.rank.name},$cascadeRankCountNote," +
                         "boundary=[$boundaryBreakReason]"
                 slotTrace = slotTrace.withPost(cascadeDiagnosticPost)
+                val skipLiveMids = changedRegions != null &&
+                    TableauCascadeSupport.livePathCanSkipMidReads(
+                        bottomKnown = card.known,
+                        bottomConfidence = hit.confidence,
+                        rankCountConsistent = rankCountConsistent
+                    )
+                var liveMidSkipCount = 0
                 for (exposedIndex in 0 until faceUpCount - 1) {
                     val distanceFromBottom = faceUpCount - 1 - exposedIndex
                     val geometricFallback = TableauCascadeSupport.geometricCascadeCard(
@@ -605,6 +612,32 @@ class GameStateDetector(
                         (top + faceUpStep * 0.9f).coerceAtMost(columnRegion.bottom)
                     )
                     val precomputedHit = if (exposedIndex == 0) leadingHit else null
+                    if (skipLiveMids &&
+                        exposedIndex > 0 &&
+                        geometricFallback.known
+                    ) {
+                        liveMidSkipCount++
+                        cards += geometricFallback
+                        locs += locator.toCardLocation(
+                            PileRef.Tableau(col),
+                            cards.lastIndex,
+                            bounds
+                        )
+                        recognizedSlots += RecognizedSlot(
+                            pile = PileRef.Tableau(col),
+                            index = cards.lastIndex,
+                            bounds = bounds,
+                            engine = slotGuessFromCard(geometricFallback),
+                            confidence = 0.55f,
+                            diagnostic = "live-mid-skip:geom",
+                            trace = RecognitionTrace.EMPTY.withPost(
+                                "$cascadeDiagnosticPost,exposedIndex=$exposedIndex," +
+                                    "distanceFromBottom=$distanceFromBottom,live-mid-skip"
+                            ),
+                            inferred = true
+                        )
+                        continue
+                    }
                     val slotHit = precomputedHit ?: recognizeCached(
                         bitmap = bitmap,
                         pile = PileRef.Tableau(col),
@@ -742,6 +775,9 @@ class GameStateDetector(
                             confidence = cascadeConfidence
                         )
                     }
+                }
+                if (liveMidSkipCount > 0) {
+                    diagnostics += "tableau$col.liveMidSkip=$liveMidSkipCount"
                 }
                 val cardAbove = cards.lastOrNull()
                 val repairedBottom = TableauCascadeSupport.repairIllegalBottom(

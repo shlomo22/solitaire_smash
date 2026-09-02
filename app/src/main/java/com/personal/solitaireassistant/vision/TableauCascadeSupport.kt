@@ -96,6 +96,21 @@ internal object TableauCascadeSupport {
             !hit.isEmpty
 
     /**
+     * Live-play only: skip mid-cascade template reads when the two
+     * anchors already agree on run length and the bottom read is strong
+     * enough to be the geometric source. Evaluate leaves
+     * `changedRegions` null so this gate is never used there.
+     */
+    fun livePathCanSkipMidReads(
+        bottomKnown: Boolean,
+        bottomConfidence: Float,
+        rankCountConsistent: Boolean
+    ): Boolean =
+        bottomKnown &&
+            rankCountConsistent &&
+            bottomConfidence >= BOTTOM_ANCHOR_FLOOR
+
+    /**
      * Prefer geometric rank/color over a direct mid-cascade read when a stronger
      * anchor disagrees. Covers doubly-anchored runs (bottom + leading agree on
      * length) and bottom-only anchors when the leading card is unknown.
