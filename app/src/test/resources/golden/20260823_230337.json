@@ -724,42 +724,6 @@
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
-        "t": 1103.7265625,
-        "r": 1057.813720703125,
-        "b": 1296.4849853515625
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 7,
-      "inferred": false,
-      "bounds": {
-        "l": 920.129150390625,
-        "t": 1148.06103515625,
-        "r": 1057.813720703125,
-        "b": 1340.8194580078125
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Spades"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 8,
-      "inferred": false,
-      "bounds": {
-        "l": 920.129150390625,
         "t": 1196.9638671875,
         "r": 1057.813720703125,
         "b": 1389.7222900390625
@@ -778,7 +742,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 9,
+      "index": 7,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,

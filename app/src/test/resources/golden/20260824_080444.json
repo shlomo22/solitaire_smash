@@ -615,43 +615,6 @@
     {
       "pile": "tableau:6",
       "index": 5,
-      "inferred": false,
-      "bounds": {
-        "l": 920.129150390625,
-        "t": 1059.3922119140625,
-        "r": 1057.813720703125,
-        "b": 1252.150634765625
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 6,
-      "inferred": false,
-      "bounds": {
-        "l": 920.129150390625,
-        "t": 1103.7266845703125,
-        "r": 1057.813720703125,
-        "b": 1296.485107421875
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Jack",
-        "suit": "Hearts",
-        "suitAmbiguous": true
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 7,
       "inferred": true,
       "bounds": {
         "l": 920.129150390625,
@@ -672,7 +635,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 8,
+      "index": 6,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
@@ -694,7 +657,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 9,
+      "index": 7,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
@@ -715,7 +678,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 10,
+      "index": 8,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,
@@ -737,7 +700,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 11,
+      "index": 9,
       "inferred": true,
       "bounds": {
         "l": 920.129150390625,
@@ -758,7 +721,7 @@
     },
     {
       "pile": "tableau:6",
-      "index": 12,
+      "index": 10,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,

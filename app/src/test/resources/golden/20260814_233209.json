@@ -622,44 +622,6 @@
     {
       "pile": "tableau:6",
       "index": 6,
-      "inferred": true,
-      "bounds": {
-        "l": 920.129150390625,
-        "t": 1103.7265625,
-        "r": 1057.813720703125,
-        "b": 1296.4849853515625
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Four",
-        "suit": "Spades"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 7,
-      "inferred": true,
-      "bounds": {
-        "l": 920.129150390625,
-        "t": 1157.698974609375,
-        "r": 1057.813720703125,
-        "b": 1350.4573974609375
-      },
-      "engine": {
-        "kind": "FaceUp",
-        "rank": "Three",
-        "suit": "Hearts"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:6",
-      "index": 8,
       "inferred": false,
       "bounds": {
         "l": 920.129150390625,

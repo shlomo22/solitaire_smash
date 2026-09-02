@@ -1523,7 +1523,7 @@ Remaining buckets, descending live-play value:
   Both looked well-justified from a single pixel-verified example beforehand. If
   attempting this again, validate across many golden samples *before* writing Kotlin,
   not just the one sample that motivated the idea.
-  **Now three attempts, not two.** v1.4.112 avoided touching the constant
+  **Now four attempts, not three.** v1.4.112 avoided touching the constant
   entirely — it replaced the arithmetic that consumes it with a direct pixel
   measurement of the boundary — and still cost **−198 slots** on device
   (5867→5669 on an identical 6010-slot set), reverted in v1.4.113. So
@@ -1533,6 +1533,15 @@ Remaining buckets, descending live-play value:
   errors got through. See the `scanFaceDownBacks` entry above for the full
   post-mortem and for the golden-truth inflation that makes this area hard to
   score at all.
+  A fourth attempt (local only, never shipped) used first-white-cap as
+  `firstFaceTop` instead of last-teal-row, after repairing 139 phantom
+  FaceDown truth slots in columns 5/6. Against that honest baseline
+  (5717/5913) it still lost **−27** (5690) with the same shape: rank 111→151,
+  suit 116→130, FaceDown→FaceUp 10→21. The measurement can be right and the
+  consumer still shifts `distanceFromBottom` / cascade slot landing. Do not
+  retry this family without a full `computeColumn` replay that also models
+  the leading-color +1 and rank-count==2 adjustments, not just face-up
+  distance / step.
 - Don't assume a two-pass tiebreak's *second* pass is where a wrong answer comes from
   just because it's the one that logs a decisive-looking branch name. Check which pass's
   diagnostic actually set the stored value first (see the black-suit-ambiguous note

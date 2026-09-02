@@ -66,6 +66,7 @@ class SmashGoldenTruthTest {
             val header = "Desktop Evaluate (Robolectric, OpenCV usually off)\n${report.summary()}"
             println(header)
             System.err.println(header)
+            writeFullReport(report, header)
             assertTrue(
                 "Detector produced no labeled-slot comparisons.\n$header",
                 report.slotCount > 0
@@ -74,6 +75,31 @@ class SmashGoldenTruthTest {
             detector.release()
             loaded.forEach { (_, bitmap) -> bitmap.recycle() }
         }
+    }
+
+    /**
+     * `summary()` caps its example list at 12, which is enough to eyeball a
+     * total but not to work a bucket - the FaceDown->FaceUp cases alone
+     * outnumber it. Dumps every mismatch and every diagnostic trace to a file
+     * so a local A/B can diff which specific slots moved, the way the device's
+     * `analysis.log` allows.
+     */
+    private fun writeFullReport(report: GoldenEvalReport, header: String) {
+        val dest = File("build/reports/desktop-evaluate.txt")
+        dest.parentFile?.mkdirs()
+        val text = buildString {
+            appendLine(header)
+            appendLine()
+            appendLine("All mismatches (${report.mismatches.size}):")
+            report.mismatches.forEach { appendLine("  $it") }
+            val traces = report.mismatchTraceBlock()
+            if (traces.isNotBlank()) {
+                appendLine()
+                appendLine(traces)
+            }
+        }
+        dest.writeText(text)
+        println("Full desktop Evaluate report: ${dest.absolutePath}")
     }
 
     @Test

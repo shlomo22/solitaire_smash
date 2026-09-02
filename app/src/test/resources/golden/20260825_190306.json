@@ -540,23 +540,6 @@
     {
       "pile": "tableau:5",
       "index": 5,
-      "inferred": false,
-      "bounds": {
-        "l": 770.4720458984375,
-        "t": 1059.3922119140625,
-        "r": 908.1566162109375,
-        "b": 1252.150634765625
-      },
-      "engine": {
-        "kind": "FaceDown"
-      },
-      "truth": {
-        "kind": "FaceDown"
-      }
-    },
-    {
-      "pile": "tableau:5",
-      "index": 6,
       "inferred": true,
       "bounds": {
         "l": 770.4720458984375,
@@ -577,7 +560,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 7,
+      "index": 6,
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
@@ -598,7 +581,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 8,
+      "index": 7,
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
@@ -619,7 +602,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 9,
+      "index": 8,
       "inferred": true,
       "bounds": {
         "l": 770.4720458984375,
@@ -640,7 +623,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 10,
+      "index": 9,
       "inferred": true,
       "bounds": {
         "l": 770.4720458984375,
@@ -661,7 +644,7 @@
     },
     {
       "pile": "tableau:5",
-      "index": 11,
+      "index": 10,
       "inferred": false,
       "bounds": {
         "l": 770.4720458984375,
