@@ -774,6 +774,42 @@ class GameStateDetector(
         }
 
         val tightWasteRegion = locateWasteTopRegion(bitmap, board)
+        val legacyWasteRegion = locator.wasteTopRegion(board)
+        // Region list + fingerprint do not depend on template hits, so they
+        // can be ready before recognizeCached. That lets OCR start the
+        // moment the tight crop produces a card, overlapping the legacy
+        // fusion / exact scores / ink-guess work that used to sit in front
+        // of the submit (latest live-play pull: 35/97 frames ≥500ms, 30 of
+        // those OCR-relevant at mean 287ms — this prefix was pure added
+        // latency on that path). Same probes, same selection; only when
+        // the search begins.
+        val wasteOcrRegions = buildList {
+            add(tightWasteRegion)
+            add(legacyWasteRegion)
+            addAll(locator.wasteOcrCardRegions(board))
+        }
+        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
+            acc * 31L + regionFingerprint(bitmap, region)
+        }
+        val reusableWasteOcr = cachedWasteOcr?.takeIf { cached ->
+            cached.fingerprint == ocrFingerprint &&
+                cached.regions.size == wasteOcrRegions.size &&
+                cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
+        }
+        var wasteOcrStartNanos = 0L
+        var wasteOcrKick = "skip"
+        fun submitWasteOcr(): java.util.concurrent.Future<RankCornerOcr.AttemptResult>? {
+            if (reusableWasteOcr != null) {
+                wasteOcrKick = "cached"
+                return null
+            }
+            if (wasteOcrStartNanos == 0L) wasteOcrStartNanos = System.nanoTime()
+            wasteOcrKick = if (wasteOcrKick == "skip") "early" else wasteOcrKick
+            return wasteOcrExecutor.submit<RankCornerOcr.AttemptResult> {
+                recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
+            }
+        }
+
         val tightWasteHit = recognizeCached(
             bitmap = bitmap,
             pile = PileRef.Waste,
@@ -782,7 +818,11 @@ class GameStateDetector(
             cache = newSlotCache,
             exactCardBounds = true
         )
-        val legacyWasteRegion = locator.wasteTopRegion(board)
+        // Kick OCR as soon as we know a waste face exists. Waiting until
+        // after legacy/scores (the old wasteOcrRelevant gate) left the
+        // 47–430ms ML Kit search strictly after work that does not
+        // affect which regions get probed.
+        var wasteOcrFuture = if (tightWasteHit.card != null) submitWasteOcr() else null
         val needsLegacyFusion =
             tightWasteHit.card == null ||
                 tightWasteHit.confidence < 0.68f ||
@@ -851,37 +891,12 @@ class GameStateDetector(
         // guess; the early-exit added to attemptWasteRankOcr already bounds
         // the cost of trying, so just always try when there's a real card.
         val wasteOcrRelevant = legacyCard != null || tightCard != null
-        val wasteOcrStartNanos = System.nanoTime()
-        val wasteOcrRegions = if (wasteOcrRelevant) {
-            buildList {
-                add(tightWasteRegion)
-                add(legacyWasteRegion)
-                addAll(locator.wasteOcrCardRegions(board))
-            }
-        } else {
-            emptyList()
-        }
-        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
-            acc * 31L + regionFingerprint(bitmap, region)
-        }
-        val reusableWasteOcr = if (wasteOcrRelevant) {
-            cachedWasteOcr?.takeIf { cached ->
-                cached.fingerprint == ocrFingerprint &&
-                    cached.regions.size == wasteOcrRegions.size &&
-                    cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
-            }
-        } else {
-            null
-        }
-        // Columns/foundations already started above. Kick OCR now so a fresh
-        // waste read (the 47–430ms ML Kit path) overlaps whatever pile work
-        // is still running. Cached waste is still free.
-        val wasteOcrFuture = if (wasteOcrRelevant && reusableWasteOcr == null) {
-            wasteOcrExecutor.submit<RankCornerOcr.AttemptResult> {
-                recognizer.attemptWasteRankOcr(bitmap, wasteOcrRegions)
-            }
-        } else {
-            null
+        // Tight was empty but legacy found a card — start OCR now (same
+        // moment the old code would have). Empty waste stays skipped so
+        // unread/empty frames don't wait on a speculative ML Kit search.
+        if (wasteOcrRelevant && wasteOcrFuture == null) {
+            wasteOcrKick = if (reusableWasteOcr == null) "late" else wasteOcrKick
+            wasteOcrFuture = submitWasteOcr()
         }
         fun finishWaste(wasteOcrAttempt: RankCornerOcr.AttemptResult?): Pair<RecognitionHit, List<Card>> {
         val wasteOcrOverride = WasteRankCorrections.ocrRankOverride(
@@ -1195,8 +1210,8 @@ class GameStateDetector(
             }
         }
         diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
-            "ms=${(System.nanoTime() - wasteOcrStartNanos) / 1_000_000}," +
-            "overlapped=${wasteOcrFuture != null}"
+            "ms=${if (wasteOcrStartNanos == 0L) 0 else (System.nanoTime() - wasteOcrStartNanos) / 1_000_000}," +
+            "overlapped=${wasteOcrFuture != null},kick=$wasteOcrKick"
         val (wasteHit, wasteCards) = finishWaste(wasteOcrAttempt)
 
         val wasteConfidence = if (wasteCandidatesDisagree) {
