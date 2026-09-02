@@ -245,6 +245,35 @@ internal object WasteRankCorrections {
     }
 
     /**
+     * Waste-only: tight/legacy Four with OCR empty, but center-glyph ink is a
+     * dense balanced Eight. Covers the no-OCR Eight→Four magnet
+     * (132126/132140/155538) where every OCR probe is `miss:empty` and
+     * templates lock Four. Directed Four→Eight only — dens floor excludes
+     * real Fours/Sixes/Nines (see [RankInkHeuristics.matchesDenseEight]).
+     * Distinct from [correctEightOnWaste], which only reconsiders Six/Seven
+     * fusions (v1.4.90's ink-Eight-on-any-Four path net −30 and was reverted).
+     */
+    fun correctEightOverFourOnWaste(
+        legacyCard: Card?,
+        tightCard: Card?,
+        baseCard: Card?,
+        denseEightShape: Boolean,
+        ocrRank: Rank?
+    ): Rank? {
+        val fourCandidate = legacyCard?.rank == Rank.Four ||
+            tightCard?.rank == Rank.Four ||
+            baseCard?.rank == Rank.Four
+        if (!fourCandidate) return null
+        if (legacyCard?.rank == Rank.Eight || tightCard?.rank == Rank.Eight) {
+            return Rank.Eight
+        }
+        // A non-Four OCR hit belongs to ocrRankOverride.
+        if (ocrRank != null && ocrRank != Rank.Four) return null
+        if (denseEightShape) return Rank.Eight
+        return null
+    }
+
+    /**
      * Waste-only: fused Six/Seven on a real Eight. Directed — never the reverse —
      * so it cannot re-break genuine Sixes the way a new 6/8 confusion pair would.
      */

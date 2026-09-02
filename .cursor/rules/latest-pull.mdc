@@ -9,12 +9,12 @@ After each **Golden truth → Evaluate**, the user runs `scripts/pull-artifacts.
 manually. That writes `analysis.log` and `screenshot.png` under `pulled/<timestamp>/`
 and copies them to **`pulled/latest/`**.
 
-When the user says **read latest pull** (or equivalent), read:
+When the user says **latest** / **read pull** / **read latest** (or equivalent), read:
 
 - `pulled/latest/screenshot.png`
 - `pulled/latest/analysis.log`
 
-When the user says **pull artifacts** (or "run pull-artifacts", "pull and read"):
+When the user says **pull** (preferred; also: "pull eval", "pull and read", legacy "pull artifacts"):
 
 1. Run `powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1` from the repo root (needs a connected device; Evaluate should already have been tapped).
 2. Then read `pulled/latest/screenshot.png` and `pulled/latest/analysis.log`.

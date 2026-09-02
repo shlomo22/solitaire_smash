@@ -263,6 +263,43 @@ class WasteOcrRankOverrideTest {
     }
 
     @Test
+    fun correctEightOverFourOnWasteRecoversDenseEight() {
+        // Evaluate 132126/132140/155538: legacy=null, tight Four, OCR empty.
+        val rank = WasteRankCorrections.correctEightOverFourOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            denseEightShape = true,
+            ocrRank = null
+        )
+        assertEquals(Rank.Eight, rank)
+    }
+
+    @Test
+    fun correctEightOverFourOnWasteIgnoresNonDenseFour() {
+        val rank = WasteRankCorrections.correctEightOverFourOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            denseEightShape = false,
+            ocrRank = null
+        )
+        assertNull(rank)
+    }
+
+    @Test
+    fun correctEightOverFourOnWasteDefersToNonFourOcr() {
+        val rank = WasteRankCorrections.correctEightOverFourOnWaste(
+            legacyCard = null,
+            tightCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            baseCard = Card(Rank.Four, Suit.Diamonds, faceUp = true, known = true),
+            denseEightShape = true,
+            ocrRank = Rank.Five
+        )
+        assertNull(rank)
+    }
+
+    @Test
     fun ocrTenDoesNotOverrideWhenBothCropsReadQueen() {
         val queen = Card(Rank.Queen, Suit.Hearts, faceUp = true)
         val override = WasteRankCorrections.ocrRankOverride(

@@ -951,10 +951,18 @@ class GameStateDetector(
             tallJackShape = tallJackShapeFromRegion(bitmap, tightWasteRegion),
             ocrRank = wasteOcrAttempt?.guess?.rank
         )
+        val wasteEightOverFourOverride = WasteRankCorrections.correctEightOverFourOnWaste(
+            legacyCard = legacyCard,
+            tightCard = tightCard,
+            baseCard = baseCard,
+            denseEightShape = denseEightShapeFromRegion(bitmap, tightWasteRegion),
+            ocrRank = wasteOcrAttempt?.guess?.rank
+        )
         val correctedRank = when {
             wasteEightOverride != null -> wasteEightOverride
             wasteOcrOverride != null -> wasteOcrOverride
             wasteJackOverFourOverride != null -> wasteJackOverFourOverride
+            wasteEightOverFourOverride != null -> wasteEightOverFourOverride
             // Prefer fuller-crop Nine over tight/OCR Six magnet before
             // correctSixOnWaste / base fusion can re-pick Six (v1.4.87 left
             // 114135×3 as fused-Six after OCR override went null).
@@ -1365,6 +1373,24 @@ class GameStateDetector(
         val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
         return try {
             RankInkHeuristics.matchesTallJack(crop)
+        } finally {
+            crop.recycle()
+        }
+    }
+
+    /** Waste Four→Eight only — see [RankInkHeuristics.matchesDenseEight]. */
+    private fun denseEightShapeFromRegion(
+        bitmap: Bitmap,
+        region: BoardRegion
+    ): Boolean {
+        val left = region.left.toInt().coerceIn(0, bitmap.width - 1)
+        val top = region.top.toInt().coerceIn(0, bitmap.height - 1)
+        val right = region.right.toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.toInt().coerceIn(top + 1, bitmap.height)
+        if (right - left < 8 || bottom - top < 8) return false
+        val crop = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        return try {
+            RankInkHeuristics.matchesDenseEight(crop)
         } finally {
             crop.recycle()
         }

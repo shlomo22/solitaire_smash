@@ -109,6 +109,25 @@ object RankInkHeuristics {
             m.midCR > 0.30f
     }
 
+    /**
+     * Waste Four→Eight recovery only. Full waste-card center-glyph density
+     * cleanly separates Smash Eights from Fours (and from Six/Nine, which
+     * sit just below): golden scan with the same [shapeMetrics] ROI/step —
+     * Eight dens 0.500–0.521 (19/19), Four 0.385–0.406 (17), Six ≤0.490,
+     * Nine ≤0.487. The general [guess] Eight rule never fires on these
+     * crops (dens ceiling 0.34). Pair with a balanced top/bot ink split so
+     * a dense non-Eight cannot ride the floor alone.
+     */
+    fun matchesDenseEight(bitmap: Bitmap): Boolean {
+        val m = shapeMetrics(bitmap) ?: return false
+        return m.density >= DENSE_EIGHT_DENSITY_FLOOR &&
+            m.aspect in 0.55f..0.85f &&
+            abs(m.topR - m.botR) < 0.14f
+    }
+
+    /** Exposed for tests / callers that already hold a crop. */
+    internal const val DENSE_EIGHT_DENSITY_FLOOR = 0.50f
+
     private fun shapeMetrics(bitmap: Bitmap): ShapeMetrics? {
         val w = bitmap.width
         val h = bitmap.height
