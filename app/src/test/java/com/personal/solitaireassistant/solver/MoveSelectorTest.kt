@@ -507,4 +507,121 @@ class MoveSelectorTest {
             .first { it.move == Move.TableauToTableau(fromColumn = 0, startIndex = 1, toColumn = 1) }
         assertTrue(fullRun.rationale.contains("minimal-move"))
     }
+
+    /**
+     * Screenshot late-game shape: waste Q♣ / recycle looks best under the
+     * normal scorer because 3♦→4♣ does not flip a face-down card. After two
+     * idle waste cycles, that peel must win so 4♠ can go to foundation 3♠.
+     */
+    @Test
+    fun whenWasteCycleStuckPrefersPeelThatUnblocksFoundation() {
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Ten, Suit.Hearts)),
+                listOf(c(Rank.Four, Suit.Clubs)),
+                listOf(c(Rank.Two, Suit.Diamonds)),
+                listOf(c(Rank.Six, Suit.Spades)),
+                emptyList(),
+                listOf(
+                    c(Rank.King, Suit.Hearts, false),
+                    c(Rank.Queen, Suit.Clubs, false),
+                    c(Rank.Jack, Suit.Diamonds, false),
+                    c(Rank.Four, Suit.Spades),
+                    c(Rank.Three, Suit.Diamonds)
+                ),
+                listOf(c(Rank.Six, Suit.Diamonds))
+            ),
+            foundations = listOf(
+                listOf(
+                    c(Rank.Ace, Suit.Hearts),
+                    c(Rank.Two, Suit.Hearts),
+                    c(Rank.Three, Suit.Hearts),
+                    c(Rank.Four, Suit.Hearts)
+                ),
+                listOf(
+                    c(Rank.Ace, Suit.Spades),
+                    c(Rank.Two, Suit.Spades),
+                    c(Rank.Three, Suit.Spades)
+                ),
+                listOf(c(Rank.Ace, Suit.Clubs), c(Rank.Two, Suit.Clubs)),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = listOf(c(Rank.Queen, Suit.Clubs))
+        )
+
+        val stuckBest = requireNotNull(
+            MoveSelector.bestMove(state, wasteCycleStuck = true)
+        )
+        assertEquals(
+            Move.TableauToTableau(fromColumn = 5, startIndex = 4, toColumn = 1),
+            stuckBest.move
+        )
+        assertTrue(
+            "expected unstuck peel rationale, got ${stuckBest.rationale}",
+            stuckBest.rationale.contains("unstuck")
+        )
+        val recycleScore = MoveSelector.scoreAll(state, wasteCycleStuck = true)
+            .first { it.move == Move.RecycleWaste }
+            .score
+        assertTrue(
+            "peel ${stuckBest.score} should beat recycle $recycleScore",
+            stuckBest.score > recycleScore
+        )
+
+        val notStuckBest = requireNotNull(
+            MoveSelector.bestMove(state, wasteCycleStuck = false)
+        )
+        assertEquals(Move.RecycleWaste, notStuckBest.move)
+    }
+
+    @Test
+    fun whenWasteCycleStuckPrefersFoundationPullThatReceivesHiddenColumnTop() {
+        // 3♣ sits on a face-down card; the only 4 it can land on (4♥) is
+        // already on foundation. Pull that 4 onto a black 5 so the 3 can follow.
+        val state = GameState(
+            tableau = listOf(
+                listOf(
+                    c(Rank.Nine, Suit.Diamonds, false),
+                    c(Rank.Three, Suit.Clubs)
+                ),
+                listOf(c(Rank.Five, Suit.Spades)),
+                listOf(c(Rank.Seven, Suit.Diamonds)),
+                listOf(c(Rank.Seven, Suit.Hearts)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                listOf(c(Rank.Jack, Suit.Diamonds)),
+                listOf(c(Rank.Jack, Suit.Hearts))
+            ),
+            foundations = listOf(
+                listOf(
+                    c(Rank.Ace, Suit.Hearts),
+                    c(Rank.Two, Suit.Hearts),
+                    c(Rank.Three, Suit.Hearts),
+                    c(Rank.Four, Suit.Hearts)
+                ),
+                emptyList(),
+                emptyList(),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = listOf(c(Rank.Queen, Suit.Clubs))
+        )
+
+        val stuckBest = requireNotNull(
+            MoveSelector.bestMove(state, wasteCycleStuck = true)
+        )
+        assertEquals(
+            Move.FoundationToTableau(fromFoundation = 0, toColumn = 1),
+            stuckBest.move
+        )
+        assertTrue(
+            "expected unstuck foundation pull, got ${stuckBest.rationale}",
+            stuckBest.rationale.contains("unstuck-foundation-pull")
+        )
+
+        val notStuckBest = requireNotNull(
+            MoveSelector.bestMove(state, wasteCycleStuck = false)
+        )
+        assertEquals(Move.RecycleWaste, notStuckBest.move)
+    }
 }

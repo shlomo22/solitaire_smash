@@ -10,6 +10,12 @@ import com.personal.solitaireassistant.game.ScoredMove
 /**
  * Bounded one-ply scorer with light look-ahead bonuses.
  * Deterministic tie-breaking by move label.
+ *
+ * [wasteCycleStuck] is a live-play session flag (two idle stock/waste cycles
+ * with no waste card played — see [WasteCycleStuckTracker]). While true, the
+ * scorer prefers tableau peels and foundation-to-tableau pulls that unlock a
+ * receiver over another empty recycle. Default false keeps unit tests and
+ * early-game play on the original one-ply weights.
  */
 object MoveSelector {
     /** Productive moves at or above this score bypass [avoidStates] draw fallback. */
@@ -21,16 +27,20 @@ object MoveSelector {
     private const val MINIMAL_MOVE_PENALTY = 15.0
     private const val ACE_ON_TABLEAU_PENALTY = 150.0
     private const val HOLD_UNBALANCED_FOUNDATION = 2.0
+    /** Enough to beat recycle (~0 to −20) while stuck; same order as a real reveal. */
+    private const val UNSTUCK_PEEL_BONUS = 120.0
+    private const val UNSTUCK_FOUNDATION_PULL_BONUS = 120.0
 
     fun rankedMoves(
         state: GameState,
         rejectedFingerprints: Set<String> = emptySet(),
+        wasteCycleStuck: Boolean = false,
         moveFilter: (Move) -> Boolean = { true }
     ): List<ScoredMove> {
         val rejectedCardMoves = rejectedFingerprints.filterNot {
             MoveFingerprint.isStockFallback(it)
         }.toSet()
-        return scoreAll(state)
+        return scoreAll(state, wasteCycleStuck)
             .filter { MoveFingerprint.of(state, it.move) !in rejectedCardMoves }
             .filter { moveFilter(it.move) }
             .sortedWith(
@@ -44,9 +54,10 @@ object MoveSelector {
         state: GameState,
         avoidStates: Collection<GameState> = emptyList(),
         rejectedFingerprints: Set<String> = emptySet(),
+        wasteCycleStuck: Boolean = false,
         moveFilter: (Move) -> Boolean = { true }
     ): ScoredMove? = pickBestFromRanked(
-        ranked = rankedMoves(state, rejectedFingerprints, moveFilter),
+        ranked = rankedMoves(state, rejectedFingerprints, wasteCycleStuck, moveFilter),
         state = state,
         avoidStates = avoidStates
     )
@@ -79,11 +90,11 @@ object MoveSelector {
         } ?: ranked.firstOrNull { it.move is Move.DrawStock || it.move is Move.RecycleWaste }
     }
 
-    fun scoreAll(state: GameState): List<ScoredMove> {
+    fun scoreAll(state: GameState, wasteCycleStuck: Boolean = false): List<ScoredMove> {
         return MoveGenerator.generate(state).map { move ->
             val next = KlondikeRules.apply(state, move)
                 ?: return@map ScoredMove(move, Double.NEGATIVE_INFINITY, "illegal")
-            val (score, why) = scoreTransition(state, next, move)
+            val (score, why) = scoreTransition(state, next, move, wasteCycleStuck)
             ScoredMove(move, score, why)
         }
     }
@@ -91,7 +102,8 @@ object MoveSelector {
     private fun scoreTransition(
         before: GameState,
         after: GameState,
-        move: Move
+        move: Move,
+        wasteCycleStuck: Boolean
     ): Pair<Double, String> {
         var score = 0.0
         val reasons = mutableListOf<String>()
@@ -161,6 +173,13 @@ object MoveSelector {
             }
         }
 
+        val unstuckPeel = wasteCycleStuck &&
+            move is Move.TableauToTableau &&
+            isUnstuckTableauPeel(before, after, move)
+        val unstuckFoundationPull = wasteCycleStuck &&
+            move is Move.FoundationToTableau &&
+            foundationPullCreatesReceiver(before, after, move)
+
         when (move) {
             is Move.WasteToTableau -> {
                 score += 25.0
@@ -194,8 +213,13 @@ object MoveSelector {
                 // (a reveal, an unstuck run). The reveal/lookahead bonuses
                 // above already reward that; this flat cost keeps it from
                 // ever winning just because it happens to be *a* legal move.
-                score -= 60.0
-                reasons += "pull-from-foundation"
+                if (unstuckFoundationPull) {
+                    score += UNSTUCK_FOUNDATION_PULL_BONUS
+                    reasons += "unstuck-foundation-pull"
+                } else {
+                    score -= 60.0
+                    reasons += "pull-from-foundation"
+                }
             }
             Move.DrawStock -> {
                 if (hasProductiveWasteMove(before)) {
@@ -209,6 +233,10 @@ object MoveSelector {
             Move.RecycleWaste -> {
                 score -= 5.0 + before.recyclesUsed * 12.0
                 reasons += "recycle"
+                if (wasteCycleStuck) {
+                    score -= 40.0
+                    reasons += "defer-idle-recycle"
+                }
             }
             is Move.TableauToTableau -> {
                 val moving = before.tableau[move.fromColumn].getOrNull(move.startIndex)
@@ -220,7 +248,16 @@ object MoveSelector {
                     score += 35.0
                     reasons += "king-setup"
                 }
-                if (revealed == 0 && foundationDelta == 0 && !createsUsefulEmpty) {
+                if (unstuckPeel) {
+                    score += UNSTUCK_PEEL_BONUS
+                    val depth = before.hiddenInColumn(move.fromColumn)
+                    if (depth > 0) {
+                        score += depth * REVEAL_DEPTH_BONUS
+                        reasons += "unstuck-peel+deep-$depth"
+                    } else {
+                        reasons += "unstuck-peel"
+                    }
+                } else if (revealed == 0 && foundationDelta == 0 && !createsUsefulEmpty) {
                     score -= 180.0
                     reasons += "defer-no-reveal-stack"
                 }
@@ -271,12 +308,64 @@ object MoveSelector {
         }
 
         if (isTrivialReversible(before, after, move)) {
-            score -= 40.0
-            reasons += "reversible"
+            // An unstuck foundation pull that creates a receiver is not churn
+            // even if the card could go straight back — the point is the next
+            // card landing on it. Keep the reversible penalty only otherwise.
+            if (!unstuckFoundationPull) {
+                score -= 40.0
+                reasons += "reversible"
+            }
         }
 
         if (reasons.isEmpty()) reasons += "neutral"
         return score to reasons.joinToString(",")
+    }
+
+    /**
+     * Top-card peel from a hidden-bearing column that exposes a card able to
+     * go to foundation or stack onto another tableau top — the 3♦→4♣ / 4♠→3♠
+     * line when waste cycling has already failed twice.
+     */
+    private fun isUnstuckTableauPeel(
+        before: GameState,
+        after: GameState,
+        move: Move.TableauToTableau
+    ): Boolean {
+        val from = before.tableau[move.fromColumn]
+        if (before.hiddenInColumn(move.fromColumn) <= 0) return false
+        if (move.startIndex != from.lastIndex) return false
+        val exposed = after.tableau[move.fromColumn].lastOrNull() ?: return false
+        if (!exposed.faceUp || !exposed.known) return false
+        for (foundation in after.foundations) {
+            if (exposed.canPlaceOnFoundation(foundation.lastOrNull())) return true
+        }
+        for (to in after.tableau.indices) {
+            if (to == move.fromColumn) continue
+            if (exposed.canStackOnTableau(after.tableauTop(to))) return true
+        }
+        return false
+    }
+
+    /**
+     * Pulling a foundation card onto tableau creates a landing spot for some
+     * other card (waste, or a tableau top sitting on a hidden column).
+     */
+    private fun foundationPullCreatesReceiver(
+        before: GameState,
+        after: GameState,
+        move: Move.FoundationToTableau
+    ): Boolean {
+        val pulled = after.tableauTop(move.toColumn) ?: return false
+        before.wasteTop()?.let { waste ->
+            if (waste.canStackOnTableau(pulled)) return true
+        }
+        for (col in before.tableau.indices) {
+            if (col == move.toColumn) continue
+            if (before.hiddenInColumn(col) <= 0) continue
+            val top = before.tableauTop(col) ?: continue
+            if (top.canStackOnTableau(pulled)) return true
+        }
+        return false
     }
 
     private fun revealedColumn(before: GameState, after: GameState): Int? {

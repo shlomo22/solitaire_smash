@@ -20,6 +20,7 @@ import com.personal.solitaireassistant.settings.AssistantSettings
 import com.personal.solitaireassistant.settings.RejectedMoveStore
 import com.personal.solitaireassistant.solver.MoveFingerprint
 import com.personal.solitaireassistant.solver.MoveSelector
+import com.personal.solitaireassistant.solver.WasteCycleStuckTracker
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.ErrorCaptureMeta
 import com.personal.solitaireassistant.vision.ErrorCapturePolicy
@@ -91,6 +92,10 @@ class AnalysisPipeline(
     private var violationHoldStreak = 0
     private var lastErrorCaptureSignature: String? = null
     private val assistantForeground = AtomicBoolean(false)
+    // Two idle stock/waste recycles with no waste card played → prefer
+    // tableau peels / foundation pulls over another empty cycle. Vision
+    // never sees GameState.recyclesUsed; this tracks confirmed transitions.
+    private val wasteCycleStuckTracker = WasteCycleStuckTracker()
 
     val analysisLogPath: String get() = fileLogger.pathForDisplay()
 
@@ -162,6 +167,7 @@ class AnalysisPipeline(
             sessionStarted = true
             sessionRejected.clear()
             rejectedMoveStore.clear()
+            wasteCycleStuckTracker.reset()
             fileLogger.sessionStart("${bitmap.width}x${bitmap.height}")
             fileLogger.append("=== capture session start - rejected-move history cleared ===")
         }
@@ -243,6 +249,7 @@ class AnalysisPipeline(
         lastStableState = null
         pendingDealBoundaryStreak = 0
         lastRecordedMoveHistoryState = null
+        wasteCycleStuckTracker.reset()
         pendingFrame.getAndSet(null)?.bitmap?.recycle()
         detector.clearSlotCache()
         overlayController.hideArrowTemporarily()
@@ -299,6 +306,7 @@ class AnalysisPipeline(
         pendingDealBoundaryStreak = 0
         sessionRejected.clear()
         rejectedMoveStore.clear()
+        wasteCycleStuckTracker.reset()
         if (settingsRef.get().saveMoveHistory) {
             moveHistoryStore.newSession()
             lastRecordedMoveHistoryState = null
@@ -666,11 +674,18 @@ class AnalysisPipeline(
             return
         }
 
+        val previousConfirmed = lastStableState
         maybeResetRejectionsForNewDeal(state)
         lastStableState = state
         if (recentStates.lastOrNull() != state) {
             recentStates.addLast(state)
             while (recentStates.size > 4) recentStates.removeFirst()
+            wasteCycleStuckTracker.onConfirmedTransition(previousConfirmed, state)?.let { note ->
+                fileLogger.append(
+                    "waste-cycle: $note stuck=${wasteCycleStuckTracker.isStuck} " +
+                        "idleRecycles=${wasteCycleStuckTracker.idleRecycles}"
+                )
+            }
             if (settingsRef.get().saveMoveHistory) {
                 recordMoveHistoryAsync(frameBitmap, state)
             }
@@ -709,7 +724,12 @@ class AnalysisPipeline(
         val selectStartedMs = System.currentTimeMillis()
         val avoidStates = recentStates.dropLast(1)
         val rejected = rejectedMoveStore.all() + sessionRejected
-        val ranked = MoveSelector.rankedMoves(state, rejected) { move ->
+        val wasteCycleStuck = wasteCycleStuckTracker.isStuck
+        val ranked = MoveSelector.rankedMoves(
+            state,
+            rejected,
+            wasteCycleStuck = wasteCycleStuck
+        ) { move ->
             isFoundationMoveTrusted(move, state, detection)
         }
         val rawBest = MoveSelector.pickBestFromRanked(ranked, state, avoidStates)
