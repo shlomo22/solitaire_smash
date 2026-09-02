@@ -123,6 +123,39 @@ class GameStateDetector(
         val elapsedNanos: Long
     )
 
+    private class StockPileResult(
+        val cards: List<Card>,
+        val hit: RecognitionHit,
+        val location: CardLocation,
+        val recognizedSlot: RecognizedSlot,
+        val diagnostic: String
+    )
+
+    private class WastePileResult(
+        val cards: List<Card>,
+        val hit: RecognitionHit,
+        val location: CardLocation,
+        val recognizedSlot: RecognizedSlot,
+        val diagnostics: List<String>,
+        val candidatesDisagree: Boolean,
+        val cacheEntries: Map<SlotKey, CachedSlotHit>
+    )
+
+    /**
+     * Pre-constraint pile reads from the last [detect] call. Live play
+     * passes [changedRegions] so unchanged piles are reused instead of
+     * paying another full recognize/OCR pass. Evaluate leaves
+     * [changedRegions] null (full read every sample).
+     */
+    private class LastFramePiles(
+        val stock: StockPileResult,
+        val waste: WastePileResult,
+        val foundations: Array<FoundationPileResult>,
+        val columns: Array<TableauColumnResult>
+    )
+
+    private var lastFramePiles: LastFramePiles? = null
+
     @Suppress("UNUSED_PARAMETER")
     fun updateMinConfidence(value: Float) {
         // Recognizer is constructed with a threshold; pipeline passes settings for future rebuilds.
@@ -131,9 +164,16 @@ class GameStateDetector(
     fun clearSlotCache() {
         slotHitCache.clear()
         cachedWasteOcr = null
+        lastFramePiles = null
     }
 
-    fun detect(bitmap: Bitmap): DetectionResult {
+    /**
+     * @param changedRegions pile names from [com.personal.solitaireassistant.pipeline.BoardRegionFingerprints]
+     *   (`waste`, `stock`, `f0`…`f3`, `t0`…`t6`). Null means recompute every
+     *   pile (Evaluate / first frame). A live frame after a waste draw
+     *   typically sends only `waste`/`stock` and reuses the seven columns.
+     */
+    fun detect(bitmap: Bitmap, changedRegions: Set<String>? = null): DetectionResult {
         recognizeCacheHits = 0
         recognizeCacheMisses = 0
         recognizeMissNanos = 0L
@@ -153,28 +193,42 @@ class GameStateDetector(
         val foundations = MutableList(4) { emptyList<Card>() }
         val tableau = MutableList(7) { emptyList<Card>() }
 
+        val prior = lastFramePiles
+        fun shouldRecompute(name: String): Boolean =
+            changedRegions == null || prior == null || name in changedRegions
+
         val stockRegion = locator.stockRegion(board)
-        val stockStats = SmashColorAnalyzer.analyze(bitmap, stockRegion)
-        val stockHit = when {
-            SmashColorAnalyzer.looksLikeStockPile(stockStats) ||
-                SmashColorAnalyzer.looksFaceDown(stockStats) ->
-                RecognitionHit(null, 0.85f, true, false, "face-down-stock")
-            else -> recognizer.recognize(bitmap, stockRegion)
+        val stockResult = if (!shouldRecompute("stock") && prior != null) {
+            prior.stock
+        } else {
+            val stockStats = SmashColorAnalyzer.analyze(bitmap, stockRegion)
+            val stockHit = when {
+                SmashColorAnalyzer.looksLikeStockPile(stockStats) ||
+                    SmashColorAnalyzer.looksFaceDown(stockStats) ->
+                    RecognitionHit(null, 0.85f, true, false, "face-down-stock")
+                else -> recognizer.recognize(bitmap, stockRegion)
+            }
+            StockPileResult(
+                cards = when {
+                    stockHit.isEmpty -> emptyList()
+                    else -> listOf(Card(Rank.Ace, Suit.Spades, faceUp = false, known = false))
+                },
+                hit = stockHit,
+                location = locator.toCardLocation(PileRef.Stock, 0, stockRegion),
+                recognizedSlot = recognizedSlot(
+                    pile = PileRef.Stock,
+                    index = 0,
+                    bounds = stockRegion,
+                    hit = stockHit
+                ),
+                diagnostic = "stock=${stockHit.diagnostic}"
+            )
         }
-        locations[PileRef.Stock] = listOf(
-            locator.toCardLocation(PileRef.Stock, 0, stockRegion)
-        )
-        recognizedSlots += recognizedSlot(
-            pile = PileRef.Stock,
-            index = 0,
-            bounds = stockRegion,
-            hit = stockHit
-        )
-        val stockCards = when {
-            stockHit.isEmpty -> emptyList()
-            else -> listOf(Card(Rank.Ace, Suit.Spades, faceUp = false, known = false))
-        }
-        diagnostics += "stock=${stockHit.diagnostic}"
+        locations[PileRef.Stock] = listOf(stockResult.location)
+        recognizedSlots += stockResult.recognizedSlot
+        val stockCards = stockResult.cards
+        val stockHit = stockResult.hit
+        diagnostics += stockResult.diagnostic
 
         val computeFoundation = fun(index: Int, region: BoardRegion): FoundationPileResult {
             val stats = RecognizeStats()
@@ -766,13 +820,47 @@ class GameStateDetector(
         recognizer.ensureLoaded()
         // Start foundations + tableau before waste templates so those reads
         // overlap the sequential waste fusion work instead of waiting on it.
+        // Live-play delta: skip the worker entirely when the pile fingerprint
+        // stayed inside tolerance and we still have last frame's pre-constraint
+        // read. Evaluate passes changedRegions=null so every pile still runs.
+        val reusedPiles = mutableListOf<String>()
+        val recomputedPiles = mutableListOf<String>()
         val foundationFutures = locator.foundationRegions(board).mapIndexed { index, region ->
-            columnExecutor.submit(Callable { computeFoundation(index, region) })
+            val name = "f$index"
+            if (!shouldRecompute(name) && prior != null && index < prior.foundations.size) {
+                reusedPiles += name
+                null
+            } else {
+                recomputedPiles += name
+                columnExecutor.submit(Callable { computeFoundation(index, region) })
+            }
         }
         val columnFutures = locator.tableauColumnRegions(board).mapIndexed { col, columnRegion ->
-            columnExecutor.submit(Callable { computeColumn(col, columnRegion) })
+            val name = "t$col"
+            if (!shouldRecompute(name) && prior != null && col < prior.columns.size) {
+                reusedPiles += name
+                null
+            } else {
+                recomputedPiles += name
+                columnExecutor.submit(Callable { computeColumn(col, columnRegion) })
+            }
         }
 
+        val recomputeWaste = shouldRecompute("waste")
+        if (recomputeWaste) recomputedPiles += "waste" else reusedPiles += "waste"
+        if (shouldRecompute("stock")) recomputedPiles += "stock" else reusedPiles += "stock"
+
+        var wasteOcrRelevant = false
+        var reusableWasteOcr: CachedWasteOcr? = null
+        var wasteOcrFuture: java.util.concurrent.Future<RankCornerOcr.AttemptResult>? = null
+        var wasteOcrStartNanos = 0L
+        var wasteOcrKick = if (recomputeWaste) "skip" else "reused"
+        var ocrFingerprint = 0L
+        var wasteOcrRegions: List<BoardRegion> = emptyList()
+        var wasteCandidatesDisagree = false
+        var finishWasteFn: ((RankCornerOcr.AttemptResult?) -> Pair<RecognitionHit, List<Card>>)? = null
+
+        if (recomputeWaste) {
         val tightWasteRegion = locateWasteTopRegion(bitmap, board)
         val legacyWasteRegion = locator.wasteTopRegion(board)
         // Region list + fingerprint do not depend on template hits, so they
@@ -783,21 +871,19 @@ class GameStateDetector(
         // those OCR-relevant at mean 287ms — this prefix was pure added
         // latency on that path). Same probes, same selection; only when
         // the search begins.
-        val wasteOcrRegions = buildList {
+        wasteOcrRegions = buildList {
             add(tightWasteRegion)
             add(legacyWasteRegion)
             addAll(locator.wasteOcrCardRegions(board))
         }
-        val ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
+        ocrFingerprint = wasteOcrRegions.fold(0L) { acc, region ->
             acc * 31L + regionFingerprint(bitmap, region)
         }
-        val reusableWasteOcr = cachedWasteOcr?.takeIf { cached ->
+        reusableWasteOcr = cachedWasteOcr?.takeIf { cached ->
             cached.fingerprint == ocrFingerprint &&
                 cached.regions.size == wasteOcrRegions.size &&
                 cached.regions.zip(wasteOcrRegions).all { (a, b) -> regionsSimilar(a, b) }
         }
-        var wasteOcrStartNanos = 0L
-        var wasteOcrKick = "skip"
         fun submitWasteOcr(): java.util.concurrent.Future<RankCornerOcr.AttemptResult>? {
             if (reusableWasteOcr != null) {
                 wasteOcrKick = "cached"
@@ -822,7 +908,7 @@ class GameStateDetector(
         // after legacy/scores (the old wasteOcrRelevant gate) left the
         // 47–430ms ML Kit search strictly after work that does not
         // affect which regions get probed.
-        var wasteOcrFuture = if (tightWasteHit.card != null) submitWasteOcr() else null
+        wasteOcrFuture = if (tightWasteHit.card != null) submitWasteOcr() else null
         val needsLegacyFusion =
             tightWasteHit.card == null ||
                 tightWasteHit.confidence < 0.68f ||
@@ -856,12 +942,13 @@ class GameStateDetector(
         // the wide/closed center-glyph shape.
         val legacyCard = legacyWasteHit.card
         val tightCard = tightWasteHit.card
-        val wasteCandidatesDisagree =
+        val candidatesDisagree =
             tightCard != null &&
                 legacyCard != null &&
                 tightCard.id != legacyCard.id
+        wasteCandidatesDisagree = candidatesDisagree
         val baseCard = when {
-            wasteCandidatesDisagree -> {
+            candidatesDisagree -> {
                 fun candidateScore(card: Card): Float {
                     val rankScore = exactRankScores[card.rank] ?: 0f
                     val suitScore = exactSuitScores[card.suit] ?: 0f
@@ -890,7 +977,7 @@ class GameStateDetector(
         // on ocrRank) never got a chance. Any rank can be the wrong initial
         // guess; the early-exit added to attemptWasteRankOcr already bounds
         // the cost of trying, so just always try when there's a real card.
-        val wasteOcrRelevant = legacyCard != null || tightCard != null
+        wasteOcrRelevant = legacyCard != null || tightCard != null
         // Tight was empty but legacy found a card — start OCR now (same
         // moment the old code would have). Empty waste stays skipped so
         // unread/empty frames don't wait on a speculative ML Kit search.
@@ -1170,49 +1257,99 @@ class GameStateDetector(
         }
         return wasteHit to wasteCards
         }
-
-        val foundationResults = foundationFutures.map { it.get() }
-        val columnResults = columnFutures.map { it.get() }
-        foundationResults.sortedBy { it.index }.forEach { result ->
-            foundations[result.index] = result.cards
-            locations[PileRef.Foundation(result.index)] = listOf(result.location)
-            recognizedSlots += result.recognizedSlot
-            newSlotCache.putAll(result.cacheEntries)
-            recognizeCacheHits += result.stats.hits
-            recognizeCacheMisses += result.stats.misses
-            recognizeMissNanos += result.stats.missNanos
-            missNoPriorEntry += result.stats.missNoPrior
-            missFingerprintChanged += result.stats.missFingerprint
-            missBoundsShifted += result.stats.missBounds
-            diagnostics += result.diagnostic
+        finishWasteFn = { attempt -> finishWaste(attempt) }
         }
-        columnResults.forEach { result ->
-            tableau[result.col] = result.cards
-            locations[PileRef.Tableau(result.col)] = result.locations
-            diagnostics += result.diagnostics
-            recognizedSlots += result.recognizedSlots
-            newSlotCache.putAll(result.cacheEntries)
-            recognizeCacheHits += result.stats.hits
-            recognizeCacheMisses += result.stats.misses
-            recognizeMissNanos += result.stats.missNanos
-            missNoPriorEntry += result.stats.missNoPrior
-            missFingerprintChanged += result.stats.missFingerprint
-            missBoundsShifted += result.stats.missBounds
-            tableauColumnNanos[result.col] = result.elapsedNanos
+
+        val foundationResults = Array(4) { index ->
+            prior?.foundations?.getOrNull(index)
+        }
+        foundationFutures.forEach { future ->
+            if (future != null) {
+                val result = future.get()
+                foundationResults[result.index] = result
+            }
+        }
+        val columnResults = Array(7) { col ->
+            prior?.columns?.getOrNull(col)
+        }
+        columnFutures.forEach { future ->
+            if (future != null) {
+                val result = future.get()
+                columnResults[result.col] = result
+            }
+        }
+        foundationResults.forEachIndexed { index, result ->
+            val resolved = requireNotNull(result) { "missing foundation $index" }
+            foundations[resolved.index] = resolved.cards
+            locations[PileRef.Foundation(resolved.index)] = listOf(resolved.location)
+            recognizedSlots += resolved.recognizedSlot
+            newSlotCache.putAll(resolved.cacheEntries)
+            recognizeCacheHits += resolved.stats.hits
+            recognizeCacheMisses += resolved.stats.misses
+            recognizeMissNanos += resolved.stats.missNanos
+            missNoPriorEntry += resolved.stats.missNoPrior
+            missFingerprintChanged += resolved.stats.missFingerprint
+            missBoundsShifted += resolved.stats.missBounds
+            diagnostics += resolved.diagnostic
+        }
+        columnResults.forEachIndexed { col, result ->
+            val resolved = requireNotNull(result) { "missing tableau $col" }
+            tableau[resolved.col] = resolved.cards
+            locations[PileRef.Tableau(resolved.col)] = resolved.locations
+            if (!shouldRecompute("t$col")) {
+                diagnostics += "tableau$col.reused"
+            }
+            diagnostics += resolved.diagnostics
+            recognizedSlots += resolved.recognizedSlots
+            newSlotCache.putAll(resolved.cacheEntries)
+            recognizeCacheHits += resolved.stats.hits
+            recognizeCacheMisses += resolved.stats.misses
+            recognizeMissNanos += resolved.stats.missNanos
+            missNoPriorEntry += resolved.stats.missNoPrior
+            missFingerprintChanged += resolved.stats.missFingerprint
+            missBoundsShifted += resolved.stats.missBounds
+            tableauColumnNanos[resolved.col] = resolved.elapsedNanos
         }
         val runConsistencyViolations = tableauRunConsistencyDiagnostics(tableau)
         diagnostics += runConsistencyViolations
-        val wasteOcrAttempt = when {
-            !wasteOcrRelevant -> null
-            reusableWasteOcr != null -> reusableWasteOcr.result
-            else -> wasteOcrFuture!!.get().also { result ->
-                cachedWasteOcr = CachedWasteOcr(ocrFingerprint, wasteOcrRegions, result)
+        val wasteResult: WastePileResult
+        val wasteHit: RecognitionHit
+        val wasteCards: List<Card>
+        if (recomputeWaste) {
+            val cachedOcr = reusableWasteOcr
+            val wasteOcrAttempt = when {
+                !wasteOcrRelevant -> null
+                cachedOcr != null -> cachedOcr.result
+                else -> wasteOcrFuture!!.get().also { result ->
+                    cachedWasteOcr = CachedWasteOcr(ocrFingerprint, wasteOcrRegions, result)
+                }
             }
+            diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
+                "ms=${if (wasteOcrStartNanos == 0L) 0 else (System.nanoTime() - wasteOcrStartNanos) / 1_000_000}," +
+                "overlapped=${wasteOcrFuture != null},kick=$wasteOcrKick"
+            val finished = finishWasteFn!!(wasteOcrAttempt)
+            wasteHit = finished.first
+            wasteCards = finished.second
+            wasteResult = WastePileResult(
+                cards = wasteCards,
+                hit = wasteHit,
+                location = locations[PileRef.Waste]!!.first(),
+                recognizedSlot = recognizedSlots.last { it.pile == PileRef.Waste },
+                diagnostics = emptyList(),
+                candidatesDisagree = wasteCandidatesDisagree,
+                cacheEntries = newSlotCache.filterKeys { it.pile == PileRef.Waste }
+            )
+        } else {
+            wasteResult = requireNotNull(prior?.waste)
+            wasteHit = wasteResult.hit
+            wasteCards = wasteResult.cards
+            wasteCandidatesDisagree = wasteResult.candidatesDisagree
+            locations[PileRef.Waste] = listOf(wasteResult.location)
+            recognizedSlots += wasteResult.recognizedSlot
+            newSlotCache.putAll(wasteResult.cacheEntries)
+            diagnostics += "waste=reused:${wasteHit.diagnostic}:${wasteHit.card}"
+            diagnostics += "wasteOcr:relevant=false,ms=0,overlapped=false,kick=reused"
         }
-        diagnostics += "wasteOcr:relevant=$wasteOcrRelevant," +
-            "ms=${if (wasteOcrStartNanos == 0L) 0 else (System.nanoTime() - wasteOcrStartNanos) / 1_000_000}," +
-            "overlapped=${wasteOcrFuture != null},kick=$wasteOcrKick"
-        val (wasteHit, wasteCards) = finishWaste(wasteOcrAttempt)
 
         val wasteConfidence = if (wasteCandidatesDisagree) {
             wasteHit.confidence.coerceAtMost(0.70f)
@@ -1237,7 +1374,10 @@ class GameStateDetector(
         diagnostics += "gameFooter=${screenSignals.gameControlFooter}"
         diagnostics += "lobbyScreen=${screenSignals.lobbyHomeScreen}"
         diagnostics += "statusBarVisible=${screenSignals.statusBarVisible}"
+        diagnostics += "delta:recompute=${recomputedPiles.sorted().joinToString(",")} " +
+            "reused=${reusedPiles.sorted().joinToString(",")}"
         if (totalCards == 0) {
+            lastFramePiles = null
             slotHitCache = newSlotCache
             return DetectionResult(
                 state = null,
@@ -1254,6 +1394,12 @@ class GameStateDetector(
             foundations.sumOf { pile -> pile.count { it.known } } +
             wasteCards.count { it.known }
         diagnostics += "knownFaceUp=$knownFaceUp"
+        lastFramePiles = LastFramePiles(
+            stock = stockResult,
+            waste = wasteResult,
+            foundations = Array(4) { i -> requireNotNull(foundationResults[i]) },
+            columns = Array(7) { i -> requireNotNull(columnResults[i]) }
+        )
 
         val scrubStartNanos = System.nanoTime()
         val blackScrubbed = scrubWeakBlackFoundationSuits(

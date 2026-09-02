@@ -16,8 +16,10 @@ import com.personal.solitaireassistant.vision.BoardGeometryProfile
  * This version gives each Smash pile its own sample array and its own
  * tiny tolerance. A waste swap has to hide inside the waste cell (dense
  * 20×12 over the profile waste rect), not under a board-wide allowance.
- * Any region over its budget forces a full detect(). Exact-match still
- * wins inside a region; the tolerance only absorbs 1–2 bucket flips.
+ * Any region over its budget forces detect(), but only those named piles
+ * are re-recognized — unchanged piles reuse last frame's pre-constraint
+ * read. Exact-match still wins inside a region; the tolerance only
+ * absorbs 1–2 bucket flips.
  */
 internal object BoardRegionFingerprints {
     data class RegionSpec(

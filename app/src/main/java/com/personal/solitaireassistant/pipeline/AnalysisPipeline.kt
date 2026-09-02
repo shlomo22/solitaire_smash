@@ -175,7 +175,7 @@ class AnalysisPipeline(
         val detectionRaw = if (cached) {
             lastDetection!!
         } else {
-            detector.detect(bitmap)
+            detector.detect(bitmap, changedRegions = printCmp.changed.toSet())
         }
         lastBoardPrint = boardPrint
         val detection = detectionRaw.copy(
@@ -186,9 +186,14 @@ class AnalysisPipeline(
         }
         val elapsed = System.currentTimeMillis() - started
         // Always logged (not outcome-deduped) so a skip-heavy session still
-        // shows skip vs run rate. See BoardRegionFingerprints.
+        // shows skip vs run vs delta rate. See BoardRegionFingerprints.
+        val detectKind = when {
+            cached -> "skip"
+            printCmp.changed.size >= BoardRegionFingerprints.SPECS.size -> "run"
+            else -> "delta"
+        }
         fileLogger.append(
-            "fp ${printCmp.note()} detect=${if (cached) "skip" else "run"} ${elapsed}ms"
+            "fp ${printCmp.note()} detect=$detectKind ${elapsed}ms"
         )
         // How long this frame sat in the pending-frame handoff before
         // analysis actually started on it — the part of end-to-end latency
