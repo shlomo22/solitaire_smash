@@ -12,12 +12,18 @@ and copies them to **`pulled/latest/`**.
 When the user says **latest** / **read pull** / **read latest** (or equivalent), read:
 
 - `pulled/latest/screenshot.png`
-- `pulled/latest/analysis.log`
+- `pulled/latest/analysis.log` — for an Evaluate run
+- `pulled/latest/analysis-full.log` — for anything about **live play** (a slow,
+  missing, or false arrow). `analysis.log` is only the newest rotated
+  generation; the combined file is every generation stitched oldest-first, and
+  live play fills a generation in minutes. Reading only `analysis.log` for a
+  live-play question is how earlier rounds lost the evidence for five
+  false-arrow reports.
 
 When the user says **pull** (preferred; also: "pull eval", "pull and read", legacy "pull artifacts"):
 
 1. Run `powershell -ExecutionPolicy Bypass -File scripts\pull-artifacts.ps1` from the repo root (needs a connected device; Evaluate should already have been tapped).
-2. Then read `pulled/latest/screenshot.png` and `pulled/latest/analysis.log`.
+2. Then read `pulled/latest/screenshot.png` plus `analysis.log` or `analysis-full.log` per the above.
 
 Do not wait for a pasted screenshot. Prefer `pulled/latest` over older timestamped
 folders and over chat images from earlier rounds.

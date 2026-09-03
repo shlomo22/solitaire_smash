@@ -141,6 +141,17 @@ with the debug app installed and Evaluate already tapped.
 `pulled/` is gitignored. Prefer `pulled/latest` over chat image attachments from
 earlier rounds; those can be a previous Evaluate.
 
+**For a live-play question, read `pulled/latest/analysis-full.log`, not
+`analysis.log`.** The live log is only the newest generation. Before v1.4.130 a
+2MB cap and a single `.bak` held about **68 seconds** of active play — every
+ARROW/NO_MOVE outcome writes a per-slot `recognition:` block, roughly
+1.1MB/min — so five separate false-arrow reports had already rotated away
+before they could be pulled, and only the rejection captures' own screenshots
+survived to work from. v1.4.130 keeps 3 generations of 16MB (~1h) and the pull
+script stitches them oldest-first into `analysis-full.log`. An Evaluate-only
+question still just needs `analysis.log`; anything about an arrow from earlier
+in a game needs the combined file.
+
 `gradle.properties` pins `org.gradle.java.home` to the *user's* Windows JDK path —
 don't edit it; override with `-Dorg.gradle.java.home=$JAVA_HOME` for any local
 sanity check instead (brace-balance / structural checks only — it still can't finish
