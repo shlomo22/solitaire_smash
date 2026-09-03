@@ -926,7 +926,13 @@ class AnalysisPipeline(
                 if (solverState != null) {
                     appendLine("  flags=${SolverDebugLines.flags(solverState)}")
                     appendLine("  ${SolverDebugLines.inferredLine(solverState)}")
-                    appendLine("  ${SolverDebugLines.moveTrustLine(solverState, move)}")
+                    appendLine(
+                        "  " + SolverDebugLines.moveTrustLine(
+                            solverState,
+                            move,
+                            detection.slotOrderViolationColumns
+                        )
+                    )
                     val legal = MoveGenerator.generate(solverState)
                     appendLine("  ${SolverDebugLines.legalLine(legal)}")
                     if (rankedMoves != null) {

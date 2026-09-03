@@ -92,7 +92,11 @@ object SolverDebugLines {
      * every card in the run except the exposed bottom one, which is why the
      * mover appears there whenever the run holds more than one card.
      */
-    fun moveTrustLine(state: GameState, move: Move?): String {
+    fun moveTrustLine(
+        state: GameState,
+        move: Move?,
+        slotOrderViolationColumns: Set<Int> = emptySet()
+    ): String {
         if (move == null) return "move-trust=none"
         val detail = when (move) {
             is Move.TableauToTableau -> {
@@ -123,7 +127,33 @@ object SolverDebugLines {
             }
             else -> "no-card-move"
         }
-        return "move-trust=$detail"
+        return "move-trust=$detail${phantomSuspectSuffix(move, slotOrderViolationColumns)}"
+    }
+
+    /**
+     * Names which end of the move sits in a column whose emitted slots are
+     * self-contradictory (see
+     * [com.personal.solitaireassistant.vision.DetectionResult.slotOrderViolationColumns]).
+     * `src` is the one to weigh: a phantom sits at the *top* of the face-down
+     * block, which is exactly the card a multi-card run moves.
+     */
+    private fun phantomSuspectSuffix(move: Move, violations: Set<Int>): String {
+        if (violations.isEmpty()) return ""
+        val ends = mutableListOf<String>()
+        when (move) {
+            is Move.TableauToTableau -> {
+                if (move.fromColumn in violations) ends += "src=T${move.fromColumn + 1}"
+                if (move.toColumn in violations) ends += "dst=T${move.toColumn + 1}"
+            }
+            is Move.TableauToFoundation ->
+                if (move.fromColumn in violations) ends += "src=T${move.fromColumn + 1}"
+            is Move.WasteToTableau ->
+                if (move.toColumn in violations) ends += "dst=T${move.toColumn + 1}"
+            is Move.FoundationToTableau ->
+                if (move.toColumn in violations) ends += "dst=T${move.toColumn + 1}"
+            else -> Unit
+        }
+        return if (ends.isEmpty()) "" else " phantom-suspect=${ends.joinToString(",")}"
     }
 
     /**

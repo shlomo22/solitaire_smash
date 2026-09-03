@@ -32,7 +32,27 @@ data class DetectionResult(
      * to avoid switching the displayed arrow off the back of a frame that's
      * already known to be internally inconsistent.
      */
-    val hasRunConsistencyViolation: Boolean = false
+    val hasRunConsistencyViolation: Boolean = false,
+    /**
+     * Tableau columns whose emitted slot tops are not strictly increasing -
+     * physically impossible for a cascade, and the clearest available symptom
+     * of the phantom face-up card at the top of a face-down block: the column
+     * emitted one more slot than fits, so the arithmetic collapses at the end.
+     *
+     * Measured before adding this: 70% of the user's own rejected arrows carry
+     * such a column against a 26% base rate across the golden set, and in 8 of
+     * 12 non-draw rejections the flagged column *is* the rejected move's source
+     * column. Concentrated in columns 5 and 6 (21 and 21 of 48 golden hits),
+     * matching the impossible face-down counts already recorded there.
+     *
+     * Diagnostic only for now, deliberately: this is the fifth approach to the
+     * phantom, and the four that shipped all net-regressed by changing
+     * geometry. This one changes no constant and moves no slot - it only
+     * reports that the engine's own output is self-contradictory - so the next
+     * round can gate arrows on it once real play confirms it fires where the
+     * phantom actually is.
+     */
+    val slotOrderViolationColumns: Set<Int> = emptySet()
 )
 
 class GameStateDetector(
@@ -1407,6 +1427,8 @@ class GameStateDetector(
         }
         val runConsistencyViolations = tableauRunConsistencyDiagnostics(tableau)
         diagnostics += runConsistencyViolations
+        val slotOrderViolations = tableauSlotOrderViolations(recognizedSlots)
+        diagnostics += slotOrderViolations.values
         val wasteResult: WastePileResult
         val wasteHit: RecognitionHit
         val wasteCards: List<Card>
@@ -1544,8 +1566,43 @@ class GameStateDetector(
             recognizedSlots = recognizedSlots,
             livePlayScreen = livePlayScreen,
             preConstraintState = scrubbed,
-            hasRunConsistencyViolation = runConsistencyViolations.isNotEmpty()
+            hasRunConsistencyViolation = runConsistencyViolations.isNotEmpty(),
+            slotOrderViolationColumns = slotOrderViolations.keys
         )
+    }
+
+    /**
+     * A cascade stacks downward, so each successive slot in a tableau column
+     * must start strictly below the one before it. When it doesn't, the column
+     * emitted more slots than physically fit - see
+     * [DetectionResult.slotOrderViolationColumns] for the measurement behind
+     * this and why it is reported rather than corrected.
+     *
+     * Compares emitted slots in index order and reports the first offending
+     * adjacency per column. Reads only bounds, never card identity, so a
+     * rank/suit misread cannot mask or fake a violation.
+     */
+    private fun tableauSlotOrderViolations(
+        slots: List<RecognizedSlot>
+    ): Map<Int, String> {
+        val violations = linkedMapOf<Int, String>()
+        slots.asSequence()
+            .filter { it.pile is PileRef.Tableau }
+            .groupBy { (it.pile as PileRef.Tableau).index }
+            .forEach { (col, columnSlots) ->
+                val ordered = columnSlots.sortedBy { it.index }
+                for (i in 1 until ordered.size) {
+                    val above = ordered[i - 1]
+                    val below = ordered[i]
+                    if (below.bounds.top > above.bounds.top) continue
+                    violations[col] = "tableau$col.slotOrder=broken:" +
+                        "idx${below.index}@${below.bounds.top.roundToInt()}" +
+                        "<=idx${above.index}@${above.bounds.top.roundToInt()}" +
+                        ",slots=${ordered.size}"
+                    break
+                }
+            }
+        return violations
     }
 
     /**

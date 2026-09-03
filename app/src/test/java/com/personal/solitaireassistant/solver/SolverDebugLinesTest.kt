@@ -97,6 +97,27 @@ class SolverDebugLinesTest {
         )
     }
 
+    @Test
+    fun moveTrustNamesWhichEndSitsInASlotOrderViolatingColumn() {
+        val state = fiveOnSixBoard(fiveInferred = false)
+        val move = Move.TableauToTableau(fromColumn = 3, startIndex = 2, toColumn = 5)
+
+        val clean = SolverDebugLines.moveTrustLine(state, move)
+        assertTrue(clean, !clean.contains("phantom-suspect"))
+
+        // Column 3 is the mover's own column - the end that matters, since a
+        // phantom sits at the top of the face-down block it moves from.
+        val source = SolverDebugLines.moveTrustLine(state, move, setOf(3))
+        assertTrue(source, source.contains("phantom-suspect=src=T4"))
+
+        val both = SolverDebugLines.moveTrustLine(state, move, setOf(3, 5))
+        assertTrue(both, both.contains("phantom-suspect=src=T4,dst=T6"))
+
+        // An unrelated column must not implicate this move.
+        val elsewhere = SolverDebugLines.moveTrustLine(state, move, setOf(0))
+        assertTrue(elsewhere, !elsewhere.contains("phantom-suspect"))
+    }
+
     private fun fiveOnSixBoard(fiveInferred: Boolean): GameState {
         val down = Card(Rank.Ace, Suit.Clubs, faceUp = false, known = false)
         val five = Card(
