@@ -67,15 +67,18 @@ class SolverDebugLinesTest {
             Move.TableauToTableau(fromColumn = 3, startIndex = 1, toColumn = 5)
         )
         assertTrue(run, run.contains("tableau-run len=2"))
-        assertTrue(run, run.contains("carried=Five_Spades~"))
-        assertTrue(run, run.contains("risk=carried-ambiguous"))
+        // The mover is the run's deepest card, so it is itself covered - it
+        // belongs in covered= rather than being excluded from it.
+        assertTrue(run, run.contains("mover=Five_Spades~"))
+        assertTrue(run, run.contains("covered=Five_Spades~"))
+        assertTrue(run, run.contains("risk=mover-covered+mover-ambiguous"))
 
         val single = SolverDebugLines.moveTrustLine(
             state,
             Move.TableauToTableau(fromColumn = 3, startIndex = 2, toColumn = 5)
         )
         assertTrue(single, single.contains("tableau-run len=1"))
-        assertTrue(single, single.contains("carried=none"))
+        assertTrue(single, single.contains("covered=none"))
         assertTrue(single, single.contains("risk=exposed-only"))
     }
 

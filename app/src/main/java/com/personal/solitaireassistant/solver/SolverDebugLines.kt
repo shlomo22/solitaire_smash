@@ -84,9 +84,13 @@ object SolverDebugLines {
      * derives color from `distanceFromBottom % 2`. Exposed bottom cards and waste
      * cards are essentially never wrong about color. So a false tableau arrow
      * whose moved run is a single exposed card is *not* explained by that
-     * measurement, and a multi-card run is. `carried=` marks the covered cards
-     * that only [com.personal.solitaireassistant.game.KlondikeRules] run
-     * validation depends on.
+     * measurement, and a multi-card run is.
+     *
+     * A tableau column runs deepest-first, so the card that stacks onto the
+     * target is the run's *first* element — the most covered card in the
+     * column, and the one whose color is least trustworthy. `covered=` lists
+     * every card in the run except the exposed bottom one, which is why the
+     * mover appears there whenever the run holds more than one card.
      */
     fun moveTrustLine(state: GameState, move: Move?): String {
         if (move == null) return "move-trust=none"
@@ -94,12 +98,12 @@ object SolverDebugLines {
             is Move.TableauToTableau -> {
                 val column = state.tableau.getOrNull(move.fromColumn) ?: return "move-trust=no-column"
                 val run = column.drop(move.startIndex)
-                val carried = run.dropLast(1)
+                val covered = run.dropLast(1)
                 val target = state.tableauTop(move.toColumn)
                 "tableau-run len=${run.size}" +
                     " mover=${run.firstOrNull()?.let { cardToken(it) } ?: "?"}" +
                     " target=${target?.let { cardToken(it) } ?: "empty"}" +
-                    " carried=${if (carried.isEmpty()) "none" else carried.joinToString("/") { cardToken(it) }}" +
+                    " covered=${if (covered.isEmpty()) "none" else covered.joinToString("/") { cardToken(it) }}" +
                     " risk=${runRisk(run)}"
             }
             is Move.WasteToTableau -> {
@@ -123,18 +127,22 @@ object SolverDebugLines {
     }
 
     /**
-     * Whether this run's legality rests on any card the golden set says is
-     * unreliable — a covered cascade card, an ambiguous suit, or an inferred
-     * guess. `exposed-only` means every card in it is directly read.
+     * Whether this run's legality rests on a card the golden set says is
+     * unreliable. `exposed-only` is the trustworthy case: a single card, read
+     * directly off the bottom of its column. Anything longer puts a covered
+     * card against the target, so `mover-covered` leads — that alone is enough
+     * to suspect a false arrow, before any ambiguity flag is considered.
      */
     private fun runRisk(run: List<Card>): String {
         if (run.size <= 1) return "exposed-only"
-        val carried = run.dropLast(1)
-        val reasons = mutableListOf<String>()
-        if (carried.any { it.inferred }) reasons += "carried-inferred"
-        if (carried.any { it.suitAmbiguous }) reasons += "carried-ambiguous"
-        if (carried.any { !it.known }) reasons += "carried-unknown"
-        if (reasons.isEmpty()) reasons += "carried-covered"
+        val mover = run.first()
+        val covered = run.dropLast(1)
+        val reasons = mutableListOf("mover-covered")
+        if (mover.suitAmbiguous) reasons += "mover-ambiguous"
+        if (mover.inferred) reasons += "mover-inferred"
+        if (covered.any { it.inferred }) reasons += "covered-inferred"
+        if (covered.any { it.suitAmbiguous }) reasons += "covered-ambiguous"
+        if (covered.any { !it.known }) reasons += "covered-unknown"
         return reasons.joinToString("+")
     }
 
