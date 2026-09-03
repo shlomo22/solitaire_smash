@@ -3,6 +3,7 @@ package com.personal.solitaireassistant.solver
 import com.personal.solitaireassistant.game.Card
 import com.personal.solitaireassistant.game.GameState
 import com.personal.solitaireassistant.game.KlondikeRules
+import com.personal.solitaireassistant.game.Move
 import com.personal.solitaireassistant.game.Rank
 import com.personal.solitaireassistant.game.Suit
 import org.junit.Assert.assertEquals
@@ -54,6 +55,43 @@ class SolverDebugLinesTest {
         val line = SolverDebugLines.legalLine(legal)
         assertTrue(line, line.contains("Tableau 4 -> Tableau 6"))
         assertTrue(line, line.startsWith("legal="))
+    }
+
+    @Test
+    fun moveTrustSeparatesASingleExposedCardFromACarriedRun() {
+        val state = fiveOnSixBoard(fiveInferred = false)
+        // Column 4 is [down, Five, Four]; startIndex 1 carries the Five under
+        // the Four, startIndex 2 moves only the exposed Four.
+        val run = SolverDebugLines.moveTrustLine(
+            state,
+            Move.TableauToTableau(fromColumn = 3, startIndex = 1, toColumn = 5)
+        )
+        assertTrue(run, run.contains("tableau-run len=2"))
+        assertTrue(run, run.contains("carried=Five_Spades~"))
+        assertTrue(run, run.contains("risk=carried-ambiguous"))
+
+        val single = SolverDebugLines.moveTrustLine(
+            state,
+            Move.TableauToTableau(fromColumn = 3, startIndex = 2, toColumn = 5)
+        )
+        assertTrue(single, single.contains("tableau-run len=1"))
+        assertTrue(single, single.contains("carried=none"))
+        assertTrue(single, single.contains("risk=exposed-only"))
+    }
+
+    @Test
+    fun moveTrustReportsTargetAndHandlesNonCardMoves() {
+        val state = fiveOnSixBoard(fiveInferred = false)
+        val line = SolverDebugLines.moveTrustLine(
+            state,
+            Move.TableauToTableau(fromColumn = 3, startIndex = 2, toColumn = 5)
+        )
+        assertTrue(line, line.contains("target=Six_Hearts~"))
+        assertEquals("move-trust=none", SolverDebugLines.moveTrustLine(state, null))
+        assertEquals(
+            "move-trust=no-card-move",
+            SolverDebugLines.moveTrustLine(state, Move.DrawStock)
+        )
     }
 
     private fun fiveOnSixBoard(fiveInferred: Boolean): GameState {

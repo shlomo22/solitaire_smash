@@ -16,6 +16,21 @@ data class GoldenEvalReport(
     val confusions: List<Pair<String, Int>>,
     val redSuitConfusions: List<Pair<String, Int>>,
     val blackSuitConfusions: List<Pair<String, Int>>,
+    /**
+     * Suit errors where the *color* is wrong, not just Clubs-vs-Spades or
+     * Hearts-vs-Diamonds. Only these can produce an illegal tableau arrow:
+     * [com.personal.solitaireassistant.game.Card.canStackOnTableau] compares
+     * `suit.oppositeColor(...)`, so a same-color suit error leaves every
+     * tableau move legal and can only misdirect a foundation move.
+     */
+    val crossColorSuitErrors: Int = 0,
+    /**
+     * [crossColorSuitErrors] split by pile, cascade depth, whether the rank
+     * was also wrong, and whether the suit was flagged ambiguous — enough to
+     * tell a genuine color-scoring miss apart from a shifted cascade slot
+     * whose neighbour stole the truth match.
+     */
+    val crossColorBuckets: List<Pair<String, Int>> = emptyList(),
     val mismatches: List<String>,
     val mismatchDiagnostics: List<String> = emptyList(),
     /** Golden ids present on disk but unparseable, so not evaluated at all. */
@@ -51,6 +66,12 @@ data class GoldenEvalReport(
             lines += "Black suit confusions (C↔S):"
             blackSuitConfusions.forEach { (pair, count) ->
                 lines += "  $pair ($count)"
+            }
+        }
+        if (crossColorSuitErrors > 0) {
+            lines += "Cross-color suit errors: $crossColorSuitErrors of $suitErrors (illegal tableau arrows)"
+            crossColorBuckets.forEach { (bucket, count) ->
+                lines += "  $bucket ($count)"
             }
         }
         if (mismatches.isNotEmpty()) {
@@ -95,6 +116,7 @@ object GoldenTruthEvaluator {
         val confusionMap = linkedMapOf<String, Int>()
         val redSuitConfusionMap = linkedMapOf<String, Int>()
         val blackSuitConfusionMap = linkedMapOf<String, Int>()
+        val crossColorMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
         val mismatchDiagnostics = mutableListOf<String>()
         val samples = store.listSamples()
@@ -129,6 +151,9 @@ object GoldenTruthEvaluator {
                     onBlackSuitConfusion = { key ->
                         blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
                     },
+                    onCrossColorSuitConfusion = { key ->
+                        crossColorMap[key] = (crossColorMap[key] ?: 0) + 1
+                    },
                     onMismatch = { mismatches += it },
                     onMismatchDiagnostic = { mismatchDiagnostics += it }
                 )
@@ -148,6 +173,7 @@ object GoldenTruthEvaluator {
             confusionMap = confusionMap,
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
+            crossColorMap = crossColorMap,
             mismatches = mismatches,
             mismatchDiagnostics = mismatchDiagnostics,
             unreadableSampleIds = store.listUnreadableIds()
@@ -167,6 +193,7 @@ object GoldenTruthEvaluator {
         val confusionMap = linkedMapOf<String, Int>()
         val redSuitConfusionMap = linkedMapOf<String, Int>()
         val blackSuitConfusionMap = linkedMapOf<String, Int>()
+        val crossColorMap = linkedMapOf<String, Int>()
         val mismatches = mutableListOf<String>()
         val mismatchDiagnostics = mutableListOf<String>()
         samples.forEach { (sample, bitmap) ->
@@ -192,6 +219,9 @@ object GoldenTruthEvaluator {
                 onBlackSuitConfusion = { key ->
                     blackSuitConfusionMap[key] = (blackSuitConfusionMap[key] ?: 0) + 1
                 },
+                onCrossColorSuitConfusion = { key ->
+                    crossColorMap[key] = (crossColorMap[key] ?: 0) + 1
+                },
                 onMismatch = { mismatches += it },
                 onMismatchDiagnostic = { mismatchDiagnostics += it }
             )
@@ -207,6 +237,7 @@ object GoldenTruthEvaluator {
             confusionMap = confusionMap,
             redSuitConfusionMap = redSuitConfusionMap,
             blackSuitConfusionMap = blackSuitConfusionMap,
+            crossColorMap = crossColorMap,
             mismatches = mismatches,
             mismatchDiagnostics = mismatchDiagnostics
         )
@@ -223,6 +254,7 @@ object GoldenTruthEvaluator {
         confusionMap: Map<String, Int>,
         redSuitConfusionMap: Map<String, Int>,
         blackSuitConfusionMap: Map<String, Int>,
+        crossColorMap: Map<String, Int>,
         mismatches: List<String>,
         mismatchDiagnostics: List<String>,
         unreadableSampleIds: List<String> = emptyList()
@@ -236,6 +268,9 @@ object GoldenTruthEvaluator {
         val blackSuitConfusions = blackSuitConfusionMap.entries
             .sortedByDescending { it.value }
             .map { it.key to it.value }
+        val crossColorBuckets = crossColorMap.entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
         return GoldenEvalReport(
             sampleCount = sampleCount,
             slotCount = slotCount,
@@ -247,6 +282,8 @@ object GoldenTruthEvaluator {
             confusions = confusions,
             redSuitConfusions = redSuitConfusions,
             blackSuitConfusions = blackSuitConfusions,
+            crossColorSuitErrors = crossColorBuckets.sumOf { it.second },
+            crossColorBuckets = crossColorBuckets,
             mismatches = mismatches,
             mismatchDiagnostics = mismatchDiagnostics,
             unreadableSampleIds = unreadableSampleIds
@@ -266,11 +303,17 @@ object GoldenTruthEvaluator {
         onConfusion: (String) -> Unit = {},
         onRedSuitConfusion: (String) -> Unit = {},
         onBlackSuitConfusion: (String) -> Unit = {},
+        onCrossColorSuitConfusion: (String) -> Unit = {},
         onMismatch: (String) -> Unit = {},
         onMismatchDiagnostic: (String) -> Unit = {}
     ) {
         val detection = detector.detect(bitmap)
         val labeled = sample.slots.filter { !it.inferred }
+        // Deepest labeled slot per pile, so a tableau miss can be attributed to
+        // the exposed bottom card (its own direct read) or to a covered cascade
+        // card (where geometric inference and slot positioning also apply).
+        val deepestIndex = labeled.groupBy { it.pile }
+            .mapValues { (_, slots) -> slots.maxOf { it.index } }
         labeled.forEach { truthSlot ->
             onSlot()
             val detected = findMatchingSlot(detection.recognizedSlots, truthSlot)
@@ -315,8 +358,10 @@ object GoldenTruthEvaluator {
                 return@forEach
             }
             var ok = true
+            var rankWrong = false
             if (expected.rank != null && actual.rank != expected.rank) {
                 ok = false
+                rankWrong = true
                 onRank()
                 onConfusion("${expected.rank.name} → ${actual.rank?.name ?: "?"}")
             }
@@ -343,6 +388,16 @@ object GoldenTruthEvaluator {
                 ) {
                     onBlackSuitConfusion(confusionKey)
                 }
+                if (actual.suit != null && actual.suit!!.isRed != expected.suit!!.isRed) {
+                    onCrossColorSuitConfusion(
+                        crossColorBucketKey(
+                            truthSlot = truthSlot,
+                            actual = actual,
+                            rankWrong = rankWrong,
+                            deepestIndex = deepestIndex[truthSlot.pile]
+                        )
+                    )
+                }
             }
             if (ok) {
                 onMatch()
@@ -363,6 +418,34 @@ object GoldenTruthEvaluator {
                 )
             }
         }
+    }
+
+    /**
+     * `tableau-covered rank-also-wrong flagged` and friends. A bucket dominated
+     * by `rank-also-wrong` points at cascade slot positioning (the neighbour
+     * stole the truth match) rather than at colour scoring, so the two failure
+     * modes don't get fixed with the same lever.
+     */
+    internal fun crossColorBucketKey(
+        truthSlot: GoldenSlot,
+        actual: SlotGuess,
+        rankWrong: Boolean,
+        deepestIndex: Int?
+    ): String {
+        val pileClass = when {
+            truthSlot.pile == "waste" -> "waste"
+            truthSlot.pile.startsWith("foundation") -> "foundation"
+            truthSlot.pile.startsWith("tableau") ->
+                if (deepestIndex != null && truthSlot.index == deepestIndex) {
+                    "tableau-exposed"
+                } else {
+                    "tableau-covered"
+                }
+            else -> truthSlot.pile
+        }
+        val rankClass = if (rankWrong) "rank-also-wrong" else "rank-ok"
+        val ambiguityClass = if (actual.suitAmbiguous) "flagged" else "unflagged"
+        return "$pileClass $rankClass $ambiguityClass"
     }
 
     internal fun buildMismatchDiagnostic(
