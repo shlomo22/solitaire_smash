@@ -182,13 +182,29 @@ internal object SuggestionStickiness {
                 )
             }
             // Held long enough - this isn't resolving on its own, so stop
-            // freezing and start a cooldown before another episode can
-            // begin, falling through to normal handling below for this
-            // frame even though the board is still self-admittedly broken.
-            // Better to risk showing a wrong move than to freeze forever.
-            return resolveNormally(
-                previous, best, ranked, boardVisuallyChanged, visualChangeStreak,
-                state.copy(violationHoldStreak = 0, violationCooldownRemaining = VIOLATION_COOLDOWN_FRAMES)
+            // freezing and start a cooldown before another episode can begin.
+            //
+            // This used to delegate to resolveNormally, which did not deliver
+            // the intended "better a wrong move than a frozen one": on a
+            // persistently-broken board the displayed move is usually absent
+            // from `ranked` too, so that path returned display=null (its
+            // vanished-from-ranked hold) and the arrow stayed frozen anyway.
+            // Device log 2026-09-03 21:16:24-45 is that exact shape - every
+            // capped episode fell through to a vanished-from-ranked hold and
+            // then re-entered the freeze, keeping one stale arrow on screen
+            // for 21 consecutive seconds. Adopt the raw best outright so the
+            // cap always makes visible progress; pendingCandidate/Streak reset
+            // because the display now matches `best`.
+            return Result(
+                display = best,
+                state = state.copy(
+                    pendingCandidate = null,
+                    pendingStreak = 0,
+                    violationHoldStreak = 0,
+                    violationCooldownRemaining = VIOLATION_COOLDOWN_FRAMES
+                ),
+                holdReason = "ADOPT raw=${best.move.label} after violation hold " +
+                    "capped at $MAX_VIOLATION_HOLD_FRAMES frames (board still self-inconsistent)"
             )
         }
         return resolveNormally(previous, best, ranked, boardVisuallyChanged, visualChangeStreak, state)

@@ -336,6 +336,82 @@ class SuggestionStickinessTest {
     }
 
     @Test
+    fun persistentViolationCannotFreezeDisplayIndefinitely() {
+        // Real device log (2026-09-03, 21:16:24-21:16:45): a persistently
+        // self-inconsistent board froze one stale arrow for 21 consecutive
+        // seconds. Two defects combined. The capped frame delegated to
+        // resolveNormally, and because the displayed move was *also* missing
+        // from `ranked` (the usual case when a violation fires), that path
+        // returned its own vanished-from-ranked hold - so the cap produced no
+        // visible progress at all. AnalysisPipeline then discarded
+        // violationCooldownRemaining between frames, so the next frame
+        // re-entered the freeze at streak=1/4 and the whole cycle chained.
+        //
+        // Drive 12 straight violated frames with the raw best differing every
+        // frame and the previous move absent from `ranked`, threading state the
+        // way AnalysisPipeline now does: the display must never stay frozen for
+        // more than MAX_VIOLATION_HOLD_FRAMES frames in a row.
+        var state = SuggestionStickiness.State()
+        val alternatives = listOf(drawStock, wasteToCol0, wasteToCol2, tableauMove)
+        var consecutiveFrozen = 0
+        var worstFrozenRun = 0
+        var adopted = 0
+        repeat(12) { frame ->
+            val best = alternatives[frame % alternatives.size]
+            val result = SuggestionStickiness.apply(
+                previous = wasteToCol2,
+                best = best,
+                // Deliberately excludes wasteToCol2: the displayed move has
+                // vanished, which is what made the old fall-through hold.
+                ranked = listOf(best),
+                boardVisuallyChanged = false,
+                state = state,
+                hasRunConsistencyViolation = true
+            )
+            if (result.display == null) {
+                consecutiveFrozen++
+                worstFrozenRun = maxOf(worstFrozenRun, consecutiveFrozen)
+            } else {
+                consecutiveFrozen = 0
+                adopted++
+            }
+            state = result.state
+        }
+        assertTrue(
+            "display froze for $worstFrozenRun consecutive frames",
+            worstFrozenRun <= 4
+        )
+        assertTrue("display never updated across 12 violated frames", adopted > 0)
+    }
+
+    @Test
+    fun violationHoldCapAdoptsRawBestEvenWhenPreviousAlsoVanished() {
+        var state = SuggestionStickiness.State()
+        repeat(4) {
+            state = SuggestionStickiness.apply(
+                previous = wasteToCol2,
+                best = drawStock,
+                ranked = listOf(drawStock),
+                boardVisuallyChanged = false,
+                state = state,
+                hasRunConsistencyViolation = true
+            ).state
+        }
+        val capped = SuggestionStickiness.apply(
+            previous = wasteToCol2,
+            best = drawStock,
+            ranked = listOf(drawStock),
+            boardVisuallyChanged = false,
+            state = state,
+            hasRunConsistencyViolation = true
+        )
+        assertEquals(drawStock.move, capped.display?.move)
+        assertEquals(0, capped.state.violationHoldStreak)
+        assertEquals(2, capped.state.violationCooldownRemaining)
+        assertTrue(capped.holdReason!!.contains("ADOPT"))
+    }
+
+    @Test
     fun runConsistencyViolationIsIgnoredWhenMoveUnchanged() {
         // best == previous is a same-move no-op regardless of the flag.
         val result = SuggestionStickiness.apply(

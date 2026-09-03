@@ -92,6 +92,13 @@ class AnalysisPipeline(
     private var pendingSuggestionCandidate: Move? = null
     private var pendingSuggestionStreak = 0
     private var violationHoldStreak = 0
+    // Must be threaded frame-to-frame like the three fields above.
+    // Leaving it out made SuggestionStickiness.VIOLATION_COOLDOWN_FRAMES dead
+    // code on device: every frame rebuilt State() with a 0 cooldown, so a
+    // capped violation episode re-entered the freeze on the very next frame.
+    // A real pull (2026-09-03 21:16:24-45) kept one stale arrow on screen for
+    // 21 consecutive seconds that way.
+    private var violationCooldownRemaining = 0
     private var lastErrorCaptureSignature: String? = null
     private val assistantForeground = AtomicBoolean(false)
     // Two idle stock/waste recycles with no waste card played → prefer
@@ -243,6 +250,7 @@ class AnalysisPipeline(
         pendingSuggestionCandidate = null
         pendingSuggestionStreak = 0
         violationHoldStreak = 0
+        violationCooldownRemaining = 0
         synchronized(snapshotLock) {
             lastDetection = null
             lastFrameBitmap?.recycle()
@@ -995,7 +1003,8 @@ class AnalysisPipeline(
             state = SuggestionStickiness.State(
                 pendingCandidate = pendingSuggestionCandidate,
                 pendingStreak = pendingSuggestionStreak,
-                violationHoldStreak = violationHoldStreak
+                violationHoldStreak = violationHoldStreak,
+                violationCooldownRemaining = violationCooldownRemaining
             ),
             visualChangeStreak = visualChangeStreak,
             hasRunConsistencyViolation = hasRunConsistencyViolation
@@ -1003,6 +1012,7 @@ class AnalysisPipeline(
         pendingSuggestionCandidate = result.state.pendingCandidate
         pendingSuggestionStreak = result.state.pendingStreak
         violationHoldStreak = result.state.violationHoldStreak
+        violationCooldownRemaining = result.state.violationCooldownRemaining
         result.holdReason?.let { fileLogger.append(it) }
         return result.display
     }
