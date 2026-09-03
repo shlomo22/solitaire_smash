@@ -114,21 +114,22 @@ data class RecognitionTrace(
 
 fun recognitionTraceLines(slots: List<RecognizedSlot>): List<String> =
     slots.filter { shouldLogSlotTrace(it) }.map { slot ->
-        slot.trace.logLine(
+        val line = slot.trace.logLine(
             pile = slot.pile,
             index = slot.index,
             label = slot.engine.shortLabel(),
             confidence = slot.confidence
         )
+        if (slot.inferred) "$line inferred-slot" else line
     }
 
 private fun shouldLogSlotTrace(slot: RecognizedSlot): Boolean =
-    !slot.inferred &&
-        (slot.engine.kind == SlotKind.FaceUp || slot.engine.kind == SlotKind.Unknown) &&
+    (slot.engine.kind == SlotKind.FaceUp || slot.engine.kind == SlotKind.Unknown) &&
         (
             slot.trace.rankSource != null ||
                 slot.trace.suitSource != null ||
                 slot.trace.rankTemplates != null ||
                 slot.trace.suitTemplates != null ||
-                slot.trace.postSteps.isNotEmpty()
+                slot.trace.postSteps.isNotEmpty() ||
+                slot.inferred
             )

@@ -96,6 +96,8 @@ class MoveHistoryStore(context: Context) {
     private fun describeCard(card: Card): String = when {
         !card.faceUp -> "??"
         !card.known -> "?unread"
-        else -> card.id + if (card.suitAmbiguous) "~" else ""
+        else -> card.id +
+            (if (card.suitAmbiguous) "~" else "") +
+            (if (card.inferred) "*" else "")
     }
 }

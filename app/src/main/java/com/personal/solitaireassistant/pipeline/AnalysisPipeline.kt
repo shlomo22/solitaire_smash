@@ -19,7 +19,9 @@ import com.personal.solitaireassistant.overlay.OverlayController
 import com.personal.solitaireassistant.settings.AssistantSettings
 import com.personal.solitaireassistant.settings.RejectedMoveStore
 import com.personal.solitaireassistant.solver.MoveFingerprint
+import com.personal.solitaireassistant.solver.MoveGenerator
 import com.personal.solitaireassistant.solver.MoveSelector
+import com.personal.solitaireassistant.solver.SolverDebugLines
 import com.personal.solitaireassistant.solver.WasteCycleStuckTracker
 import com.personal.solitaireassistant.vision.DetectionResult
 import com.personal.solitaireassistant.vision.ErrorCaptureMeta
@@ -751,6 +753,7 @@ class AnalysisPipeline(
                 from = null,
                 to = null,
                 knownFaceUp = knownFaceUp,
+                rankedMoves = ranked,
                 queueDelayMs = queueDelayMs,
                 selectMs = selectMs
             )
@@ -787,7 +790,8 @@ class AnalysisPipeline(
                 to = null,
                 knownFaceUp = knownFaceUp,
                 score = best.score,
-                rationale = best.rationale
+                rationale = best.rationale,
+                rankedMoves = ranked
             )
             return
         }
@@ -809,7 +813,8 @@ class AnalysisPipeline(
                 to = to,
                 knownFaceUp = knownFaceUp,
                 score = best.score,
-                rationale = best.rationale
+                rationale = best.rationale,
+                rankedMoves = ranked
             )
             return
         }
@@ -846,6 +851,7 @@ class AnalysisPipeline(
             score = best.score,
             rationale = best.rationale,
             runnerUps = ranked.filter { it.move != best.move }.take(3),
+            rankedMoves = ranked,
             queueDelayMs = queueDelayMs,
             selectMs = selectMs
         )
@@ -865,6 +871,7 @@ class AnalysisPipeline(
         score: Double? = null,
         rationale: String? = null,
         runnerUps: List<ScoredMove> = emptyList(),
+        rankedMoves: List<ScoredMove>? = null,
         queueDelayMs: Long = 0L,
         selectMs: Long = 0L
     ) {
@@ -907,6 +914,21 @@ class AnalysisPipeline(
                 }
                 appendLine("  $fromTxt $toTxt")
                 appendLine("  signature=$lastSignature")
+                val solverState = detection.state
+                if (solverState != null) {
+                    appendLine("  flags=${SolverDebugLines.flags(solverState)}")
+                    appendLine("  ${SolverDebugLines.inferredLine(solverState)}")
+                    val legal = MoveGenerator.generate(solverState)
+                    appendLine("  ${SolverDebugLines.legalLine(legal)}")
+                    if (rankedMoves != null) {
+                        val rankedLabels = rankedMoves.map { it.move.label }.toSet()
+                        val dropped = legal.filter { it.label !in rankedLabels }
+                        if (dropped.isNotEmpty()) {
+                            appendLine("  ${SolverDebugLines.filteredLine(dropped)}")
+                        }
+                    }
+                    appendLine("  ${SolverDebugLines.revealCheckLine(solverState)}")
+                }
                 detection.diagnostics.forEach { d -> appendLine("  diag: $d") }
                 val slotTraces = recognitionTraceLines(detection.recognizedSlots)
                 if (slotTraces.isNotEmpty()) {
