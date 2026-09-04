@@ -1632,6 +1632,96 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
     firing after one lap instead of two, and confirm it isn't firing
     spuriously on a healthy game (a repeat should only ever appear right
     after a genuine full-stock recycle with no plays, never mid-pass).
+- **v1.4.135: confirmed the "spuriously on a healthy game" worry from
+  v1.4.132's own writeup above - a real pull found it firing exactly that
+  way, and often.** User report, with a fresh pull
+  (`ed5ca730-analysis.log`) after v1.4.134 shipped the stop-sign badge on
+  top of this signal: "the new stop sign is false and showed where there
+  are still many valid moves." Confirmed directly: 84 `STUCK` outcome lines
+  across the pull, and once `isStuck` flips true it stays true (only a real
+  waste play clears it) - so a single bad trigger lights the badge for the
+  rest of the game, well past the point new cards keep being drawn.
+
+  Traced two distinct false-positive shapes to their exact log lines, both
+  from v1.4.132's core assumption: a waste-top identity is trustworthy the
+  instant it's read.
+  - `waste-cycle: stuck-repeat=Four_Diamonds seen=2` fired after only 2
+    distinct cards - nowhere near a real lap. The trace: a weak,
+    OCR-only read (`waste-fusion:legacy=null,tight=Four_Diamonds@0.62`)
+    got recorded, then the *same physical card* immediately re-stabilized
+    to a different, much stronger fused read
+    (`legacy=Eight_Diamonds,tight=Eight_Diamonds`) one frame later. A
+    plain one-frame recognition hiccup, not a second card - but v1.4.132
+    trusted it on sight.
+  - `waste-cycle: stuck-repeat=Two_Spades seen=10` fired on a card whose
+    own diagnostic showed `deck-constraint:2C->2S` - `DeckConstraintPass`
+    had just forced this draw from its own best guess (Two_Clubs) to Two
+    of Spades, purely because Two_Clubs already existed elsewhere on the
+    board (the parked Clubs/Spades ambiguity problem this file's
+    "Don't" section already forbids chasing directly). A *different* real
+    draw, 10 cards earlier in the same lap, had independently collided on
+    the same final identity for the same reason. Neither read was ever
+    confirmed by reappearing a second time before the board moved on to a
+    genuinely new card (the very next draw was Three of Spades) - the
+    "repeat" was two different physical cards coincidentally aliased to
+    the same id, not one card cycling back.
+
+  Fixed by requiring a candidate identity to be observed across **two
+  separate confirmed transitions** before it's trusted (recorded into
+  `seenWasteTopIds`) at all - never on first sighting. `WasteCycleStuckTracker`
+  gained `pendingCandidateId`/`pendingConfirmed`: a differing read starts a
+  fresh, unconfirmed candidacy that silently replaces whatever was pending;
+  only a *second* observation of that same id promotes it to confirmed and
+  runs the repeat-check. Both traced false positives were single-observation
+  blips that would be discarded under this rule the moment the board moved
+  on, never having been recorded.
+
+  **Non-obvious trap caught before shipping, twice, both from the same
+  root cause:** the natural-looking implementation - keep the existing
+  "skip if `previous.wasteTop()` already equals the new read" short-circuit,
+  and only add the two-observation logic on top - silently defeats itself,
+  because the caller updates its own "last confirmed" pointer after *every*
+  call. Once a candidate is set, the very next call showing the identical
+  value would already see it reflected in `previous` too, so that
+  short-circuit fires every time and the second-observation branch is never
+  reached - `seenWasteTopIds` would never accumulate anything at all,
+  turning the whole mechanism into a permanent no-op. Removed that
+  short-circuit entirely; confirmation is now tracked purely through
+  `pendingCandidateId`/`pendingConfirmed`, independent of `previous`. The
+  second, related trap: `pendingConfirmed` must be cleared when the waste
+  genuinely empties (a real recycle, `current.wasteTop() == null`), not just
+  when the identity changes - otherwise a card confirmed just *before* a
+  recycle keeps its stale `pendingConfirmed = true` and skips the
+  repeat-check entirely the instant it reappears after coming back around,
+  defeating detection on exactly the reappearance the mechanism exists to
+  catch. A present-but-unreadable card (`known == false`) is left alone
+  instead of clearing anything - that's noise on a card still physically
+  there, not a real gap.
+
+  Every existing `WasteCycleStuckTrackerTest` case needed rewriting: the old
+  ones drove the same card back-to-back with no intervening different card,
+  which - traced by hand against the corrected logic - never actually
+  reaches `isStuck = true` at all (a card that never left never needs to
+  "come back"), so they'd have silently tested the wrong thing. Rewritten
+  around a `jitter(n)` helper (a throwaway tableau card varied per call) to
+  simulate the unrelated board settling that real logs show generating
+  confirmed transitions every few hundred ms even on an otherwise static
+  board - without it, a genuinely stable card would have no way to reach
+  its own second confirmation either. New cases reproduce both real
+  false-positive shapes by hand-traced id
+  (`realLogShapeWeakBlipCorrectedThenSameBlipRecurringDoesNotFalselyRepeat`,
+  `singleUnconfirmedSightingIsDiscardedWhenReplaced`) plus the two design
+  traps above
+  (`genuineRepeatOnlyFlagsOnceTheReturningCardIsItselfConfirmedTwice`,
+  `confirmedCardMustReconfirmAfterAGenuineRecycleGapBeforeRepeatFlags`).
+
+  **Not yet device-verified.** What to check on the next pull: whether
+  `waste-cycle: stuck-repeat=...` (and the v1.4.134 `STUCK` badge riding on
+  it) still fires on a healthy game with plenty of moves available - if it
+  does, the next lever is probably requiring 3 observations instead of 2,
+  or gating on `Card.suitAmbiguous` directly for the specific
+  DeckConstraintPass-collision shape, not re-guessing this exact fix again
+  blind.
 - **v1.4.133: `isUnstuckTableauPeel` only exempts a move from the -180
   no-reveal penalty when it exposes a *hidden* card. A plain rearrange of
   two already-exposed tableau tops that exposes an already-face-up but
