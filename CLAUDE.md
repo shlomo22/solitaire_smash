@@ -1449,6 +1449,60 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
   score instead of the deferred one. Checked against every existing
   `MoveSelectorTest` case by hand (none of them have a genuine bridge Two/Three
   with zero hidden tableau cards, so none flip) since gradle can't run here.
+- **v1.4.123/124 (from a concurrent session/Cursor, undocumented until now):**
+  `WasteCycleStuckTracker` tracks confirmed board transitions (only from the
+  fully-confirmed analysis branch, same as deal-reset/move-history) and flags
+  `isStuck` after `DEFAULT_STUCK_AFTER_IDLE_RECYCLES = 2` full stock/waste
+  recycles with no card leaving waste onto the board - vision never sees
+  `GameState.recyclesUsed` (always 0 on a detected board), so this reconstructs
+  the same signal from confirmed transitions instead. `AnalysisPipeline` wires
+  it into `MoveSelector.rankedMoves`/`bestMove` via the `wasteCycleStuck`
+  parameter (default `false`, so all pre-existing call sites/tests are
+  unaffected). While stuck, v1.4.123 boosts `TableauToTableau` peels that
+  expose a card able to found/stack (`UNSTUCK_PEEL_BONUS = 120`, only from a
+  column that still has a hidden card behind the peeled one) and
+  `FoundationToTableau` pulls that create a receiver
+  (`UNSTUCK_FOUNDATION_PULL_BONUS = 120`), and adds an extra `-40`
+  `defer-idle-recycle` penalty on `RecycleWaste` itself. v1.4.124 separately
+  added `exposedOpenUnlock` (ranking-only tie-break: does this move's newly
+  exposed card found or stack) plus a 2-ply `bestCardFollowUp` lookahead,
+  unconditional on `wasteCycleStuck` - these apply to every move, not just the
+  stuck case.
+- **v1.4.131: the v1.4.123 fix only covered peeling a column that still has a
+  hidden card behind the exposed top - it never touched a plain
+  `TableauToFoundation` move for a card already sitting at the bottom of its
+  column with nothing left to reveal there.** User report: late-game, with
+  several already-exposed low tableau cards that could safely go up, the
+  arrow kept suggesting "Draw from stock" instead. Root cause, found in
+  `scoreTransition`'s `foundationDelta` block, independent of and *before*
+  `wasteCycleStuck` existed as a signal:
+  - `HOLD_UNBALANCED_FOUNDATION = 2.0` - when a foundation move is "unsafe" by
+    `KlondikeRules.isSafeFoundationMove`'s Baker's-rule check (conservative:
+    both opposite-color suits, or both same-color suits, must already be
+    founded up to the rank below) *and* reveals nothing (`revealed == 0`,
+    exactly the shape of a card with no hidden card behind it), the score gets
+    crushed to 2.0 - below a plain draw's `+5` - unconditionally, forever,
+    regardless of whether anything else is actually progressing.
+  - `isTableauUsefulLowCard`'s Two/Three "hold as a tableau bridge" restraint
+    (v1.4.89 above) is gated only on `hiddenTableauCount() > 0` - true for
+    almost the whole game, so a genuine bridge card keeps getting deferred to
+    foundationScore 5/25 even while the board is provably not progressing
+    (`wasteCycleStuck`), because nothing is actually using the bridge.
+  Both discounts exist to keep options open for later - not worth paying for
+  once nothing else is progressing, which is exactly what `wasteCycleStuck`
+  already measures. Both now gated on `!wasteCycleStuck`: while stuck, an
+  unsafe no-reveal foundation move keeps its base `15.0` (`risky-foundation`)
+  instead of being crushed to `2.0`, and a Two/Three bridge goes up at full
+  value instead of the deferred one. Two new `MoveSelectorTest` cases
+  (`whenWasteCycleStuckLiftsHoldUnbalancedDiscountOnExposedFoundationMove`,
+  `whenWasteCycleStuckLiftsLowCardBridgeRestraintOnExposedFoundationMove`)
+  each isolate one discount (the bridge-restraint case also reveals a hidden
+  card behind it on purpose, so `hold-unbalanced` can't also fire and blur the
+  two effects together) and assert the exact score delta by hand (+13.0 and
+  +10.0) since gradle can't run here. Not yet device-verified - watch real
+  play for whether exposed low cards start going to foundation once a real
+  stuck stretch (2+ idle recycles) is reached, instead of the arrow just
+  continuing to suggest draw.
 
 ## Current state (as of v1.4.89 / versionCode 160, Evaluate-verified)
 

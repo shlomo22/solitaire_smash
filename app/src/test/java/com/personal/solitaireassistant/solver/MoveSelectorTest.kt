@@ -626,6 +626,89 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun whenWasteCycleStuckLiftsHoldUnbalancedDiscountOnExposedFoundationMove() {
+        // Four of Clubs sits alone on tableau0 - no hidden card behind it, so
+        // this move reveals nothing (revealed == 0) - and is "unsafe" by
+        // Baker's rule (neither Hearts/Diamonds founded to Three, nor Spades
+        // to Two). That combination used to crush the score to
+        // HOLD_UNBALANCED_FOUNDATION (2.0), below a plain draw's +5, forever
+        // - regardless of whether anything else was actually progressing.
+        // This is the "lots of low cards could go up but the arrow just
+        // keeps drawing" pattern from real play.
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Four, Suit.Clubs)),
+                listOf(c(Rank.Nine, Suit.Spades)),
+                listOf(c(Rank.Nine, Suit.Diamonds)),
+                listOf(c(Rank.Nine, Suit.Hearts)),
+                emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                listOf(c(Rank.Ace, Suit.Clubs), c(Rank.Two, Suit.Clubs), c(Rank.Three, Suit.Clubs)),
+                listOf(c(Rank.Ace, Suit.Hearts)),
+                emptyList(),
+                listOf(c(Rank.Ace, Suit.Spades))
+            ),
+            stock = emptyList(),
+            waste = listOf(c(Rank.Queen, Suit.Diamonds))
+        )
+        val move = Move.TableauToFoundation(fromColumn = 0, toFoundation = 0)
+
+        val notStuck = MoveSelector.scoreAll(state, wasteCycleStuck = false).first { it.move == move }
+        assertTrue(
+            "expected hold-unbalanced when not stuck, got ${notStuck.rationale}",
+            notStuck.rationale.contains("hold-unbalanced")
+        )
+
+        val stuck = MoveSelector.scoreAll(state, wasteCycleStuck = true).first { it.move == move }
+        assertTrue(
+            "expected the discount lifted while stuck, got ${stuck.rationale}",
+            !stuck.rationale.contains("hold-unbalanced")
+        )
+        assertEquals(13.0, stuck.score - notStuck.score, 0.0001)
+    }
+
+    @Test
+    fun whenWasteCycleStuckLiftsLowCardBridgeRestraintOnExposedFoundationMove() {
+        // Three of Diamonds is a legal foundation move (foundation already
+        // at Two of Diamonds) but also a genuine bridge: the waste's Two of
+        // Spades could stack onto it. isTableauUsefulLowCard defers it as a
+        // bridge whenever any hidden tableau card remains anywhere on the
+        // board - even once wasteCycleStuck, when the bridge isn't actually
+        // being used and nothing else is progressing either. This move also
+        // reveals the hidden Jack of Clubs underneath, so hold-unbalanced
+        // never applies here - isolating just the bridge-restraint change.
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Jack, Suit.Clubs, false), c(Rank.Three, Suit.Diamonds)),
+                emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = listOf(
+                emptyList(),
+                listOf(c(Rank.Ace, Suit.Diamonds), c(Rank.Two, Suit.Diamonds)),
+                emptyList(),
+                emptyList()
+            ),
+            stock = emptyList(),
+            waste = listOf(c(Rank.Two, Suit.Spades))
+        )
+        val move = Move.TableauToFoundation(fromColumn = 0, toFoundation = 1)
+
+        val notStuck = MoveSelector.scoreAll(state, wasteCycleStuck = false).first { it.move == move }
+        assertTrue(
+            "expected defer-low-foundation when not stuck, got ${notStuck.rationale}",
+            notStuck.rationale.contains("defer-low-foundation")
+        )
+
+        val stuck = MoveSelector.scoreAll(state, wasteCycleStuck = true).first { it.move == move }
+        assertTrue(
+            "expected the bridge restraint lifted while stuck, got ${stuck.rationale}",
+            !stuck.rationale.contains("defer-low-foundation")
+        )
+        assertEquals(10.0, stuck.score - notStuck.score, 0.0001)
+    }
+
+    @Test
     fun prefersRevealThatUnlocksFoundationOverPlainReveal() {
         val state = GameState(
             tableau = listOf(

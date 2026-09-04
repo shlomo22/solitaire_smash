@@ -14,8 +14,13 @@ import com.personal.solitaireassistant.game.ScoredMove
  * [wasteCycleStuck] is a live-play session flag (two idle stock/waste cycles
  * with no waste card played — see [WasteCycleStuckTracker]). While true, the
  * scorer prefers tableau peels and foundation-to-tableau pulls that unlock a
- * receiver over another empty recycle. Default false keeps unit tests and
- * early-game play on the original one-ply weights.
+ * receiver over another empty recycle, and stops discounting an
+ * already-exposed tableau/waste card's straight trip to foundation just
+ * because it wouldn't also reveal a hidden card or isn't Baker's-rule
+ * "safe" yet ([HOLD_UNBALANCED_FOUNDATION], [isTableauUsefulLowCard]) — both
+ * cautions exist to keep options open for later progress, which isn't worth
+ * paying for once nothing else is progressing. Default false keeps unit
+ * tests and early-game play on the original one-ply weights.
  *
  * Among several legal card moves, [exposedOpenUnlock] and a 2-ply card
  * follow-up use the currently known face-up cards plus [KlondikeRules] to
@@ -140,15 +145,28 @@ object MoveSelector {
             // bridge for eventually exposing something buried behind it.
             // Once every hidden card is already face-up there is nothing
             // left to expose, so the bridge no longer earns its keep -
-            // stop deferring and let the card go up.
+            // stop deferring and let the card go up. Same logic applies once
+            // the game is wasteCycleStuck: a bridge that isn't unlocking
+            // anything while the stock keeps cycling empty isn't earning its
+            // keep either, hidden cards elsewhere or not.
             if (card != null &&
                 before.hiddenTableauCount() > 0 &&
+                !wasteCycleStuck &&
                 isTableauUsefulLowCard(before, card)
             ) {
                 foundationScore = if (safe) 25.0 else 5.0
                 reasons += "defer-low-foundation"
             }
-            if (!safe && revealed == 0) {
+            // Baker's-rule caution (don't found an "unsafe" card that reveals
+            // nothing - it might be needed as a landing spot later) is only
+            // worth paying for while something else is still progressing.
+            // A card sitting at the bottom of its column (revealed == 0,
+            // nothing left to reveal there) with wasteCycleStuck already
+            // true is exactly the "lots of low cards could go up but the
+            // arrow just keeps drawing" pattern - the discount here used to
+            // crush the score to 2.0, below a plain draw's +5, keeping it
+            // buried forever regardless of whether the caution ever pays off.
+            if (!safe && revealed == 0 && !wasteCycleStuck) {
                 foundationScore = HOLD_UNBALANCED_FOUNDATION
                 reasons += "hold-unbalanced"
             }
