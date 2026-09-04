@@ -693,7 +693,7 @@ class AnalysisPipeline(
             wasteCycleStuckTracker.onConfirmedTransition(previousConfirmed, state)?.let { note ->
                 fileLogger.append(
                     "waste-cycle: $note stuck=${wasteCycleStuckTracker.isStuck} " +
-                        "idleRecycles=${wasteCycleStuckTracker.idleRecycles}"
+                        "seenSinceProgress=${wasteCycleStuckTracker.seenSinceProgress}"
                 )
             }
             if (settingsRef.get().saveMoveHistory) {

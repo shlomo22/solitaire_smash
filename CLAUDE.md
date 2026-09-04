@@ -1503,6 +1503,54 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
   play for whether exposed low cards start going to foundation once a real
   stuck stretch (2+ idle recycles) is reached, instead of the arrow just
   continuing to suggest draw.
+- **v1.4.132: replaced the "2 idle recycles" trigger itself with something
+  much faster - the same waste-top card coming back around at all, with
+  zero card-progress since it was last seen, rather than waiting for two
+  full stock/waste recycle silhouettes.** User request: detect stuck the
+  instant a full lap through the stock produces nothing, not after two.
+  `WasteCycleStuckTracker` no longer counts `looksLikeRecycle` transitions -
+  it now tracks the set of distinct waste-top card ids seen since the last
+  card left waste (`seenWasteTopIds`), and flags `isStuck = true` the first
+  time a newly-observed waste-top card's id is already in that set. Draw-3
+  order is preserved by reversing waste back into stock on recycle (same
+  fact the old `looksLikeRecycle` comment already relied on), so a repeat
+  can only mean one of two things, both real: a full lap completed with
+  nothing played, or - in principle - a repeat inside a shorter span, though
+  normal append-only waste growth between recycles makes that structurally
+  impossible in practice; the only way back to an already-seen card is
+  through a recycle. Either way this fires after exactly one unproductive
+  lap instead of two, which is what was asked for and also strictly
+  dominates the old signal (anything the old 2-recycle counter caught, this
+  catches at least as early).
+  - **One correctness trap worth remembering if this is touched again:** a
+    card newly exposed by a *play* (the card that was covered under the one
+    just moved to tableau/foundation) is never itself a "fresh draw" - the
+    recognizer only ever reports the current front/exposed waste card, never
+    what's underneath. If that reveal weren't tracked immediately when the
+    reset fires, it would be invisible to the seen-set until some *later*
+    transition happened to change the waste top again - a real blind spot
+    that would have let exactly that card's eventual repeat go undetected.
+    Fixed by adding `current.wasteTop()` to the freshly-cleared set inside
+    the same branch that resets on a confirmed waste play, not deferring it
+    to the next ordinary draw.
+  - `isStuck`/`reset()` behavior and the `wasteCycleStuck` boolean consumed
+    by `MoveSelector` are unchanged in shape - only how `isStuck` gets
+    computed changed, so v1.4.131's fix above (which only cared about the
+    boolean, not how it's derived) is unaffected. `idleRecycles` is gone;
+    `seenSinceProgress` (the seen-set's size) replaces it in the
+    `analysis.log` `waste-cycle:` line for the equivalent diagnostic
+    purpose. `looksLikeRecycle` and its dedicated test were removed as
+    dead code - the whole point of the new design is that it stops caring
+    about the empty/refill silhouette.
+  - Every `WasteCycleStuckTrackerTest` case was hand-traced against the
+    exact confirmed-transition sequence it drives (this class has no
+    Evaluate/device validation path at all, same as the rest of
+    `solver/`), including one dedicated to the reveal-by-play blind spot
+    above (`cardExposedByPlayIsTrackedAndLaterCaughtIfItRepeats`). Not yet
+    device-verified - watch `analysis.log` for `waste-cycle: stuck-repeat=...`
+    firing after one lap instead of two, and confirm it isn't firing
+    spuriously on a healthy game (a repeat should only ever appear right
+    after a genuine full-stock recycle with no plays, never mid-pass).
 
 ## Current state (as of v1.4.89 / versionCode 160, Evaluate-verified)
 
