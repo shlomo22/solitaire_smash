@@ -1150,7 +1150,88 @@ Eight_Hearts` misread itself is untouched - per the user's own choice this
 round, this fix targets how the stickiness layer *reacts* to a recurring
 violation, not the recognition bug that triggers it.
 
-## Move history capture (v1.4.97)
+**Round 11 (v1.4.126, from a concurrent session/Cursor, undocumented until
+now): round 10's own cooldown fix had exactly the wiring-gap bug its own
+writeup warned about, and a real pull caught it.** A device pull
+(2026-09-03, 21:16:24-21:16:45) showed one stale arrow held for **21
+consecutive seconds** on a persistently self-inconsistent board. Root
+cause: `AnalysisPipeline` never added a `violationCooldownRemaining` field
+alongside its existing `pendingSuggestionCandidate`/`pendingSuggestionStreak`/
+`violationHoldStreak` fields when threading `SuggestionStickiness.State`
+frame-to-frame - every call rebuilt `State(..., violationCooldownRemaining =
+0)` fresh, so the round-10 cooldown was dead code on device and every capped
+episode re-entered the freeze on the very next frame. A second, independent
+bug compounded it: the cap-exceeded fall-through delegated to
+`resolveNormally`, and because the displayed move is typically *also* missing
+from `ranked` when a violation fires (round 7's own finding), that path
+returned its own vanished-from-ranked hold - so even a working cooldown would
+not have produced visible progress. Fixed by adding the missing field to
+`AnalysisPipeline` (with a comment pointing at this exact 21s pull as the
+cost of missing it) and changing the cap-exceeded branch to adopt `best`
+outright (`display = best`, `holdReason` prefixed `"ADOPT ..."`) instead of
+delegating - the cap's whole point is "stop freezing," which only holds if
+something is guaranteed to actually change. Two new
+`SuggestionStickinessTest` cases reproduce the 21s shape (12 frames of a
+raw candidate differing every frame with the displayed move absent from
+`ranked`) and assert the longest consecutive frozen run stays ≤4 frames.
+Device-evidence-driven, not yet re-verified after shipping.
+
+**Round 12 (v1.4.117-121, from a concurrent session/Cursor, undocumented
+until now): the real fix to the problem round 2/3's revert left open -
+"the hash has zero noise tolerance and the cache barely engages" (round 2's
+own finding) plus "a flat sample-count tolerance across a large, coarse
+grid... can silently miss a real change" (round 3's own warning) is
+answered by `pipeline/BoardRegionFingerprints.kt`.** Round 2 (v1.4.94) tried
+one global near-match over the whole ~3640-sample board grid and reverted
+after an 80-second stale-state bug: a real waste-card swap moved fewer
+quantized samples than capture noise consumed elsewhere in the same global
+budget. `BoardRegionFingerprints` fixes this by construction rather than by
+re-tuning the same flat threshold - each Smash pile (`waste`, `stock`,
+`f0`-`f3`, `t0`-`t6`, 13 regions total) gets its **own** dense sample grid
+and its **own** tolerance, calibrated from a real device pull rather than
+guessed: v1.4.120's own live numbers showed waste=4-7/t5=9 as pure capture
+noise on an unchanged frame, against real waste-draw deltas of 84-191 and a
+real tableau-5 move at 30 - a wide, safe margin - so v1.4.121 set
+`WASTE_TOLERANCE=8`/`TABLEAU_TOLERANCE=10` (stock/foundation stay at the
+original `1`, since they were never the source of stale frames). A swap now
+has to hide *inside the pile it actually happened in*, not under a
+board-wide allowance shared with 12 unrelated regions.
+
+Three-layered payoff, not just the frame skip:
+- **v1.4.118** (`AnalysisPipeline.onFrame`): if every region compares
+  unchanged, `detect()` is skipped entirely and the prior frame's
+  `DetectionResult` is reused (`cached = printCmp.unchanged && lastDetection
+  != null`).
+- **v1.4.119** (`GameStateDetector.detect(bitmap, changedRegions)`): even on
+  a frame that *does* need a real `detect()` call, only the pile names
+  `BoardRegionFingerprints.compare` actually flagged get re-recognized -
+  `shouldRecompute(name) = changedRegions == null || prior == null || name in
+  changedRegions`, backed by a new `lastFramePiles` cache of each pile's
+  last recognized result. `changedRegions == null` (Evaluate, or the first
+  frame of a session) always recomputes everything, so golden-truth accuracy
+  scoring is provably unaffected by this whole mechanism - it only ever
+  changes live-play behavior.
+- **v1.4.120** (`TableauCascadeSupport`): live columns skip mid-cascade
+  per-slot template scoring and fill buried slots geometrically once the
+  bottom and leading-card anchors agree on run length, only falling back to
+  the full per-slot path when the anchors disagree or the bottom read is
+  weak - Evaluate keeps the exhaustive path unconditionally, same
+  accuracy-neutrality guarantee as v1.4.119.
+
+Every frame logs a dedicated, never-deduped `fp <note> detect=<skip|run|delta>
+<ms>` line (`AnalysisPipeline.onFrame`) specifically so a real pull can show
+the skip/run/delta ratio directly, independent of the outcome-dedup that
+gates the `ARROW`/`HOLD` lines elsewhere in this file's history - this is
+the exact signal to pull next to confirm the mechanism is working as
+designed, and it did not exist for round 2's attempt. `wasteToleranceAbsorbsOneFlip`/
+`wasteSwapOverToleranceForcesDetect`-style cases in
+`BoardRegionFingerprintsTest.kt` cover the compare logic directly (pure
+computation, unlike most of this section - genuinely unit-testable).
+Structurally cannot reproduce round 2's exact failure mode (a swap in one
+region can never be absorbed by noise in a different, independently-tracked
+region), but still needs its own real-pull confirmation that the observed
+skip rate and end-to-end `detect=`/`queueDelayMs` timing actually improved
+in practice - not done yet as of this writing.
 
 User request: a way to review a whole finished (including abandoned) game
 afterward and check whether a different early move would have won, since
