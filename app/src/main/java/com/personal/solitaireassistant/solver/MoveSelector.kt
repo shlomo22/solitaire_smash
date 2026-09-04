@@ -11,16 +11,19 @@ import com.personal.solitaireassistant.game.ScoredMove
  * Bounded one-ply scorer with light look-ahead bonuses.
  * Deterministic tie-breaking by move label.
  *
- * [wasteCycleStuck] is a live-play session flag (two idle stock/waste cycles
- * with no waste card played — see [WasteCycleStuckTracker]). While true, the
- * scorer prefers tableau peels and foundation-to-tableau pulls that unlock a
- * receiver over another empty recycle, and stops discounting an
- * already-exposed tableau/waste card's straight trip to foundation just
- * because it wouldn't also reveal a hidden card or isn't Baker's-rule
- * "safe" yet ([HOLD_UNBALANCED_FOUNDATION], [isTableauUsefulLowCard]) — both
- * cautions exist to keep options open for later progress, which isn't worth
- * paying for once nothing else is progressing. Default false keeps unit
- * tests and early-game play on the original one-ply weights.
+ * [wasteCycleStuck] is a live-play session flag (the same waste-top card has
+ * come back around with no card having left waste since - see
+ * [WasteCycleStuckTracker]). While true, the scorer prefers tableau peels,
+ * foundation-to-tableau pulls, and plain tableau rearranges that expose a new
+ * receiver over another empty recycle ([isUnstuckTableauPeel],
+ * [foundationPullCreatesReceiver], the `unstuckReceiverShuffle` check next to
+ * them), and stops discounting an already-exposed tableau/waste card's
+ * straight trip to foundation just because it wouldn't also reveal a hidden
+ * card or isn't Baker's-rule "safe" yet ([HOLD_UNBALANCED_FOUNDATION],
+ * [isTableauUsefulLowCard]) — all of these cautions exist to keep options
+ * open for later progress, which isn't worth paying for once nothing else is
+ * progressing. Default false keeps unit tests and early-game play on the
+ * original one-ply weights.
  *
  * Among several legal card moves, [exposedOpenUnlock] and a 2-ply card
  * follow-up use the currently known face-up cards plus [KlondikeRules] to
@@ -40,6 +43,7 @@ object MoveSelector {
     /** Enough to beat recycle (~0 to −20) while stuck; same order as a real reveal. */
     private const val UNSTUCK_PEEL_BONUS = 120.0
     private const val UNSTUCK_FOUNDATION_PULL_BONUS = 120.0
+    private const val UNSTUCK_RECEIVER_SHUFFLE_BONUS = 120.0
     /** Ranking-only: newly exposed known card can go to foundation. Cannot beat draw vs −180. */
     private const val OPEN_UNLOCK_FOUNDATION = 25.0
     /** Ranking-only: newly exposed known card can stack on another open top. */
@@ -209,6 +213,25 @@ object MoveSelector {
         val unstuckFoundationPull = wasteCycleStuck &&
             move is Move.FoundationToTableau &&
             foundationPullCreatesReceiver(before, after, move)
+        // isUnstuckTableauPeel only covers exposing a *hidden* card behind
+        // the one that moves. A card that was already face-up but merely
+        // covered - e.g. tableau0 = [Three_Hearts(up), Six_Clubs(up)],
+        // moving Six_Clubs away exposes an already-face-up Three_Hearts as
+        // the new top - is a distinct, equally real "this unsticks the
+        // game" case: exposedOpenUnlock already detects it (that's exactly
+        // what its newlyExposedCard/exposedUnlockKind check below does), but
+        // its bonus (+15/+25) is deliberately too small to ever beat the
+        // unconditional "defer-no-reveal-stack" -180 penalty a few lines
+        // down. Note this is *not* about the moved card's own destination:
+        // a card that's already exposed can always be reached wherever it
+        // sits, so a shuffle can only add value by exposing something new
+        // at the *source* column, never by relocating the mover itself.
+        val unstuckReceiverShuffle = wasteCycleStuck &&
+            !unstuckPeel &&
+            move is Move.TableauToTableau &&
+            newlyExposedCard(before, after, move.fromColumn)?.let {
+                exposedUnlockKind(after, it, setOf(move.fromColumn, move.toColumn)) != null
+            } == true
 
         when (move) {
             is Move.WasteToTableau -> {
@@ -287,6 +310,9 @@ object MoveSelector {
                     } else {
                         reasons += "unstuck-peel"
                     }
+                } else if (unstuckReceiverShuffle) {
+                    score += UNSTUCK_RECEIVER_SHUFFLE_BONUS
+                    reasons += "unstuck-receiver-shuffle"
                 } else if (revealed == 0 && foundationDelta == 0 && !createsUsefulEmpty) {
                     score -= 180.0
                     reasons += "defer-no-reveal-stack"

@@ -1551,6 +1551,50 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
     firing after one lap instead of two, and confirm it isn't firing
     spuriously on a healthy game (a repeat should only ever appear right
     after a genuine full-stock recycle with no plays, never mid-pass).
+- **v1.4.133: `isUnstuckTableauPeel` only exempts a move from the -180
+  no-reveal penalty when it exposes a *hidden* card. A plain rearrange of
+  two already-exposed tableau tops that exposes an already-face-up but
+  previously-*covered* card underneath falls into a gap between two
+  existing mechanisms and gets crushed anyway.** `exposedOpenUnlock`
+  already detects exactly this case (`newlyExposedCard`/`exposedUnlockKind`
+  on the move's `fromColumn`) and scores it - but only as a small
+  ranking-only tie-break (+15/+25), explicitly documented as "cannot beat
+  draw vs -180". So while `wasteCycleStuck`, a rearrange that would
+  genuinely unstick the game (exposing an already-face-up card that can now
+  stack somewhere, or found) still loses to another empty draw/recycle
+  every time, the same underlying "arrow just keeps drawing" symptom this
+  whole `wasteCycleStuck` thread has been chasing.
+
+  First attempt at this fix was wrong and caught before shipping: checked
+  the move's *destination* column's new top (mirroring
+  `foundationPullCreatesReceiver`'s shape) on the theory that relocating an
+  exposed card next to a receiver "creates" a landing spot for it. On
+  reflection this is always redundant for a `TableauToTableau` move
+  specifically - `canStackOnTableau` depends only on the card's own
+  rank/suit, never on which column it sits in, so any card already exposed
+  on tableau is equally reachable at its *original* position. A shuffle can
+  only ever add real value by exposing something new at the *source*
+  column (the covered-but-already-face-up case above), never by moving the
+  mover itself - unlike `foundationPullCreatesReceiver`, where the pulled
+  card genuinely was inaccessible before (locked on a foundation, not
+  reachable by any stack). Fixed by checking `move.fromColumn` instead,
+  reusing the exact `newlyExposedCard`/`exposedUnlockKind` helpers
+  `exposedOpenUnlock` and `isUnstuckTableauPeel` already use, just without
+  `isUnstuckTableauPeel`'s `hiddenInColumn > 0` requirement - `unstuckPeel`
+  and this new `unstuckReceiverShuffle` check are deliberately complementary
+  (hidden-card exposure vs. already-face-up-but-covered exposure), not
+  overlapping.
+
+  `UNSTUCK_RECEIVER_SHUFFLE_BONUS = 120.0` reuses the same magnitude as
+  `UNSTUCK_PEEL_BONUS`/`UNSTUCK_FOUNDATION_PULL_BONUS` rather than guessing
+  a new number. New test
+  (`whenWasteCycleStuckPrefersShuffleThatExposesAnAlreadyFaceUpReceiver`)
+  hand-traces the exact score delta (+300.0: +120 replacing -180) and
+  confirms `bestMove` actually picks the shuffle over `DrawStock` when
+  stuck, not just that its score improved in isolation. Not yet
+  device-verified - watch for the arrow finally suggesting a rearrange move
+  in a stuck late-game position where an already-exposed, previously-covered
+  card is sitting on a legal-but-unreached landing spot.
 
 ## Current state (as of v1.4.89 / versionCode 160, Evaluate-verified)
 

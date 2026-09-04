@@ -626,6 +626,50 @@ class MoveSelectorTest {
     }
 
     @Test
+    fun whenWasteCycleStuckPrefersShuffleThatExposesAnAlreadyFaceUpReceiver() {
+        // Three of Hearts sits face-up on tableau0 but *covered* by Six of
+        // Clubs (moving Six away reveals nothing new by the hiddenTableauCount
+        // definition, since Three of Hearts was already face-up - just not
+        // reachable while covered). isUnstuckTableauPeel only covers exposing
+        // a genuinely *hidden* card, so this distinct case - moving Six onto
+        // Seven of Diamonds exposes Three of Hearts, which can then stack
+        // onto tableau2's Four of Spades - falls into the unconditional
+        // "defer-no-reveal-stack" -180 penalty without its own check. Note
+        // this is NOT about the moved card (Six of Clubs) finding a new home -
+        // it was already reachable at its original spot, so relocating it
+        // alone can never create value; only exposing something new at the
+        // source column can.
+        val state = GameState(
+            tableau = listOf(
+                listOf(c(Rank.Three, Suit.Hearts), c(Rank.Six, Suit.Clubs)),
+                listOf(c(Rank.Seven, Suit.Diamonds)),
+                listOf(c(Rank.Four, Suit.Spades)),
+                emptyList(), emptyList(), emptyList(), emptyList()
+            ),
+            foundations = List(4) { emptyList() },
+            stock = listOf(c(Rank.King, Suit.Diamonds, false)),
+            waste = emptyList()
+        )
+        val move = Move.TableauToTableau(fromColumn = 0, startIndex = 1, toColumn = 1)
+
+        val notStuck = MoveSelector.scoreAll(state, wasteCycleStuck = false).first { it.move == move }
+        assertTrue(
+            "expected defer-no-reveal-stack when not stuck, got ${notStuck.rationale}",
+            notStuck.rationale.contains("defer-no-reveal-stack")
+        )
+
+        val stuck = MoveSelector.scoreAll(state, wasteCycleStuck = true).first { it.move == move }
+        assertTrue(
+            "expected unstuck-receiver-shuffle while stuck, got ${stuck.rationale}",
+            stuck.rationale.contains("unstuck-receiver-shuffle")
+        )
+        assertEquals(300.0, stuck.score - notStuck.score, 0.0001)
+
+        val stuckBest = requireNotNull(MoveSelector.bestMove(state, wasteCycleStuck = true))
+        assertEquals(move, stuckBest.move)
+    }
+
+    @Test
     fun whenWasteCycleStuckLiftsHoldUnbalancedDiscountOnExposedFoundationMove() {
         // Four of Clubs sits alone on tableau0 - no hidden card behind it, so
         // this move reveals nothing (revealed == 0) - and is "unsafe" by
