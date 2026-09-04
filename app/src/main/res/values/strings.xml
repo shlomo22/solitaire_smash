@@ -7,4 +7,5 @@
     <string name="capture_channel_description">Foreground service while analyzing Solitaire Smash</string>
     <string name="overlay_cancel_hint">Cancel</string>
     <string name="overlay_label_board">Label</string>
+    <string name="overlay_stuck_indicator">⛔ Stuck — no useful move</string>
 </resources>

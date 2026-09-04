@@ -773,6 +773,16 @@ class AnalysisPipeline(
             boardVisuallyChanged = boardVisuallyChanged,
             hasRunConsistencyViolation = detection.hasRunConsistencyViolation
         ) ?: return
+        // wasteCycleStuck alone only means a full stock lap made no progress -
+        // MoveSelector already tries every "unstuck" lever it knows (peel,
+        // foundation pull, receiver-exposing shuffle, exposed low card to
+        // foundation) before falling back to Draw/Recycle. If it's still
+        // stuck on Draw/Recycle after all of that, there's genuinely nothing
+        // productive to suggest right now - display this as a separate badge,
+        // never by replacing the arrow itself, since recognition can be wrong
+        // and the best-known move (even "draw") should stay actionable.
+        val isDeadlocked = wasteCycleStuck &&
+            (best.move is Move.DrawStock || best.move is Move.RecycleWaste)
 
         // Always draw the best legal move once the board is stable.
         // Recognition quality is logged via knownFaceUp / diag — hiding the arrow
@@ -839,10 +849,16 @@ class AnalysisPipeline(
         } else {
             overlayController.showMove(from, to)
         }
+        if (isDeadlocked) {
+            overlayController.showStuckIndicator()
+        } else {
+            overlayController.hideStuckIndicator()
+        }
         val msg =
             "Best: ${best.move.label} score=${"%.1f".format(best.score)} " +
                 "(${best.rationale}) ${elapsedMs}ms conf=${"%.2f".format(detection.confidence)} " +
-                "known=$knownFaceUp"
+                "known=$knownFaceUp" +
+                if (isDeadlocked) " STUCK" else ""
         statusSink(msg)
         Log.i(TAG, detection.diagnostics.joinToString(" | "))
         logOutcome(
@@ -861,7 +877,8 @@ class AnalysisPipeline(
             runnerUps = ranked.filter { it.move != best.move }.take(3),
             rankedMoves = ranked,
             queueDelayMs = queueDelayMs,
-            selectMs = selectMs
+            selectMs = selectMs,
+            isDeadlocked = isDeadlocked
         )
     }
 
@@ -881,7 +898,8 @@ class AnalysisPipeline(
         runnerUps: List<ScoredMove> = emptyList(),
         rankedMoves: List<ScoredMove>? = null,
         queueDelayMs: Long = 0L,
-        selectMs: Long = 0L
+        selectMs: Long = 0L,
+        isDeadlocked: Boolean = false
     ) {
         val key = buildString {
             append(outcome)
@@ -891,6 +909,11 @@ class AnalysisPipeline(
             append(knownFaceUp)
             append('|')
             append(lastSignature ?: "")
+            append('|')
+            // isDeadlocked can flip with move/knownFaceUp/signature all
+            // unchanged (wasteCycleStuck itself flipping is the trigger), so
+            // it needs its own key slot or that transition never logs.
+            append(if (isDeadlocked) "stuck" else "ok")
         }
         if (key == lastLoggedOutcome) return
         lastLoggedOutcome = key

@@ -127,6 +127,7 @@ class OverlayController(
     private var arrowView: MoveOverlayView? = null
     private var cancelButton: TextView? = null
     private var labelButton: TextView? = null
+    private var stuckIndicator: TextView? = null
     private var colorArgb: Int = 0xE6000000.toInt()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingBlink: Runnable? = null
@@ -198,7 +199,45 @@ class OverlayController(
         cancelBlink()
         arrowView?.clearArrow()
         hideCancelButton()
+        hideStuckIndicatorInternal()
         if (reviewMode) hideLabelButton()
+    }
+
+    /**
+     * A separate badge alongside the arrow (never instead of it) for a
+     * position the solver believes has no productive move at all - wasteCycleStuck
+     * (a full stock lap produced zero progress) plus the best move still being
+     * Draw/Recycle even after every "unstuck" bonus MoveSelector knows about.
+     * The arrow itself is untouched by this: recognition can be wrong, so the
+     * best-known move (even if it's just "draw") stays visible and actionable.
+     */
+    fun showStuckIndicator() = runOnMain {
+        if (!canDrawOverlays()) return@runOnMain
+        if (reviewMode) return@runOnMain
+        if (stuckIndicator == null) {
+            stuckIndicator = TextView(context).apply {
+                text = context.getString(com.personal.solitaireassistant.R.string.overlay_stuck_indicator)
+                setTextColor(0xFFFFFFFF.toInt())
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(dp(18), dp(10), dp(18), dp(10))
+                background = roundedBackground(0xCCB71C1C.toInt())
+                alpha = 0.92f
+                isClickable = false
+                isFocusable = false
+            }
+            windowManager.addView(stuckIndicator, stuckLayoutParams())
+        }
+        stuckIndicator?.visibility = View.VISIBLE
+    }
+
+    fun hideStuckIndicator() = runOnMain {
+        hideStuckIndicatorInternal()
+    }
+
+    private fun hideStuckIndicatorInternal() {
+        stuckIndicator?.visibility = View.GONE
     }
 
     /**
@@ -217,6 +256,7 @@ class OverlayController(
         arrowView?.clearArrow()
         hideCancelButton()
         hideLabelButton()
+        hideStuckIndicatorInternal()
     }
 
     fun hide() = runOnMain {
@@ -227,6 +267,8 @@ class OverlayController(
         cancelButton = null
         removeView(labelButton)
         labelButton = null
+        removeView(stuckIndicator)
+        stuckIndicator = null
     }
 
     /** Overlay views must only be mutated on the main thread. */
@@ -343,6 +385,25 @@ class OverlayController(
             x = dp(20)
             y = dp(92)
             title = "SolitaireLabelOverlay"
+        }
+    }
+
+    private fun stuckLayoutParams(): WindowManager.LayoutParams {
+        val type = overlayWindowType()
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            // Above the cancel button (also BOTTOM|CENTER_HORIZONTAL, y=dp(92))
+            // so the two never overlap.
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(150)
+            title = "SolitaireStuckOverlay"
         }
     }
 

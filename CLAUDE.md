@@ -1595,6 +1595,51 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
   device-verified - watch for the arrow finally suggesting a rearrange move
   in a stuck late-game position where an already-exposed, previously-covered
   card is sitting on a legal-but-unreached landing spot.
+- **v1.4.134: new feature, not a fix - a "genuinely stuck" indicator
+  alongside the arrow.** User request: after all the `wasteCycleStuck`
+  unstuck work above, also detect when the position is truly deadlocked
+  (nothing the solver can find helps) and show a bottom-of-screen badge -
+  but keep showing the arrow regardless, since recognition can be wrong.
+  `AnalysisPipeline.showBestSuggestion` computes `isDeadlocked =
+  wasteCycleStuck && (best.move is DrawStock || best.move is
+  RecycleWaste)` right after stickiness resolves the displayed move: since
+  `MoveSelector` now tries every unstuck lever (peel, foundation pull,
+  receiver-exposing shuffle, exposed-low-card-to-foundation) before ever
+  falling back to Draw/Recycle, landing on Draw/Recycle *after* a full
+  unproductive stock lap means none of them found anything - the strongest
+  signal available without building real search-based deadlock proof.
+  Deliberately reuses `wasteCycleStuck`/`best.move` rather than a new
+  threshold - no magic number to justify.
+
+  `OverlayController` gained a fourth independent `WindowManager` window
+  (`stuckIndicator`, a red-badged `TextView`), following the exact
+  `cancelButton`/`labelButton` pattern already in the file: own
+  `showStuckIndicator()`/`hideStuckIndicator()`, own `stuckLayoutParams()`
+  (`BOTTOM|CENTER_HORIZONTAL`, `y=dp(150)` - stacked directly above the
+  cancel button's `y=dp(92)` so the two never overlap), wired into the
+  existing `hideOverlayChrome()`/`hideArrowTemporarily()`/`hide()` teardown
+  paths via a private `hideStuckIndicatorInternal()` (avoids a redundant
+  nested `runOnMain` call from those already-on-main-thread call sites -
+  matches how `hideCancelButton`/`hideLabelButton` are structured). The
+  arrow logic itself (`showMove`/`blinkMove`) is completely untouched -
+  `AnalysisPipeline` calls `showStuckIndicator()`/`hideStuckIndicator()` as
+  a separate, additive call right next to `showMove`/`blinkMove`, never
+  gating the arrow on this flag.
+
+  One thing worth remembering if this needs debugging: `logOutcome`'s dedup
+  `key` (`outcome|move.label|knownFaceUp|lastSignature`) doesn't include
+  anything that changes when `isDeadlocked` flips on its own (the board can
+  sit fully static while `wasteCycleStuckTracker` flips `isStuck` on a
+  repeat-detect transition) - without adding `isDeadlocked` to the key too,
+  that exact transition would have been silently swallowed by dedup and
+  never appear in `analysis.log`, the same class of bug this file's
+  `AnalysisFileLogger`/`WasteCycleStuckTracker` entries have hit before.
+  Fixed by appending `stuck`/`ok` to the key. Not yet device-verified -
+  watch for the badge appearing exactly when `analysis.log` shows a
+  `waste-cycle: stuck-repeat=...` note immediately followed by an `ARROW`
+  line ending in ` STUCK`, and confirm the arrow itself never disappears or
+  changes behavior because of this (it shouldn't - nothing here touches
+  `showMove`/`blinkMove` or their inputs).
 
 ## Current state (as of v1.4.89 / versionCode 160, Evaluate-verified)
 
