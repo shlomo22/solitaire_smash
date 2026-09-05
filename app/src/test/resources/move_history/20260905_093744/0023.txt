@@ -1,0 +1,13 @@
+stock: 1 cards
+waste: King_Spades
+foundation0: Two_Clubs
+foundation1: Ace_Spades
+foundation2: -
+foundation3: -
+tableau0: Queen_Hearts
+tableau1: ?? Ten_Hearts~ Nine_Clubs
+tableau2: ?? ?? Eight_Clubs
+tableau3: ?? ?? Four_Diamonds
+tableau4: ?? ?? Jack_Hearts
+tableau5: ?? ?? ?? ?? ?? ?? Eight_Diamonds~ Seven_Spades Six_Diamonds~
+tableau6: ?? ?? ?? ?? ?? ?? ?? King_Diamonds

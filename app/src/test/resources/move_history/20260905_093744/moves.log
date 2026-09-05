@@ -1,0 +1,171 @@
+0000 deal: opening layout
+0001 tableau5 changed
+0002 tableau5 changed; King_Diamonds (+6 more): ? -> tableau6
+0003 tableau6 changed
+0004 tableau5 changed; tableau3 changed; tableau6 changed
+0005 tableau6 changed
+0006 draw: Three_Diamonds
+0007 draw: Ace_Clubs
+0008 draw: Ace_Spades
+0009 Ace_Clubs: ? -> foundation0
+0010 Ace_Spades: waste -> foundation1; draw: Three_Diamonds
+0011 Two_Clubs: tableau4 -> foundation0
+0012 Nine_Clubs (+3 more): ? -> tableau4
+0013 tableau1 changed; tableau4 changed
+0014 waste emptied (was Three_Diamonds)
+0015 state changed (see snapshot)
+0016 draw: Six_Clubs
+0017 waste emptied (was Six_Clubs)
+0018 draw: Ten_Clubs
+0019 draw: Seven_Spades
+0020 draw: Five_Clubs
+0021 draw: King_Clubs
+0022 tableau5 changed; draw: King_Spades
+0023 tableau5 changed
+0024 draw: Seven_Diamonds
+0025 draw: Four_Clubs
+0026 state changed (see snapshot)
+0027 draw: Five_Clubs
+0028 tableau5 changed
+0029 state changed (see snapshot)
+0030 tableau5 changed; draw: King_Hearts
+0031 tableau5 changed
+0032 tableau5 changed
+0033 waste emptied (was King_Hearts)
+0034 draw: Two_Spades
+0035 tableau5 changed; tableau3 changed
+0036 tableau3 changed; tableau2 lost 3 card(s) (was top Eight_Clubs)
+0037 Jack_Diamonds (+1 more): ? -> tableau2; tableau3 changed
+0038 Two_Spades: waste -> foundation1; tableau1 changed; draw: Ten_Diamonds
+0039 tableau1 changed; draw: Six_Clubs
+0040 draw: Three_Clubs
+0041 draw: Six_Spades
+0042 draw: Nine_Spades
+0043 waste emptied (was Nine_Spades)
+0044 draw: Five_Diamonds
+0045 draw: Two_Hearts
+0046 draw: Ten_Clubs
+0047 Ten_Spades: ? -> tableau4
+0048 draw: Queen_Clubs
+0049 Ten_Clubs: ? -> tableau2; draw: Six_Clubs
+0050 Eight_Clubs (+1 more): tableau3 -> tableau4; tableau3 changed
+0051 Jack_Spades (+1 more): tableau3 -> tableau0
+0052 tableau0 changed
+0053 tableau3 grew by 2 card(s); tableau4 changed; tableau2 changed; tableau5 changed; tableau6 lost 8 card(s) (was top King_Diamonds)
+0054 Four_Spades (+6 more): ? -> tableau6; tableau2 changed; tableau3 changed; tableau4 changed; tableau5 changed
+0055 tableau5 changed
+0056 tableau5 changed; tableau6 lost 7 card(s) (was top Four_Spades)
+0057 tableau5 changed
+0058 Four_Spades: ? -> foundation1; Seven_Hearts (+4 more): ? -> tableau6; tableau5 changed
+0059 tableau0 changed; tableau1 changed
+0060 tableau0 changed; tableau1 changed
+0061 tableau6 changed; tableau5 changed; draw: Two_Hearts
+0062 tableau0 changed; draw: Queen_Diamonds
+0063 Two_Hearts: ? -> tableau1; tableau0 changed; draw: Five_Diamonds
+0064 tableau5 changed; tableau6 lost 6 card(s) (was top Six_Clubs)
+0065 Six_Clubs (+1 more): ? -> tableau4; Queen_Spades (+3 more): ? -> tableau6; tableau5 changed
+0066 draw: Ace_Hearts
+0067 tableau4 changed; draw: Three_Diamonds
+0068 tableau4 changed
+0069 tableau4 changed; tableau2 changed; tableau6 lost 4 card(s) (was top Queen_Spades)
+0070 tableau3 changed; Three_Hearts (+2 more): ? -> tableau6; tableau2 changed; tableau4 changed
+0071 Ten_Clubs (+1 more): tableau2 -> tableau3; tableau2 changed; tableau4 changed
+0072 Jack_Diamonds (+3 more): ? -> tableau2; tableau1 lost 2 card(s) (was top Two_Hearts); tableau3 changed; tableau4 changed; tableau5 changed
+0073 tableau4 changed; tableau5 changed; tableau2 lost 4 card(s) (was top Jack_Diamonds); tableau3 changed
+0074 tableau5 changed; tableau4 changed
+0075 waste emptied (was Three_Diamonds)
+0076 draw: Five_Clubs
+0077 tableau5 changed; draw: Eight_Diamonds
+0078 tableau4 changed; draw: Jack_Diamonds
+0079 tableau4 changed; draw: Nine_Diamonds
+0080 tableau0 changed; draw: Queen_Diamonds
+0081 Nine_Diamonds: ? -> tableau3; tableau0 changed; draw: Seven_Diamonds
+0082 tableau4 changed; draw: Jack_Diamonds
+0083 tableau3 changed; tableau4 changed; draw: King_Hearts
+0084 tableau3 changed; waste emptied (was King_Hearts)
+0085 draw: Ace_Hearts
+0086 Ace_Hearts: waste -> foundation2; draw: Ten_Diamonds
+0087 tableau4 changed; tableau5 changed
+0088 tableau4 changed; tableau5 changed
+0089 tableau4 changed; tableau5 changed
+0090 Two_Hearts: ? -> foundation2; tableau4 changed; tableau5 changed
+0091 tableau3 changed; tableau4 changed
+0092 tableau6 lost 3 card(s) (was top Three_Hearts)
+0093 Three_Hearts: ? -> foundation2; Ace_Diamonds (+1 more): ? -> tableau6
+0094 tableau5 changed; tableau6 lost 2 card(s) (was top Ace_Diamonds)
+0095 Ace_Diamonds: ? -> foundation3; tableau5 changed; Eight_Hearts: ? -> tableau6
+0096 tableau5 changed
+0097 tableau5 changed
+0098 tableau4 changed; tableau3 changed
+0099 tableau3 changed; tableau4 changed; tableau5 changed; tableau6 lost 1 card(s) (was top Eight_Hearts)
+0100 Eight_Hearts: ? -> tableau0; tableau3 changed; tableau4 changed; tableau5 changed
+0101 draw: Nine_Spades
+0102 tableau0 changed; draw: Nine_Clubs
+0103 waste emptied (was Nine_Clubs)
+0104 state changed (see snapshot)
+0105 draw: Five_Clubs
+0106 tableau5 changed
+0107 draw: Seven_Clubs
+0108 tableau2 changed; tableau5 changed
+0109 Jack_Spades: ? -> tableau1; draw: Three_Diamonds
+0110 tableau0 changed; tableau1 lost 1 card(s) (was top Jack_Spades)
+0111 tableau1 grew by 4 card(s); tableau2 changed; tableau3 changed
+0112 Five_Clubs (+1 more): ? -> tableau0; tableau1 lost 4 card(s) (was top U_B); tableau2 lost 4 card(s) (was top U_B); tableau3 changed
+0113 draw: King_Clubs
+0114 draw: Seven_Diamonds
+0115 tableau4 changed; draw: Jack_Diamonds
+0116 tableau3 changed; tableau4 changed; draw: King_Hearts
+0117 King_Hearts: waste -> tableau6; draw: King_Clubs
+0118 tableau5 changed
+0119 tableau5 changed
+0120 King_Clubs: waste -> tableau2; draw: Four_Clubs
+0121 King_Spades: ? -> tableau1; tableau2 lost 1 card(s) (was top King_Clubs)
+0122 tableau3 changed; tableau4 changed; tableau5 changed
+0123 tableau5 changed
+0124 tableau4 changed; tableau3 changed; tableau5 changed; draw: Seven_Diamonds
+0125 tableau5 changed
+0126 tableau0 changed; tableau5 changed
+0127 tableau0 changed; tableau5 changed
+0128 Five_Clubs (+7 more): tableau0 -> tableau1
+0129 draw: Ten_Diamonds
+0130 draw: Nine_Clubs
+0131 tableau1 changed
+0132 waste emptied (was Nine_Clubs)
+0133 draw: Eight_Diamonds
+0134 tableau1 changed; draw: King_Spades
+0135 Jack_Clubs: ? -> tableau2; draw: Eight_Diamonds
+0136 tableau2 changed
+0137 tableau5 changed
+0138 tableau5 changed
+0139 draw: Seven_Diamonds
+0140 draw: Ten_Diamonds
+0141 state changed (see snapshot)
+0142 draw: Nine_Clubs
+0143 waste emptied (was Nine_Clubs)
+0144 draw: Three_Diamonds
+0145 draw: Seven_Diamonds
+0146 draw: Ten_Diamonds
+0147 draw: Nine_Clubs
+0148 waste emptied (was Nine_Clubs)
+0149 draw: Three_Diamonds
+0150 draw: Seven_Diamonds
+0151 state changed (see snapshot)
+0152 state changed (see snapshot)
+0153 draw: Nine_Clubs
+0154 waste emptied (was Nine_Clubs)
+0155 draw: Seven_Diamonds
+0156 state changed (see snapshot)
+0157 draw: Jack_Clubs
+0158 draw: Nine_Clubs
+0159 waste emptied (was Nine_Clubs)
+0160 draw: Three_Diamonds
+0161 draw: Seven_Diamonds
+0162 Three_Clubs: tableau5 -> foundation0; tableau5 changed
+0163 tableau4 lost 1 card(s) (was top Four_Clubs)
+0164 state changed (see snapshot)
+0165 tableau5 changed
+0166 tableau5 changed
+0167 state changed (see snapshot)
+0168 state changed (see snapshot)
+0169 draw: Nine_Clubs
+0170 draw: Nine_Spades
