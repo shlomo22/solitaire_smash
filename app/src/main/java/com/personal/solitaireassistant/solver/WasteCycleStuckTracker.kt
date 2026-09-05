@@ -18,37 +18,48 @@ import com.personal.solitaireassistant.game.GameState
  * repeats).
  *
  * A candidate identity is only trusted (recorded into [seenWasteTopIds])
- * once it has been the waste top across *two separate* confirmed
- * transitions - never on its first sighting. Real device evidence
- * (ed5ca730-analysis.log, v1.4.132): a single weak OCR-only read
+ * once it has been the waste top across [CONFIRMATION_THRESHOLD] separate
+ * confirmed transitions in a row - not on its first sighting, and (v1.4.136)
+ * not on its second either. v1.4.132 originally trusted on first sighting;
+ * v1.4.135 raised that to two, using this exact real device evidence
+ * (ed5ca730-analysis.log): a single weak OCR-only read
  * (`legacy=null,tight=Four_Diamonds@0.62`) got recorded, then the same
  * physical card immediately re-stabilized to a different, stronger fused
  * read (`Eight_Diamonds`) - a plain one-frame recognition hiccup, not a
- * second card. Separately, `DeckConstraintPass` coincidentally forced two
- * *different* real draws to the same final identity purely from persistent
- * Clubs/Spades ambiguity (`deck-constraint:2C->2S` on one draw, then a later
- * draw independently landing on `Two_Spades` too) - each of those bad reads
- * only ever appeared once before the board moved on to a genuinely new card,
- * so neither would have survived a second-observation requirement either.
- * Both false positives left `isStuck` stuck true (only a real waste play
- * clears it) for the rest of the game, well past the point new cards kept
- * being drawn - exactly the "stop sign shown while many valid moves exist"
- * symptom this fixes. A genuinely stuck board trivially clears this bar:
- * nothing is changing, so the repeated card gets reconfirmed by whatever
- * unrelated board jitter keeps generating confirmed transitions anyway (see
- * the same real log - tableau reads reprocess every few hundred ms even on
- * an otherwise static board).
+ * second card.
+ *
+ * v1.4.135's two-observation bar still false-positived on the very next
+ * real pull (b7d58390-analysis.log, user report: "the stop sign appeared
+ * early when there was still plenty of moves to do", firing within seconds
+ * of a genuine waste-to-tableau play). Root cause, traced to the exact
+ * frame: the waste-rank scorer returned a flat, ambiguous distribution that
+ * frame (`waste-rank-scores` spread 0.34-0.49 across nearly every rank -
+ * `Four=0.337` wasn't even the top score, `Five=0.485` was - a bare
+ * single-frame OCR read of `'4'@0.62` overrode the template scores anyway),
+ * and "Four_Diamonds" stabilized for exactly two confirmed frames - enough
+ * to clear the old bar and get recorded. Only a few seconds and one
+ * intervening card later, a *different* physical card drawn from the same
+ * weak region also stabilized as "Four_Diamonds" for two straight confirmed
+ * frames before the recognizer moved on again - colliding with the first
+ * and firing a false stuck signal despite the board having plenty of legal
+ * moves. Two consecutive identical reads is not a strong enough bar when
+ * the underlying per-rank score distribution is this flat and unstable;
+ * three is a meaningfully harder coincidence to clear by accident on two
+ * *different* misread cards, while a genuinely static, correctly-read card
+ * still reconfirms for free from ordinary board jitter (see the same real
+ * logs — tableau reads reprocess every few hundred ms even on an otherwise
+ * static board), so a truly stuck board still clears this bar quickly.
  *
  * Deliberately does **not** short-circuit on "waste unchanged from
  * `previous.wasteTop()`" the way the first version of this file did - that
  * check is exactly what would prevent a genuinely stable, correctly-read
- * card from ever reaching its own second confirmation (every later call
- * showing the same value would also see it already reflected in `previous`,
- * since the caller updates its own "last confirmed" pointer after every
- * call, so the early-return would fire every single time and
- * [seenWasteTopIds] would never accumulate anything at all). Confirmation
- * is tracked purely via [pendingCandidateId]/[pendingConfirmed], independent
- * of whatever `previous` happens to hold.
+ * card from ever reaching its own confirmations (every later call showing
+ * the same value would also see it already reflected in `previous`, since
+ * the caller updates its own "last confirmed" pointer after every call, so
+ * the early-return would fire every single time and [seenWasteTopIds] would
+ * never accumulate anything at all). Confirmation is tracked purely via
+ * [pendingCandidateId]/[pendingObservationCount], independent of whatever
+ * `previous` happens to hold.
  *
  * A genuinely empty waste (mid-recycle) clears any pending confirmation
  * rather than leaving it in place - otherwise a card confirmed just before
@@ -62,7 +73,7 @@ import com.personal.solitaireassistant.game.GameState
 class WasteCycleStuckTracker {
     private val seenWasteTopIds = mutableSetOf<String>()
     private var pendingCandidateId: String? = null
-    private var pendingConfirmed = false
+    private var pendingObservationCount = 0
 
     var isStuck: Boolean = false
         private set
@@ -74,7 +85,7 @@ class WasteCycleStuckTracker {
     fun reset() {
         seenWasteTopIds.clear()
         pendingCandidateId = null
-        pendingConfirmed = false
+        pendingObservationCount = 0
         isStuck = false
     }
 
@@ -93,12 +104,17 @@ class WasteCycleStuckTracker {
             // The card now exposed under the one that just left is the first
             // card of the new lap - seed it as the pending candidate so a
             // future repeat of *this* card is still caught, not just cards
-            // drawn after it. Still needs its own second confirmation like
-            // any other candidate (see class doc for why v1.4.132's
-            // "track it immediately" version of this line was unsafe).
+            // drawn after it. Still needs its own full confirmation like any
+            // other candidate (see class doc for why v1.4.132's "track it
+            // immediately" version of this line was unsafe).
             pendingCandidateId = null
-            pendingConfirmed = false
-            current.wasteTop()?.let { top -> if (top.known) pendingCandidateId = top.id }
+            pendingObservationCount = 0
+            current.wasteTop()?.let { top ->
+                if (top.known) {
+                    pendingCandidateId = top.id
+                    pendingObservationCount = 1
+                }
+            }
             if (!hadProgressToReset) return null
             return if (wasStuck) "waste-play-reset(was-stuck)" else "waste-play-reset"
         }
@@ -108,19 +124,20 @@ class WasteCycleStuckTracker {
             // Waste is genuinely empty (mid-recycle, or nothing drawn yet) -
             // a real, meaningful gap, unlike an unreadable-but-present card
             // below. Whatever was pending must earn its confirmation again
-            // once something reappears, rather than silently reusing an
-            // "already confirmed" flag left over from before the gap - that
-            // would skip the repeat-check entirely on exactly the reappearing
-            // card this mechanism exists to catch.
+            // once something reappears, rather than silently reusing
+            // confirmation progress left over from before the gap - that
+            // would skip (part of) the repeat-check on exactly the
+            // reappearing card this mechanism exists to catch.
             pendingCandidateId = null
-            pendingConfirmed = false
+            pendingObservationCount = 0
             return null
         }
         if (!wasteTop.known) return null // present but unreadable - leave any pending confirmation progress alone
 
         if (wasteTop.id == pendingCandidateId) {
-            if (pendingConfirmed) return null // already accounted for on an earlier call
-            pendingConfirmed = true
+            if (pendingObservationCount >= CONFIRMATION_THRESHOLD) return null // already accounted for
+            pendingObservationCount++
+            if (pendingObservationCount < CONFIRMATION_THRESHOLD) return null // needs more consecutive agreement first
             if (!seenWasteTopIds.add(wasteTop.id)) {
                 if (isStuck) return null
                 isStuck = true
@@ -129,16 +146,25 @@ class WasteCycleStuckTracker {
             return null
         }
 
-        // A different identity than whatever was pending. A one-frame OCR
-        // hiccup or deck-constraint coincidence (see class doc) gets
-        // silently discarded right here, the moment something else replaces
-        // it, having never been confirmed or recorded at all.
+        // A different identity than whatever was pending. A one-frame (or
+        // two-frame, see class doc) OCR hiccup or deck-constraint
+        // coincidence gets silently discarded right here, the moment
+        // something else replaces it, having never reached full
+        // confirmation or been recorded at all.
         pendingCandidateId = wasteTop.id
-        pendingConfirmed = false
+        pendingObservationCount = 1
         return null
     }
 
     companion object {
+        /**
+         * Consecutive confirmed sightings of the same waste-top identity
+         * required before it's trusted enough to record (and, on a repeat,
+         * to flag stuck). See the class doc for the real device evidence
+         * behind raising this from 2 (v1.4.135) to 3 (v1.4.136).
+         */
+        const val CONFIRMATION_THRESHOLD = 3
+
         /**
          * Previous waste top appears as a new tableau or foundation top —
          * the card left waste onto the board.
