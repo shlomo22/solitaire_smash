@@ -1722,6 +1722,115 @@ code and existing unit tests (`solver/MoveSelectorTest.kt`), not device-verified
   or gating on `Card.suitAmbiguous` directly for the specific
   DeckConstraintPass-collision shape, not re-guessing this exact fix again
   blind.
+- **v1.4.136: v1.4.135's own "next lever" prediction came true on the very
+  next real pull - raised the confirmation bar from 2 observations to 3,
+  exactly as flagged above.** User report with a fresh log
+  (`b7d58390-analysis.log`, an ~11-hour session spanning two calendar days)
+  and a specific complaint: "it was showing stop 1 or 2 moves after I moved
+  a card from pile to tableau" - i.e. the stop-sign badge kept re-appearing
+  within seconds of a genuine, confirmed player move, not staying cleared.
+
+  Traced the earliest low-`seen` false trigger to its exact frame
+  (`waste-cycle: stuck-repeat=Four_Diamonds seen=2`, 3.3 seconds after a
+  `waste-play-reset` from a real King_Clubs waste-to-tableau play).
+  Root cause, read directly from that frame's `diag:` block:
+  `waste-rank-scores={..., Four=0.33757535, Five=0.48552865, ...}` - Four
+  wasn't even the top-scoring rank (Five was), the whole distribution was a
+  flat 0.34-0.49 spread with no clear winner, and a single-frame OCR read
+  of `'4'@0.62` overrode the template scores anyway
+  (`waste-ocr-rank=Four`). That kind of frame produced "Four_Diamonds" as a
+  read, stabilized for exactly two straight confirmed frames (clearing
+  v1.4.135's two-observation bar), got recorded - and a few seconds and one
+  intervening card later, a *different*, equally weakly-read physical card
+  also stabilized as "Four_Diamonds" for two straight frames, colliding
+  with the first and firing a false stuck signal. Same underlying
+  root cause class as v1.4.135 (an unstable, low-confidence read
+  masquerading as a confirmed identity), just requiring more than one
+  weak-then-corrected blip to reproduce - two-in-a-row was not actually a
+  strong enough bar given how flat these score distributions get.
+
+  Checked whether the fix could instead gate on read confidence directly
+  (the log clearly shows the losing bid, `Four=0.34`, beat the winning one,
+  `Five=0.49`, only because of an OCR override) - not possible without a
+  larger, riskier change: `Card`/`GameState` (what
+  `WasteCycleStuckTracker.onConfirmedTransition` actually receives) carry
+  no confidence field at all, only `known`/`suitAmbiguous`/`inferred`
+  (checked `Card.kt` directly) - confidence lives solely in the vision
+  layer's diagnostic strings, never reaches the game-state model consumed
+  here. Threading a confidence value through would touch how `detect()`
+  builds every `GameState` across the whole app, a much bigger surface than
+  this tracker. `suitAmbiguous` also doesn't apply here specifically - this
+  was a rank confusion (Four/Five/Eight), not the black-suit-ambiguity
+  problem `suitAmbiguous` exists for.
+
+  Given that constraint, took exactly the lever v1.4.135's own writeup
+  already flagged as the next one to try: generalized
+  `pendingConfirmed: Boolean` into `pendingObservationCount: Int` and added
+  `CONFIRMATION_THRESHOLD = 3` - an identity must now be the waste top
+  across three separate confirmed transitions in a row (not two) before
+  it's trusted into `seenWasteTopIds`, and a *returning* identity likewise
+  needs three consecutive re-confirmations before the repeat actually
+  flags `isStuck`. This raises detection latency by one more confirmation
+  round-trip per card (still far faster than the pre-v1.4.132 two-full-
+  recycle wait), while making it a meaningfully harder coincidence for two
+  *different* misread cards to each independently land on the same wrong
+  identity three times running rather than two - a genuinely static,
+  correctly-read card still reconfirms for free from the same ambient
+  board jitter (tableau reads reprocessing every few hundred ms) that let
+  it clear two observations before.
+
+  Every existing `WasteCycleStuckTrackerTest` case needed an extra
+  confirming frame per identity to keep matching the new threshold (hand-
+  traced one by one, not mechanically) - factored the repeated
+  confirm-Queen-thrice/confirm-King-thrice/repeat-Queen-thrice sequence
+  into a `driveToStuckOnQueenOfClubs` helper for the tests that only care
+  about behavior *after* `isStuck` becomes true
+  (`wastePlayResetsTrackingAndClearsStuck`,
+  `stuckStaysTrueAndDoesNotReemitNoteEveryFrame`,
+  `resetClearsTrackingAndStuckFlag`), keeping the full step-by-step
+  version in `genuineRepeatOnlyFlagsOnceTheReturningCardIsItselfConfirmedThrice`
+  (renamed from `...Twice`) for the detailed trace. Added
+  `realLogShapeTwoDifferentCardsEachStabilizingForOnlyTwoFramesDoesNotFalselyRepeat`,
+  which reproduces the exact `b7d58390-analysis.log` shape (two different
+  physical cards each stabilizing on the same wrong identity for exactly
+  two frames) and asserts it no longer flags - the direct regression test
+  for this exact bug report.
+
+  **Not yet device-verified.** What to check on the next pull: whether
+  `waste-cycle: stuck-repeat=...` still fires shortly (within a few
+  confirmed frames) after a genuine `waste-play-reset` on a healthy board -
+  if it does, the underlying per-frame waste-rank score instability is
+  worse than three observations can filter and the next lever is either 4
+  observations or finally threading a confidence signal into `GameState`
+  despite the larger surface, not re-raising this same constant blind a
+  third time. Also watch for the opposite failure: a truly stuck board
+  taking noticeably longer to show the badge than before (the extra
+  confirmation round-trip is a real, accepted latency cost, but it should
+  still be on the order of one or two extra frames on a static board, not
+  seconds).
+
+  **Second, more ambiguous trigger in the same log, deliberately left
+  alone.** The same session's actual final game (`move_history/
+  20260905_080419/`, pushed separately as "last game") hit
+  `stuck-repeat=King_Clubs seen=4` at 08:05:46, ~90 seconds into the deal -
+  a `seen=4` repeat (four distinct confirmed cards logged first) is a much
+  weaker false-positive candidate than the `seen=2`/`seen=1` collisions
+  above. Checked its `legal=` list directly: every available move that
+  frame (`Tableau 4 -> Tableau 5/7/2`, `Tableau 6 -> Tableau 3/1`) scored
+  `defer-no-reveal-stack,reversible` - a real legal move, but one that
+  changes nothing lasting - and `Foundation 2 -> Tableau 6` scored -56.5.
+  So the badge's actual, narrower claim ("no *useful* move", not "no legal
+  move") looks accurate for this specific frame even though `legal=` is
+  non-empty - which may be exactly the gap between what the badge says and
+  what a player reads it as. Not treated as a bug to fix here: doing so
+  would mean either loosening `isDeadlocked`'s definition or changing the
+  badge's wording based on one frame, the same single-sample-evidence
+  trap this file already warns against elsewhere. Whether `King_Clubs
+  seen=4` was itself a genuine repeat or another identity collision is
+  also unresolved - the user's own description ("1 or 2 moves after I
+  moved a card") matches the `Four_Diamonds`/`seen=2` shape fixed above,
+  not this one, so this second case is logged here for the next round to
+  weigh, not acted on now.
 - **v1.4.133: `isUnstuckTableauPeel` only exempts a move from the -180
   no-reveal penalty when it exposes a *hidden* card. A plain rearrange of
   two already-exposed tableau tops that exposes an already-face-up but
